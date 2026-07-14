@@ -18,6 +18,7 @@ import {
 const PROJECT_URL = Deno.env.get("SUPABASE_URL") || "";
 const ENV_GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY") || "";
 const GEMINI_MODEL = Deno.env.get("GEMINI_MODEL") || "gemini-3.5-flash";
+const GEMINI_TIMEOUT_MS = 90_000;
 const CANDIDATE_GROUPS = ["listed", "otc", "etf"] as const;
 const configuredLimit = Math.max(1, Math.min(
   MAX_AI_DAILY_LIMIT,
@@ -64,15 +65,42 @@ class PublicError extends Error {
   }
 }
 
-function nextTaipeiMidnight() {
-  const local = new Date(Date.now() + 8 * 3_600_000);
-  return new Date(Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate() + 1) - 8 * 3_600_000).toISOString();
-}
-
 function safeErrorMessage(error: unknown, secret = "") {
   let message = error instanceof Error ? error.message : String(error);
   if (secret) message = message.split(secret).join("[REDACTED]");
   return message.replace(/([?&](?:key|api_key)=)[^&\s]+/gi, "$1[REDACTED]");
+}
+
+function geminiClient(apiKey: string) {
+  return new GoogleGenAI({
+    apiKey,
+    httpOptions: {
+      timeout: GEMINI_TIMEOUT_MS,
+      retryOptions: { attempts: 1 },
+    },
+  });
+}
+
+function providerFailure(message: string) {
+  if (/\b429\b|RESOURCE_EXHAUSTED|quota/i.test(message)) {
+    return {
+      status: 429,
+      code: "AI_PROVIDER_RATE_LIMIT",
+      message: "Gemini 供應商目前已達帳戶速率或用量限制，請稍後再試",
+    };
+  }
+  if (/timeout|timed out|AbortError/i.test(message)) {
+    return {
+      status: 504,
+      code: "AI_PROVIDER_TIMEOUT",
+      message: "Gemini 回應逾時，請稍後再試",
+    };
+  }
+  return {
+    status: 502,
+    code: "AI_PROVIDER_ERROR",
+    message: "Gemini 暫時無法完成這份摘要，請稍後再試",
+  };
 }
 
 async function rest(path: string, options: { method?: string; body?: unknown; prefer?: string } = {}) {
@@ -161,8 +189,6 @@ async function claimManualRequest(candidate: Record<string, any>, requesterHash:
       p_model: GEMINI_MODEL,
       p_schema_version: AI_SCHEMA_VERSION,
       p_requester_hash: requesterHash,
-      p_daily_limit: configuredLimit,
-      p_user_daily_limit: Math.max(1, Math.min(12, Number(Deno.env.get("AI_USER_DAILY_LIMIT")) || 6)),
     },
   });
   return data && typeof data === "object" ? data : { action: "error" };
@@ -410,7 +436,7 @@ async function runBatch(limit: number) {
     status: "running", started_at: now(), last_error: null,
     details: { version: "16.4-ai2", configured: true, selected: selected.length, model: GEMINI_MODEL },
   });
-  const ai = new GoogleGenAI({ apiKey: geminiApiKey });
+  const ai = geminiClient(geminiApiKey);
   const generated: Record<string, unknown>[] = [];
   const errors: { symbol: string; error: string }[] = [];
   let cursor = 0;
@@ -471,17 +497,11 @@ async function runManual(symbol: string, userId: string) {
   if (claim.action === "in_progress" || claim.action === "busy") {
     throw new PublicError("另一份 AI 摘要正在產生，請稍後再試", 409, "AI_IN_PROGRESS");
   }
-  if (claim.action === "user_limit") {
-    throw new PublicError("你今天的手動 AI 研究次數已用完，明天可再使用", 429, "AI_USER_LIMIT", nextTaipeiMidnight());
-  }
-  if (claim.action === "global_limit") {
-    throw new PublicError("今天的 AI 研究總額度已用完，明天會自動恢復", 429, "AI_DAILY_LIMIT", nextTaipeiMidnight());
-  }
   if (claim.action !== "generate" || !claim.run_id) {
     throw new PublicError("AI 研究暫時忙碌，請稍後再試", 503, "AI_BUSY");
   }
   try {
-    const ai = new GoogleGenAI({ apiKey: geminiApiKey });
+    const ai = geminiClient(geminiApiKey);
     const result = await generateOne(
       ai,
       candidate,
@@ -491,9 +511,10 @@ async function runManual(symbol: string, userId: string) {
     return result;
   } catch (error) {
     const message = safeErrorMessage(error, geminiApiKey);
+    const failure = providerFailure(message);
     console.error("[twss-ai-research] manual generation failed", { symbol, error: message.slice(0, 300) });
-    await finishManualRequest(String(claim.run_id), false, "AI_PROVIDER_ERROR").catch(() => undefined);
-    throw new PublicError("Gemini 暫時無法完成這份摘要，請稍後再試", 502, "AI_PROVIDER_ERROR");
+    await finishManualRequest(String(claim.run_id), false, failure.code).catch(() => undefined);
+    throw new PublicError(failure.message, failure.status, failure.code);
   }
 }
 

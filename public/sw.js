@@ -1,12 +1,12 @@
-const CACHE='twss-v16.5-ai-manual';
+const CACHE='twss-v16.6-ai-unlimited';
 const STATIC=[
   '/',
-  '/app.js?v=16.5-ai-manual',
-  '/patch.js?v=16.5-ai-manual',
-  '/smart.js?v=16.5-ai-manual',
-  '/styles.css?v=16.5-ai-manual',
-  '/manifest.webmanifest?v=16.5',
-  '/icon.svg?v=16.5'
+  '/app.js?v=16.6-ai-unlimited',
+  '/patch.js?v=16.6-ai-unlimited',
+  '/smart.js?v=16.6-ai-unlimited',
+  '/styles.css?v=16.6-ai-unlimited',
+  '/manifest.webmanifest?v=16.6',
+  '/icon.svg?v=16.6'
 ];
 
 self.addEventListener('install',event=>event.waitUntil(

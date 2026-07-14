@@ -443,8 +443,8 @@ function eventHtml(stock,indicators){const events=buildEvents(stock,indicators);
 function aiEvidenceHtml(items,empty){return Array.isArray(items)&&items.length?items.map(item=>`<div class="ai-evidence"><b>${esc(item?.title)}</b><span>${esc(item?.evidence)}</span></div>`).join(''):`<div class="muted">${empty}</div>`}
 function aiResearchHtml(state,stock){
   if(state?.aiLoading)return`<h3 class="section-title">Gemini AI 研究摘要</h3><div class="card ai-card"><div class="ai-panel-head"><b>正在建立 ${esc(stock.name)} 的研究摘要</b><span class="tag info">不影響機會分數</span></div><div class="loading ai-loading"><span class="spinner"></span>正在核對快取與公開資料，必要時才呼叫 Gemini…</div></div>`;
-  if(state?.aiNeedsLogin)return`<h3 class="section-title">Gemini AI 研究摘要</h3><div class="card ai-card"><div class="ai-panel-head"><b>登入後即可手動產生</b><span class="tag info">按下才會呼叫</span></div><p class="muted">為避免 API 額度被濫用，首次產生摘要需要登入；已完成的摘要會快取，不會重複花費。</p><button class="btn ai-action" data-ai-login="${esc(stock.symbol)}">前往登入</button></div>`;
-  if(state?.aiError){const quota=state.aiErrorCode==='AI_USER_LIMIT'||state.aiErrorCode==='AI_DAILY_LIMIT',notReady=state.aiErrorCode==='ANALYSIS_NOT_READY';return`<h3 class="section-title">Gemini AI 研究摘要</h3><div class="card ai-card warn-card"><div class="ai-panel-head"><b>${quota?'今日 AI 額度已用完':notReady?'深度資料仍在累積':'AI 摘要暫時無法建立'}</b><span class="tag info">量化結果未受影響</span></div><p class="muted">${esc(state.aiError)}</p>${quota?'':`<button class="btn secondary ai-action" data-ai-research="${esc(stock.symbol)}">重新嘗試</button>`}</div>`}
+  if(state?.aiNeedsLogin)return`<h3 class="section-title">Gemini AI 研究摘要</h3><div class="card ai-card"><div class="ai-panel-head"><b>登入後即可手動產生</b><span class="tag info">按下才會呼叫</span></div><p class="muted">新摘要需要登入驗證；已完成且資料相同的摘要會直接讀取快取，不會重複呼叫 Gemini。</p><button class="btn ai-action" data-ai-login="${esc(stock.symbol)}">前往登入</button></div>`;
+  if(state?.aiError){const notReady=state.aiErrorCode==='ANALYSIS_NOT_READY';return`<h3 class="section-title">Gemini AI 研究摘要</h3><div class="card ai-card warn-card"><div class="ai-panel-head"><b>${notReady?'深度資料仍在累積':'AI 摘要暫時無法建立'}</b><span class="tag info">量化結果未受影響</span></div><p class="muted">${esc(state.aiError)}</p><button class="btn secondary ai-action" data-ai-research="${esc(stock.symbol)}">重新嘗試</button></div>`}
   const payload=state?.aiResearch;
   if(!payload?.available)return`<h3 class="section-title">Gemini AI 研究摘要</h3><div class="card ai-card ai-idle"><div class="ai-panel-head"><b>需要時再請 AI 整理</b><span class="tag info">完全獨立</span></div><p class="muted">不再自動挑選或自動產生成本。按下後會先找既有快取，沒有摘要時才使用一次 Gemini；原本分數、排名與預測都不會被修改。</p><button class="btn ai-action" data-ai-research="${esc(stock.symbol)}">AI 研究摘要</button></div>`;
   const analysis=payload.analysis||{},scenarios=analysis.scenarios||{};
@@ -581,5 +581,5 @@ function openAccountModal(){
 }
 
 document.querySelector('#accountBtn').onclick=openAccountModal;
-if('serviceWorker'in navigator)navigator.serviceWorker.register('/sw.js?v=16.5-ai-manual',{updateViaCache:'none'}).catch(()=>{});
+if('serviceWorker'in navigator)navigator.serviceWorker.register('/sw.js?v=16.6-ai-unlimited',{updateViaCache:'none'}).catch(()=>{});
 initSession();render();loadStocks();

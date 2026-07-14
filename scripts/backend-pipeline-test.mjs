@@ -25,12 +25,13 @@ const [sync, baseSchema, schema, grants, cron, acceleratedCron, leases, quota, p
   readFile(new URL("./backtest-snapshots.mjs", import.meta.url), "utf8"),
 ]);
 
-const [aiEdge, aiShared, aiMigration, aiExpiryPolicy, aiManualMigration] = await Promise.all([
+const [aiEdge, aiShared, aiMigration, aiExpiryPolicy, aiManualMigration, aiUnlimitedMigration] = await Promise.all([
   readFile(new URL("../supabase/functions/twss-ai-research/index.ts", import.meta.url), "utf8"),
   readFile(new URL("../supabase/functions/_shared/ai-research.js", import.meta.url), "utf8"),
   readFile(new URL("../supabase/migrations/20260714213000_add_independent_ai_research.sql", import.meta.url), "utf8"),
   readFile(new URL("../supabase/migrations/20260714220000_hide_expired_ai_research.sql", import.meta.url), "utf8"),
   readFile(new URL("../supabase/migrations/20260715070000_manual_ai_research_button.sql", import.meta.url), "utf8"),
+  readFile(new URL("../supabase/migrations/20260715120000_unlimited_manual_ai_research.sql", import.meta.url), "utf8"),
 ]);
 const aiInternalPolicies = await readFile(
   new URL("../supabase/migrations/20260714214500_explicit_ai_internal_policies.sql", import.meta.url),
@@ -167,6 +168,13 @@ assert.match(aiManualMigration, /cron\.unschedule/);
 assert.match(aiManualMigration, /'mode', 'manual-only'/);
 assert.match(aiManualMigration, /to service_role/);
 assert.doesNotMatch(aiManualMigration, /grant execute[\s\S]*to anon|grant execute[\s\S]*to authenticated/);
+assert.match(aiUnlimitedMigration, /twss-ai-manual-concurrency/);
+assert.match(aiUnlimitedMigration, /v_active_count >= 2/);
+assert.doesNotMatch(aiUnlimitedMigration, /v_recent_count|twss_reserve_ai_calls|user_limit|global_limit/);
+assert.match(aiUnlimitedMigration, /interval '90 days'/);
+assert.match(aiUnlimitedMigration, /interval '30 days'/);
+assert.match(aiUnlimitedMigration, /'quotaMode', 'unlimited'/);
+assert.doesNotMatch(aiUnlimitedMigration, /grant execute[\s\S]*to anon|grant execute[\s\S]*to authenticated/);
 assert.match(aiVaultReader, /from vault\.decrypted_secrets/);
 assert.match(aiVaultReader, /to service_role/);
 assert.doesNotMatch(aiVaultReader, /grant execute[\s\S]*to anon|grant execute[\s\S]*to authenticated/);
@@ -184,4 +192,4 @@ assert.match(aiShared, /quantitativeResultReadOnly/);
 assert.match(aiShared, /不得覆寫、重算/);
 assert.match(marketHandler, /readAiResearch\(symbol\)/);
 
-console.log("Backend pipeline tests passed: bounded cursors, manual AI gate, Vault auth, RLS, and read-only grants");
+console.log("Backend pipeline tests passed: bounded cursors, unlimited manual AI concurrency gate, Vault auth, RLS, and read-only grants");

@@ -16,7 +16,7 @@ const SUPABASE_HISTORY_EDGE = "https://lfkdkdyaatdlizryiyon.supabase.co/function
 const TWSE_OPEN = "https://openapi.twse.com.tw/v1";
 const TWSE_WEB = "https://www.twse.com.tw";
 const TPEX_OPEN = "https://www.tpex.org.tw/openapi/v1";
-const VERSION = "16.5";
+const VERSION = "16.6";
 
 const FINANCIAL_CATEGORIES = ["ci", "fh", "basi", "bd", "ins", "mim"];
 
@@ -1355,8 +1355,9 @@ export function healthPayload() {
       independent: true,
       affectsScores: false,
       mode: "manual-only",
-      dailyMaximum: 20,
-      defaultDailyLimit: 12,
+      quotaMode: "unlimited",
+      maxConcurrent: 2,
+      cacheDays: 14,
     },
   };
 }

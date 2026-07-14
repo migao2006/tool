@@ -1393,13 +1393,15 @@ export async function buildDeepData(symbol, instrumentType = "股票", market = 
     : cached(cacheKey, 8 * 60 * 60 * 1_000, factory);
 }
 
-export async function buildPriceHistory(symbol, market = "上市", months = 18) {
+export async function buildPriceHistory(symbol, market = "上市", months = 18, options = {}) {
   if (!VALID_SYMBOL.test(symbol)) throw new Error("股票代號格式不正確");
   const requestedMonths = clamp(Number(months) || 18, 6, 24);
   return cached(`history:${symbol}:${market}:${requestedMonths}`, 60 * 60 * 1_000, async () => {
     const endDate = new Date().toISOString().slice(0, 10);
     const history = normalizePrice(
-      await finmind("TaiwanStockPrice", symbol, monthsAgo(requestedMonths), endDate),
+      await finmind("TaiwanStockPrice", symbol, monthsAgo(requestedMonths), endDate, {
+        retries: options.finmindRetries ?? 2,
+      }),
     ).slice(-280);
     if (history.length < 20) throw new Error(`${market} ${symbol} 歷史日線不足`);
     return {

@@ -5,6 +5,7 @@ import {
   ANALYSIS_VERSION,
   buildBenchmarks,
   buildDeepData,
+  buildPriceHistory,
   buildTdccSnapshot,
 } from "../../../src/deep-data.js";
 // @ts-ignore JavaScript modules are shared with the Vercel runtime.
@@ -163,6 +164,169 @@ async function reserveFinmindBatch(
     remaining: 0,
     retryAfterAt: null,
   };
+}
+
+async function storedHistory(symbol: string, limit = 280) {
+  const params = new URLSearchParams({
+    select: "trade_date,open,high,low,close,volume,trade_value,transactions",
+    symbol: `eq.${symbol}`,
+    order: "trade_date.desc",
+    limit: String(Math.max(20, Math.min(300, limit))),
+  });
+  const { data } = await rest(`stock_price_history?${params}`);
+  return (Array.isArray(data) ? data : []).reverse().map((row: Record<string, any>) => ({
+    date: row.trade_date,
+    open: finite(row.open) ? Number(row.open) : null,
+    high: finite(row.high) ? Number(row.high) : null,
+    low: finite(row.low) ? Number(row.low) : null,
+    close: finite(row.close) ? Number(row.close) : null,
+    volume: finite(row.volume) ? Number(row.volume) : null,
+    value: finite(row.trade_value) ? Number(row.trade_value) : null,
+    transactions: finite(row.transactions) ? Number(row.transactions) : null,
+  })).filter((row: Record<string, any>) =>
+    row.close != null && row.high != null && row.low != null);
+}
+
+async function mergeLatestOfficialSnapshot(symbol: string, history: Record<string, any>[]) {
+  const { data } = await rest(
+    `stock_snapshots?select=trade_date,open,high,low,close,volume,trade_value,transactions&symbol=eq.${encodeURIComponent(symbol)}&order=trade_date.desc&limit=1`,
+  );
+  const snapshot = Array.isArray(data) ? data[0] : null;
+  if (!snapshot || !finite(snapshot.close) || !finite(snapshot.high) || !finite(snapshot.low)) return history;
+  const official = {
+    date: String(snapshot.trade_date),
+    open: finite(snapshot.open) ? Number(snapshot.open) : Number(snapshot.close),
+    high: Number(snapshot.high),
+    low: Number(snapshot.low),
+    close: Number(snapshot.close),
+    volume: finite(snapshot.volume) ? Number(snapshot.volume) : null,
+    value: finite(snapshot.trade_value) ? Number(snapshot.trade_value) : null,
+    transactions: finite(snapshot.transactions) ? Number(snapshot.transactions) : null,
+    source: "TWSE/TPEx official snapshot",
+  };
+  const merged = new Map(history.map((row) => [String(row.date), row]));
+  merged.set(official.date, { ...(merged.get(official.date) || {}), ...official });
+  return [...merged.values()].sort((left, right) => String(left.date).localeCompare(String(right.date))).slice(-280);
+}
+
+function completedHistoryAttempt(state: Record<string, any> | null) {
+  // A successful empty/short response is also a real source result (typically
+  // a newly listed security).  Persist that fact so reopening the modal does
+  // not burn one API unit forever trying to manufacture unavailable history.
+  return state?.details?.historyComplete === true;
+}
+
+function historyPayload(symbol: string, history: Record<string, any>[], source: string) {
+  return {
+    mode: history.length >= 120 ? "live" : "partial",
+    symbol,
+    source,
+    count: history.length,
+    period: history.at(-1)?.date || null,
+    history,
+  };
+}
+
+async function serveOnDemandHistory(url: URL) {
+  const symbol = String(url.searchParams.get("symbol") || "").trim().toUpperCase();
+  if (!/^\d{4,6}[A-Z]?$/i.test(symbol)) return json({ error: "股票代號格式不正確" }, 400);
+  const requestedMonths = Math.max(6, Math.min(24, Number(url.searchParams.get("months")) || 18));
+  const jobKey = `history_${symbol}`;
+  let [existing, state] = await Promise.all([storedHistory(symbol), getState(jobKey)]);
+  existing = await mergeLatestOfficialSnapshot(symbol, existing);
+  if (existing.length >= 120 || completedHistoryAttempt(state)) {
+    console.info("[public-history] database hit", { symbol, rows: existing.length });
+    return json(historyPayload(symbol, existing, "Supabase 後端歷史資料庫"));
+  }
+  const { data: masterRows } = await rest(
+    `stock_master?select=symbol,market&symbol=eq.${encodeURIComponent(symbol)}&limit=1`,
+  );
+  const master = Array.isArray(masterRows) ? masterRows[0] : null;
+  if (!master) return json({ error: `${symbol} 不在目前台股標的清單` }, 404);
+  if (!state) {
+    await rest("stock_sync_state?on_conflict=job_key", {
+      method: "POST",
+      body: [{ job_key: jobKey, group_name: "history", status: "pending", details: { symbol } }],
+      prefer: "resolution=ignore-duplicates,return=minimal",
+    });
+  }
+  const owner = crypto.randomUUID();
+  if (!await claimLease(jobKey, owner, 180)) {
+    return json({
+      mode: "pending",
+      pending: true,
+      code: "HISTORY_IN_PROGRESS",
+      symbol,
+      count: existing.length,
+      error: `${symbol} 歷史日線正在補抓，完成後重新開啟即可`,
+    }, 202);
+  }
+  try {
+    [existing, state] = await Promise.all([storedHistory(symbol), getState(jobKey)]);
+    existing = await mergeLatestOfficialSnapshot(symbol, existing);
+    if (existing.length >= 120 || completedHistoryAttempt(state)) {
+      return json(historyPayload(symbol, existing, "Supabase 後端歷史資料庫"));
+    }
+    const budget = await reserveFinmindBatch([1], 0, 1, {
+      job: "public_history",
+      symbol,
+      requestedMonths,
+    });
+    if (Number(budget.items) < 1) {
+      console.info("[public-history] quota pending", { symbol, retryAfterAt: budget.retryAfterAt || null });
+      return json({
+        mode: "pending",
+        pending: true,
+        code: "HISTORY_PENDING",
+        symbol,
+        count: existing.length,
+        retryAfterAt: budget.retryAfterAt || null,
+        error: `${symbol} 歷史日線正在等待 API 配額，請稍後重新開啟`,
+      }, 202);
+    }
+    console.info("[public-history] fetching", { symbol, requestedMonths });
+    const payload = await buildPriceHistory(symbol, master.market || "上市", requestedMonths, {
+      // The shared ledger reserved exactly one request.  A later user action can
+      // retry a transient failure without silently exceeding the hourly ceiling.
+      finmindRetries: 0,
+    });
+    const history = await mergeLatestOfficialSnapshot(symbol, payload.history || []);
+    const updatedAt = now();
+    await upsert("stock_price_history", history.map((row: Record<string, any>) => ({
+      symbol,
+      trade_date: row.date,
+      open: row.open,
+      high: row.high,
+      low: row.low,
+      close: row.close,
+      volume: row.volume,
+      trade_value: row.value,
+      transactions: finite(row.transactions) ? Math.round(Number(row.transactions)) : null,
+      source: row.source || "FinMind TaiwanStockPrice on-demand",
+      updated_at: updatedAt,
+    })), "symbol,trade_date");
+    await patchState(jobKey, {
+      status: "success",
+      last_error: null,
+      last_success_at: updatedAt,
+      details: {
+        symbol,
+        historyComplete: true,
+        historyRows: history.length,
+        historyPeriod: history.at(-1)?.date || null,
+      },
+    });
+    console.info("[public-history] persisted", { symbol, rows: history.length, period: history.at(-1)?.date || null });
+    return json(historyPayload(symbol, history, "FinMind 按需補抓（已存入 Supabase）"));
+  } catch (error) {
+    await patchState(jobKey, {
+      status: "error",
+      last_error: error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500),
+    }).catch(() => undefined);
+    throw error;
+  } finally {
+    await releaseLease(jobKey, owner).catch(() => undefined);
+  }
 }
 
 async function localPayload(type: string) {
@@ -1120,6 +1284,21 @@ async function syncDeep(group: Group, requestedLimit: number) {
 }
 
 Deno.serve(async (req: Request) => {
+  const url = new URL(req.url);
+  if (req.method === "GET" && url.searchParams.get("mode") === "history") {
+    try {
+      return await serveOnDemandHistory(url);
+    } catch (error) {
+      console.error("[public-history] failed", {
+        symbol: url.searchParams.get("symbol") || null,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return json({
+        code: "HISTORY_UPSTREAM_ERROR",
+        error: "歷史日線來源暫時無法回應，請稍後重新開啟",
+      }, 503);
+    }
+  }
   if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
   try {
     if (!await verifyRequest(req)) return json({ error: "Unauthorized" }, 401);

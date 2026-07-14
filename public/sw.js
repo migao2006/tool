@@ -1,10 +1,10 @@
-const CACHE='twss-v16.3-ui3';
+const CACHE='twss-v16.3-ui5';
 const STATIC=[
   '/',
-  '/app.js?v=16.3-ui3',
-  '/patch.js?v=16.3-ui3',
-  '/smart.js?v=16.3-ui3',
-  '/styles.css?v=16.3-ui3',
+  '/app.js?v=16.3-ui5',
+  '/patch.js?v=16.3-ui5',
+  '/smart.js?v=16.3-ui5',
+  '/styles.css?v=16.3-ui5',
   '/manifest.webmanifest?v=16.3',
   '/icon.svg?v=16.3'
 ];

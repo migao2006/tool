@@ -11,6 +11,7 @@ import {
 } from "./backend-store.js";
 
 const SUPABASE_EDGE = "https://lfkdkdyaatdlizryiyon.supabase.co/functions/v1/twss-market-data";
+const SUPABASE_HISTORY_EDGE = "https://lfkdkdyaatdlizryiyon.supabase.co/functions/v1/twss-sync-batch";
 const TWSE_OPEN = "https://openapi.twse.com.tw/v1";
 const TWSE_WEB = "https://www.twse.com.tw";
 const TPEX_OPEN = "https://www.tpex.org.tw/openapi/v1";
@@ -348,8 +349,11 @@ async function fetchAttempt(url, timeout) {
       signal: controller.signal,
     });
     if (!response.ok) {
-      const error = new Error(`Upstream ${response.status}`);
+      const body = await response.json().catch(() => null);
+      const error = new Error(body?.error || `Upstream ${response.status}`);
       error.status = response.status;
+      error.code = body?.code || null;
+      error.retryAfterAt = body?.retryAfterAt || null;
       error.retryAfter = Number(response.headers.get("retry-after")) || null;
       throw error;
     }
@@ -1384,9 +1388,39 @@ export async function handleMarketData(request, url = new URL(request.url)) {
     if (type === "history") {
       const symbol = text(url.searchParams.get("symbol"));
       const market = text(url.searchParams.get("market")) || "上市";
-      const payload = { ...(await readBackendHistory(symbol, 280)), market };
-      if (payload.history.length < 20) {
-        throw new Error(`${market} ${symbol} 尚未完成後端歷史累積，請稍後再試`);
+      const months = Math.max(6, Math.min(24, numeric(url.searchParams.get("months")) || 18));
+      let fallback = { ...(await readBackendHistory(symbol, 280)), market };
+      let payload;
+      try {
+        const params = new URLSearchParams({ mode: "history", symbol, months: String(months) });
+        const onDemand = await fetchJson(`${SUPABASE_HISTORY_EDGE}?${params}`, 90_000, 0);
+        if (onDemand?.pending) {
+          return jsonResponse({ ...onDemand, market }, { status: 202 });
+        }
+        payload = { ...onDemand, market };
+      } catch (error) {
+        // A fully accumulated database series remains usable if the repair
+        // service itself has a transient problem.  Partial histories must not
+        // be presented as complete technical data.
+        if (fallback.history.length >= 120) payload = fallback;
+        else throw error;
+      }
+      if (!Array.isArray(payload.history)) {
+        throw Object.assign(new Error(`${market} ${symbol} 歷史日線回應格式不正確`), {
+          status: 503,
+          code: "HISTORY_UPSTREAM_ERROR",
+        });
+      }
+      if (payload.history.length < 60) {
+        return jsonResponse({
+          ...payload,
+          mode: "partial",
+          code: "HISTORY_INSUFFICIENT",
+          error: `${market} ${symbol} 目前只有 ${payload.history.length} 個交易日，未達完整技術面所需 60 日`,
+          market,
+          symbol,
+          count: payload.history.length,
+        }, {}, force ? 0 : 3_600);
       }
       return jsonResponse(payload, {}, force ? 0 : 3_600);
     }
@@ -1416,9 +1450,19 @@ export async function handleMarketData(request, url = new URL(request.url)) {
     stockCache = { payload, expires: Date.now() + 120_000 };
     return jsonResponse(payload, {}, force ? 0 : 120);
   } catch (error) {
-    return jsonResponse(
-      { error: error instanceof Error ? error.message : "資料取得失敗" },
-      { status: 502 },
-    );
+    console.error("[market-data] request failed", {
+      type,
+      symbol: text(url.searchParams.get("symbol")) || null,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    const isHistory = type === "history";
+    const status = isHistory && [400, 404, 429, 503].includes(Number(error?.status))
+      ? Number(error.status)
+      : 502;
+    return jsonResponse({
+      error: error instanceof Error ? error.message : "資料取得失敗",
+      ...(error?.code ? { code: error.code } : {}),
+      ...(error?.retryAfterAt ? { retryAfterAt: error.retryAfterAt } : {}),
+    }, { status });
   }
 }

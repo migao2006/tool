@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
-const [sync, baseSchema, schema, grants, cron, acceleratedCron, leases, quota, preserve, repairQueue, clearEtfRepairs, etfDirectionRepair, lateCoverageRepair, clearOldVersionRepairs, trim, config, marketHandler, workflow, exporter, backtest] = await Promise.all([
+const [sync, baseSchema, schema, grants, cron, acceleratedCron, leases, quota, publicHistoryQuota, preserve, repairQueue, clearEtfRepairs, etfDirectionRepair, lateCoverageRepair, clearOldVersionRepairs, trim, config, marketHandler, workflow, exporter, backtest] = await Promise.all([
   readFile(new URL("../supabase/functions/twss-sync-batch/index.ts", import.meta.url), "utf8"),
   readFile(new URL("../supabase/migrations/20260714040000_base_schema.sql", import.meta.url), "utf8"),
   readFile(new URL("../supabase/migrations/20260714090000_add_persistent_stock_backend.sql", import.meta.url), "utf8"),
@@ -10,6 +10,7 @@ const [sync, baseSchema, schema, grants, cron, acceleratedCron, leases, quota, p
   readFile(new URL("../supabase/migrations/20260714134000_ultimate_speed_and_data_repairs.sql", import.meta.url), "utf8"),
   readFile(new URL("../supabase/migrations/20260714134500_sync_leases_retry_retention.sql", import.meta.url), "utf8"),
   readFile(new URL("../supabase/migrations/20260714135000_finmind_sliding_quota.sql", import.meta.url), "utf8"),
+  readFile(new URL("../supabase/migrations/20260714183500_harden_public_history_quota.sql", import.meta.url), "utf8"),
   readFile(new URL("../supabase/migrations/20260714135500_preserve_last_good_and_schedule_guard.sql", import.meta.url), "utf8"),
   readFile(new URL("../supabase/migrations/20260714144000_analysis_repair_queue.sql", import.meta.url), "utf8"),
   readFile(new URL("../supabase/migrations/20260714144500_clear_etf_repair_flags.sql", import.meta.url), "utf8"),
@@ -40,6 +41,15 @@ assert.match(sync, /twss_claim_sync_lease/, "scheduled batches must use a distri
 assert.match(sync, /next_retry_at/, "failed symbols must use persisted retry backoff");
 assert.match(sync, /previous\?\.status === "ready"/, "a refresh failure must preserve the last-known-good analysis");
 assert.match(sync, /currentQuote: stock/, "same-day official quotes must close the historical provider lag");
+assert.match(sync, /serveOnDemandHistory/, "missing per-symbol history must use the persistent on-demand path");
+assert.match(sync, /reserveFinmindBatch\(\[1\], 0, 1/, "on-demand history must reserve exactly one shared API unit");
+assert.match(sync, /buildPriceHistory[\s\S]*finmindRetries: 0/, "a one-unit reservation must not hide in-request FinMind retries");
+assert.match(sync, /stock_price_history[\s\S]*symbol,trade_date/, "on-demand history must be persisted for later requests");
+assert.match(sync, /HISTORY_PENDING/, "a full hourly budget must return a structured pending state");
+assert.match(sync, /claimLease\(jobKey, owner, 180\)/, "concurrent opens of one symbol must share a distributed lease");
+assert.match(sync, /existing\.length >= 120/, "a partial series must not be mistaken for complete technical history");
+assert.match(sync, /historyComplete === true/, "a confirmed short source history must not be fetched forever");
+assert.match(sync, /mergeLatestOfficialSnapshot/, "on-demand history must merge the latest official daily quote");
 assert.match(sync, /bypassCache: true/, "reserved scheduled calls must not be hidden by an eight-hour memory cache");
 assert.match(sync, /passesPreflight\(stock, group\)/, "liquidity and hard-risk exclusions must run before expensive history requests");
 assert.match(sync, /missingRevenueParams\.set\("raw_data->>revenue", "is\.null"\)/, "the deep queue must identify cross-section revenue gaps explicitly");
@@ -85,6 +95,10 @@ assert.match(quota, /reserved_at > v_now - interval '60 minutes'/);
 assert.match(quota, /pg_advisory_xact_lock/);
 assert.match(quota, /revoke all on function public\.twss_reserve_api_batch/);
 assert.match(quota, /enable row level security/);
+assert.match(publicHistoryQuota, /metadata ->> 'job' = 'public_history'/);
+assert.match(publicHistoryQuota, /then 60 else 30/, "interactive repair must have a separate hourly allowance");
+assert.match(publicHistoryQuota, /then 20 else 10/, "interactive repair must preserve scheduled-job headroom without blocking near-limit repairs");
+assert.match(publicHistoryQuota, /pg_advisory_xact_lock/, "public and scheduled reservations must remain atomic");
 assert.match(preserve, /last_attempt_at/);
 assert.match(preserve, /'43 6 \* \* 1-5'/);
 assert.match(repairQueue, /needs_repair boolean not null default false/);

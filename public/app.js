@@ -70,7 +70,7 @@ async function fetchJson(url,timeout=90000,retries=1){
     const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),timeout);
     try{
       const r=await fetch(url,{cache:'default',signal:controller.signal,headers:{accept:'application/json'}});
-      if(!r.ok){const error=new Error(`HTTP ${r.status}`);error.status=r.status;throw error}
+      if(!r.ok){let body=null;try{body=await r.clone().json()}catch{}const error=new Error(body?.error||`HTTP ${r.status}`);error.status=r.status;error.code=body?.code||null;error.retryAfterAt=body?.retryAfterAt||null;throw error}
       return await r.json();
     }catch(error){
       lastError=error;const retryable=error.name==='AbortError'||error.status===429||error.status>=500;
@@ -128,19 +128,12 @@ async function loadFundamentals(){
 }
 
 function normalizedHistory(payload){
-  if(!Array.isArray(payload?.history)||payload.history.length<20)throw new Error(payload?.error||'歷史日線不足');
+  if(!Array.isArray(payload?.history)||payload.history.length<60)throw new Error(payload?.error||'可用交易日不足 60 日，暫不計算完整技術面');
   return payload.history.map(x=>({date:x.date,open:safe(x.open),high:safe(x.high),low:safe(x.low),close:safe(x.close),volume:safe(x.volume),value:safe(x.value),transactions:safe(x.transactions)})).filter(x=>x.close!=null&&x.high!=null&&x.low!=null)
-}
-async function snapshotHistory(symbol){
-  const payload=await fetchJson('/data/latest.json?v=16.3',30000,0);if(String(payload?.version)!=='16.3')throw new Error('舊版快照不可用於新預測');
-  const groups=Object.values(payload?.groups||{}).flat(),match=groups.find(row=>row?.stock?.symbol===symbol);if(match?.analysis?.analysisVersion!=='16.3-ultimate-data-audit')throw new Error('快照模型版本不相容');const history=match?.analysis?.priceHistory;
-  if(!Array.isArray(history)||history.length<20)throw new Error('每日快照也沒有足夠歷史日線');
-  return{history,source:'每日深度快照'}
 }
 async function getHistory(symbol){
   const cached=S.historyCache.get(symbol);if(cached)return cached instanceof Promise?cached:Promise.resolve(cached);
-  const promise=(async()=>{const stock=S.stocks.find(x=>x.symbol===symbol)||{},params=new URLSearchParams({type:'history',symbol,months:'18',market:stock.market||'上市'});let payload;
-    try{payload=await fetchJson(`${EDGE}?${params}`,90000,1);normalizedHistory(payload)}catch(primaryError){try{payload=await snapshotHistory(symbol)}catch{throw primaryError}}
+  const promise=(async()=>{const stock=S.stocks.find(x=>x.symbol===symbol)||{},params=new URLSearchParams({type:'history',symbol,months:'18',market:stock.market||'上市'});const payload=await fetchJson(`${EDGE}?${params}`,120000,0);
     const rows=normalizedHistory(payload),result={rows,indicators:computeIndicators(rows),source:payload.source||`${stock.market||'台股'}歷史行情`};S.historyCache.set(symbol,result);return result})();
   S.historyCache.set(symbol,promise);try{return await promise}catch(error){S.historyCache.delete(symbol);throw error}
 }
@@ -525,5 +518,5 @@ function openAccountModal(){
 }
 
 document.querySelector('#accountBtn').onclick=openAccountModal;
-if('serviceWorker'in navigator)navigator.serviceWorker.register('/sw.js?v=16.3-ui3',{updateViaCache:'none'}).catch(()=>{});
+if('serviceWorker'in navigator)navigator.serviceWorker.register('/sw.js?v=16.3-ui5',{updateViaCache:'none'}).catch(()=>{});
 initSession();render();loadStocks();

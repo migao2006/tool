@@ -129,7 +129,9 @@ export async function readBackendRankings(limit = 100) {
     "symbol,group_name,data_date,score,confidence,official,tier,stock,analysis,result,updated_at",
   );
   const groups = ["listed", "otc", "etf"];
-  const stateResult = await request("stock_sync_state?select=*&order=job_key.asc").catch(() => ({ data: [] }));
+  const stateResult = await request(
+    "stock_sync_state?select=*&job_key=in.(universe,deep_listed,deep_otc,deep_etf)&order=job_key.asc",
+  ).catch(() => ({ data: [] }));
   const states = Array.isArray(stateResult.data) ? stateResult.data : [];
   const universeState = states.find((row) => row.job_key === "universe");
   const groupDates = Object.fromEntries(groups.map((group) => [
@@ -225,7 +227,9 @@ export async function readBackendAnalysis(symbol) {
 }
 
 export async function readBackendStatus() {
-  const { data } = await request("stock_sync_state?select=*&order=job_key.asc");
+  const { data } = await request(
+    "stock_sync_state?select=*&job_key=in.(universe,deep_listed,deep_otc,deep_etf)&order=job_key.asc",
+  );
   return {
     mode: "live",
     version: "16.3",

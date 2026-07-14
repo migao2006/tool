@@ -8,12 +8,20 @@
 2. `deep_listed`、`deep_otc`、`deep_etf` 各自依初篩分數與股票代號排序。
 3. 冷資料無 Token 時上市／上櫃／ETF 每次最多處理 6／6／19 檔，有 Token 時最多 11／11／23；歷史可重用時公司批次可提高到 10／10 或 22／22。實際數量會依滑動 60 分鐘剩餘額度縮小。成功後保存歷史資料、評分與下一個進度。
 4. API 回傳成功但必要內容為空或落後期別時，保留 last-good 並設為修復候選；每批最多四分之一槽位處理這類缺口。財報快取只有 income、balance、cashflow 三者都有來源覆蓋時才可重用。
-4. 單檔失敗會保存 `error_kind`、`attempt_count`、`next_retry_at`；同批其他股票仍可完成，新股票優先於退避中的失敗股票。
-5. 前端優先讀取 `stock_analysis_cache`；`public/data/latest.json` 是同版本後端匯出備援，不合併舊模型結果。
+5. 單檔失敗會保存 `error_kind`、`attempt_count`、`next_retry_at`；同批其他股票仍可完成，新股票優先於退避中的失敗股票。
+6. 前端優先讀取 `stock_analysis_cache`；`public/data/latest.json` 是同版本後端匯出備援，不合併舊模型結果。
 
 當期 TWSE／TPEx 月營收橫斷面若少於交易母體，公司批次會把一半候選名額優先給 `raw_data.revenue` 缺漏者；逐檔歷史成功後會回寫 `stock_snapshots`，下一輪便恢復正常分數排序。這個補缺不另開旁路，所有 FinMind 呼叫仍先由中央滑動配額帳本保留。
 
 全市場母體與目前正式排程分開：母體包含所有可辨識股票及 ETF；深度候選另套用流動性、風險與必要資料門檻。因此上櫃母體數與 `deep_otc.total_items` 不必完全相同。
+
+## 單檔歷史日線按需補齊（v16.3-ui5）
+
+排行榜尚未輪到深度驗證的股票，可能已有當日行情，但 `stock_price_history` 還沒有足夠日線。v16.3-ui5 的明細路由會先讀 Supabase；完整技術面以至少 120 筆為補抓目標，畫面少於 60 筆時不冒充完整技術資料。只有該股票確實缺漏時，才向 `twss-sync-batch?mode=history` 發出一次按需補抓；已確認為新上市且歷史本來較短者會保存完成標記，不會每次開啟都重抓。
+
+按需補抓與排程共用資料庫中央滑動配額帳本：先取得單檔分散式租約、再次檢查資料庫，再原子保留 1 次 FinMind 額度，以單次 `TaiwanStockPrice` 請求取得日線，合併該檔較新的 TWSE／TPEx 官方快照後立刻 upsert 到 `stock_price_history`。因此同時開啟同一檔只會有一個補抓者，之後所有人皆由後端重用。互動補抓另限每小時 30／60 次，且為排程保留 10／20 次額度；仍不會繞過每 60 分鐘 300／600 次總上限。
+
+若目前 60 分鐘額度已滿，函式回傳 HTTP 202、`code: HISTORY_PENDING` 與可重試時間，表示已知的配額等待狀態；不再把「尚未累積」偽裝成 HTTP 502。真正的上游錯誤才會標記為 `HISTORY_UPSTREAM_ERROR`，方便把資料尚未輪到、配額等待與供應商故障分開稽核。
 
 ## 排程
 
@@ -50,7 +58,7 @@
 - 所有公開市場資料表（包含 `stock_master`、`stock_snapshots`）都啟用 RLS，只有 public-read policy，沒有公開寫入 policy。
 - 批次函式使用 Supabase 伺服器密鑰寫入；密鑰只存在 Edge Runtime 環境。
 - pg_cron 的 `x-twss-sync-token` 由 Vault 產生與保存，原始碼沒有權杖明文。
-- `twss-sync-batch` 雖設定 `verify_jwt = false`，函式本身會先呼叫 service-role-only 的 `twss_verify_sync_token`；缺少或錯誤權杖會回傳 HTTP 401。
+- `twss-sync-batch` 雖設定 `verify_jwt = false`，POST 排程／手動同步仍會先呼叫 service-role-only 的 `twss_verify_sync_token`；缺少或錯誤權杖會回傳 HTTP 401。公開 GET 只開放 `mode=history`、合法股票代號與月份範圍，寫入仍由函式內的 service role 執行，且必須先通過股票主檔與中央配額檢查。
 
 公開的 `sb_publishable_...` key 只用於受 RLS 保護的讀取，可放在前端；`sb_secret_...`、service role key 與 Vault 權杖不可提交到 GitHub。
 

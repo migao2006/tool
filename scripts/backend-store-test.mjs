@@ -88,5 +88,8 @@ assert.equal("benchmarks" in status.jobs[0].details, false, "status payload must
 assert.ok(calls.every(({ url }) => url.hostname === "lfkdkdyaatdlizryiyon.supabase.co"));
 assert.equal(calls.filter(({ url }) => url.pathname.endsWith("/stock_analysis_cache"))
   .some(({ url }) => url.searchParams.has("data_date")), false, "rankings must not discard last-good rows on date rollover");
+assert.equal(calls.filter(({ url }) => url.pathname.endsWith("/stock_sync_state"))
+  .every(({ url }) => url.searchParams.get("job_key") === "in.(universe,deep_listed,deep_otc,deep_etf)"), true,
+"rankings and status must exclude per-symbol history lease rows");
 
 console.log("Backend store tests passed: public-only reads, grouped rankings, sync state, and stored history");

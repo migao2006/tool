@@ -190,6 +190,7 @@ const fullFetch = async (input) => {
     return json(otcSymbols.map((SecuritiesCompanyCode) => ({ Date: "1150713", 年度: "115", 季別: "1", SecuritiesCompanyCode, 資產總計: "1000", 負債總計: "300", 權益總計: "700" })));
   }
   if (url.includes("lfkdkdyaatdlizryiyon.supabase.co/rest/v1/stock_price_history")) {
+    if (url.includes("symbol=eq.2454")) return json([]);
     return json(Array.from({ length: 130 }, (_, index) => ({
       trade_date: new Date(Date.UTC(2026, 0, 1 + index)).toISOString().slice(0, 10),
       open: 50 + index * 0.1,
@@ -200,6 +201,26 @@ const fullFetch = async (input) => {
       trade_value: 30_000_000,
       transactions: 2_000,
     })).reverse());
+  }
+  if (url.includes("supabase.co/functions/v1/twss-sync-batch") && url.includes("mode=history")) {
+    const symbol = new URL(url).searchParams.get("symbol");
+    return json({
+      mode: "live",
+      symbol,
+      source: symbol === "2454" ? "FinMind 按需補抓（已存入 Supabase）" : "Supabase 後端歷史資料庫",
+      count: 130,
+      period: "2026-05-10",
+      history: Array.from({ length: 130 }, (_, index) => ({
+        date: new Date(Date.UTC(2026, 0, 1 + index)).toISOString().slice(0, 10),
+        open: 100 + index,
+        high: 102 + index,
+        low: 99 + index,
+        close: 101 + index,
+        volume: 1_000,
+        value: 100_000_000,
+        transactions: 3_000,
+      })),
+    });
   }
   if (/t187ap0[67]_[LO]_|mopsfin_t187ap0[67]_O_/.test(url)) return json([]);
   if (url.includes("supabase.co/functions/v1/twss-market-data")) {
@@ -297,7 +318,13 @@ assert.equal(otcHistory.count, 130);
 assert.equal(otcHistory.history.length, 130);
 assert.match(otcHistory.source, /Supabase 後端歷史資料庫/);
 
-const appResponse = await worker.fetch(new Request("https://example.test/app.js?v=16.3-ui3"), {}, {});
+const onDemandHistory = await payload("/api/market-data?type=history&symbol=2454&market=上市&months=18&refresh=1");
+assert.equal(onDemandHistory.market, "上市");
+assert.equal(onDemandHistory.count, 130);
+assert.equal(onDemandHistory.history.length, 130);
+assert.match(onDemandHistory.source, /按需補抓/);
+
+const appResponse = await worker.fetch(new Request("https://example.test/app.js?v=16.3-ui5"), {}, {});
 const appSource = await appResponse.text();
 assert.match(appSource, /官方日期已核對/);
 assert.match(appSource, /各資料來源日期/);
@@ -308,14 +335,17 @@ assert.match(appSource, /ETF 不適用/);
 assert.match(appSource, /Promise\.allSettled/);
 assert.match(appSource, /value\/1000000/);
 assert.match(appSource, /market:stock\.market\|\|'上市'/);
-assert.match(appSource, /每日深度快照/);
+assert.doesNotMatch(appSource, /snapshotHistory/, "the removed compact snapshot must not be downloaded as a history fallback");
+assert.match(appSource, /body\?\.error\|\|`HTTP \$\{r\.status\}`/, "the UI must preserve structured API errors");
+assert.match(appSource, /交易日不足 60 日/, "partial histories must not be presented as complete technical data");
+assert.match(appSource, /120000,0/, "opening one detail must not automatically consume a second repair attempt");
 assert.match(appSource, /aria-label','關閉視窗/);
 assert.match(appSource, /event\.key==='Escape'/);
-assert.match(appSource, /sw\.js\?v=16\.3-ui3/);
+assert.match(appSource, /sw\.js\?v=16\.3-ui5/);
 assert.doesNotMatch(appSource, /廣告|促銷|VIP|贊助|免費試用|立即購買|解鎖/);
 assert.doesNotMatch(appSource, /_\=\$\{Date\.now\(\)\}/);
 
-const smartResponse = await worker.fetch(new Request("https://example.test/smart.js?v=16.3-ui3"), {}, {});
+const smartResponse = await worker.fetch(new Request("https://example.test/smart.js?v=16.3-ui5"), {}, {});
 const smartSource = await smartResponse.text();
 assert.match(smartSource, /機會股排行/);
 assert.match(smartSource, /風險排除 → 成長確認 → 籌碼確認 → 價量進場判斷/);
@@ -335,7 +365,7 @@ assert.match(smartSource, /後端持續累積/);
 assert.match(smartSource, /舊模型快照不作為 v16\.3 正式候選/);
 assert.doesNotMatch(smartSource, /廣告|促銷|VIP|贊助|免費試用|立即購買|解鎖/);
 
-const stylesResponse = await worker.fetch(new Request("https://example.test/styles.css?v=16.3-ui3"), {}, {});
+const stylesResponse = await worker.fetch(new Request("https://example.test/styles.css?v=16.3-ui5"), {}, {});
 const stylesSource = await stylesResponse.text();
 assert.match(stylesSource, /min-width:48px/);
 assert.match(stylesSource, /max-height:min\(76dvh,640px\)/);

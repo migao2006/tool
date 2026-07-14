@@ -107,7 +107,7 @@ assert.equal(aiResearch.analysis.summary, "測試摘要");
 assert.equal(aiResearch.aiConfidence, 78);
 assert.equal("inputHash" in aiResearch, false, "public AI endpoint must not expose prompt hashes or input snapshots");
 const noAiResearch = await readAiResearch("6488");
-assert.deepEqual(noAiResearch, { available: false, symbol: "6488", reason: "not-selected-or-not-generated" });
+assert.deepEqual(noAiResearch, { available: false, symbol: "6488", reason: "not-generated" });
 const expiredAiResearch = await readAiResearch("2454");
 assert.deepEqual(expiredAiResearch, { available: false, symbol: "2454", reason: "expired" });
 await assert.rejects(() => readAiResearch("2330' or true"), /格式不正確/);

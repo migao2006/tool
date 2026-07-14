@@ -16,7 +16,7 @@ const SUPABASE_HISTORY_EDGE = "https://lfkdkdyaatdlizryiyon.supabase.co/function
 const TWSE_OPEN = "https://openapi.twse.com.tw/v1";
 const TWSE_WEB = "https://www.twse.com.tw";
 const TPEX_OPEN = "https://www.tpex.org.tw/openapi/v1";
-const VERSION = "16.4";
+const VERSION = "16.5";
 
 const FINANCIAL_CATEGORIES = ["ci", "fh", "basi", "bd", "ins", "mim"];
 
@@ -1323,7 +1323,7 @@ export function sourcesPayload() {
       {
         id: "gemini",
         name: "Google Gemini（選用、獨立研究層）",
-        coverage: ["限量正式候選摘要", "支持與風險證據", "1～8 週情境與觀察項目"],
+        coverage: ["使用者手動要求的研究摘要", "支持與風險證據", "1～8 週情境與觀察項目"],
         isolation: "不參與量化計分、排名或原始預測",
       },
     ],
@@ -1343,7 +1343,7 @@ export function healthPayload() {
       "FinMind 歷史公開資料",
       "TDCC 集保戶股權分散開放資料",
       "Supabase Postgres 歷史資料與排行榜",
-      "Google Gemini 限量獨立研究摘要（選用）",
+      "Google Gemini 手動獨立研究摘要（選用）",
     ],
     markets: ["上市股票", "上櫃股票", "ETF"],
     rankingGroups: {
@@ -1354,6 +1354,7 @@ export function healthPayload() {
     aiResearch: {
       independent: true,
       affectsScores: false,
+      mode: "manual-only",
       dailyMaximum: 20,
       defaultDailyLimit: 12,
     },

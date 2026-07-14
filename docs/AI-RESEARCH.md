@@ -1,25 +1,24 @@
-# v16.4 獨立 Gemini AI 研究層
+# v16.5 手動 Gemini AI 研究層
 
 ## 設計原則
 
 AI 是補充研究，不是第二套選股引擎。資料流只有單向：
 
-`stock_analysis_cache（唯讀） → 候選門檻與成本閘門 → Gemini 結構化摘要 → ai_stock_research → 股票明細頁`
+`股票明細按鈕 → 登入驗證 → stock_analysis_cache（唯讀） → 快取／成本閘門 → Gemini 結構化摘要 → ai_stock_research`
 
-`twss-ai-research` 不會寫入 `stock_analysis_cache`、`opportunity_score_history`，也不會匯入或呼叫 `opportunity-engine.js`。v16.4 測試會核對量化核心檔案的 SHA-256，防止 AI 功能意外改動原模型。
+`twss-ai-research` 不會寫入 `stock_analysis_cache`、`opportunity_score_history`，也不會匯入或呼叫 `opportunity-engine.js`。v16.5 測試會核對量化核心檔案的 SHA-256，防止 AI 功能意外改動原模型。
 
-## 哪些股票會分析
+## 手動按鈕與資料條件
 
-同時符合下列條件才有資格：
+股票明細不再自動查詢或顯示「未列入 AI 名單」。每一檔上市、上櫃、ETF 都會顯示按鈕；按下時只要求：
 
 - 深度狀態為 `ready`
-- `official=true`
 - 分析版本為 `16.3-ultimate-data-audit`
-- 機會分數至少 65
-- 資料信心至少 70%
-- 輸入資料、Gemini 模型或 AI schema 與上一份報告不同
+- 深度分析內容不是空值
 
-每日預設選 12 檔，分組配額為上市 5、上櫃 5、ETF 2；某一組不足時，空缺才由其他組的合格候選補上。資料庫的 `twss_reserve_ai_calls` 使用 advisory lock 原子保留每日額度，即使重複 cron 或手動觸發也不會超過 `AI_DAILY_LIMIT`，且 SQL 端永遠硬限制在 20 次以內。
+不再要求 `official=true`、機會分數 65 或資料信心 70%，這些仍只影響原量化排行榜。若該股票尚未完成後端深度分析，按鈕會顯示「深度資料仍在累積」，而不是誤稱未入選。
+
+按鈕先查相同輸入雜湊、模型與 schema 的 14 天快取；命中時零次 Gemini 呼叫。需要新摘要時，`twss_claim_manual_ai_request` 會以 advisory lock 原子處理同檔去重、每人每日 6 次、全站每日預設 12 次及同時最多兩份；SQL 端全站上限永遠不超過 20 次。舊的 `twss-ai-research-weekday` 排程已停用。
 
 ## Gemini 能做與不能做的事
 
@@ -52,20 +51,21 @@ AI 是補充研究，不是第二套選股引擎。資料流只有單向：
 
 - `GEMINI_API_KEY`：必要
 - `GEMINI_MODEL`：選用，預設 `gemini-3.5-flash`
-- `AI_DAILY_LIMIT`：選用，預設 12，可設 1～20
+- `AI_DAILY_LIMIT`：選用，全站預設 12，可設 1～20
+- `AI_USER_DAILY_LIMIT`：選用，每帳戶預設 6，SQL 硬上限 12
 
 排程本身不寫死檔數，會讀取 `AI_DAILY_LIMIT`；未設定時仍為 12。資料庫函式另有 20 次硬上限，重複排程也無法超過。
 
 CLI 方式：
 
 ```sh
-supabase secrets set GEMINI_API_KEY=YOUR_KEY GEMINI_MODEL=gemini-3.5-flash AI_DAILY_LIMIT=12
+supabase secrets set GEMINI_API_KEY=YOUR_KEY GEMINI_MODEL=gemini-3.5-flash AI_DAILY_LIMIT=12 AI_USER_DAILY_LIMIT=6
 supabase functions deploy twss-ai-research
 ```
 
-`supabase/config.toml` 對此函式設定 `verify_jwt=false`，因為 pg_cron 無使用者 JWT；函式本身會先以 Vault 內的 `twss_sync_token` 驗證 `x-twss-sync-token`，缺少或錯誤都回 HTTP 401。
+`supabase/config.toml` 對此函式維持 `verify_jwt=false`，因為同一函式仍保留管理診斷入口。函式內會分流驗證：手動模式必須向 Supabase Auth 驗證真實使用者 JWT；管理模式則必須以 Vault 內的同步權杖驗證。JWT 只解碼而不向 Auth 驗證是不被允許的。
 
-平日排程為 UTC 10:20，也就是台灣時間 18:20。沒有 `GEMINI_API_KEY` 時，排程只把狀態標為 `configured:false`，不保留額度、不呼叫 Gemini，也不影響任何原功能。
+自動排程已取消。沒有 `GEMINI_API_KEY` 時，按鈕只回傳「尚未完成後端設定」，不保留額度、不呼叫 Gemini，也不影響任何原功能。
 
 後端也支援名為 `twss_gemini_api_key` 的 Supabase Vault 備援；Edge Function Secret 永遠優先。Vault 值必須由管理者在正式環境另外建立，migration 與 GitHub 原始碼只包含 service-role-only 讀取函式，絕不包含金鑰本身。
 
@@ -92,4 +92,4 @@ group by group_name;
 GET /api/market-data?type=ai-research&symbol=2330
 ```
 
-未被選中時回傳 `available:false`；這是成本控制的預期狀態。
+尚未產生時回傳 `available:false`；前端會保留手動按鈕，不會再顯示未列入名單。

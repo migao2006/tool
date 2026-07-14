@@ -25,11 +25,12 @@ const [sync, baseSchema, schema, grants, cron, acceleratedCron, leases, quota, p
   readFile(new URL("./backtest-snapshots.mjs", import.meta.url), "utf8"),
 ]);
 
-const [aiEdge, aiShared, aiMigration, aiExpiryPolicy] = await Promise.all([
+const [aiEdge, aiShared, aiMigration, aiExpiryPolicy, aiManualMigration] = await Promise.all([
   readFile(new URL("../supabase/functions/twss-ai-research/index.ts", import.meta.url), "utf8"),
   readFile(new URL("../supabase/functions/_shared/ai-research.js", import.meta.url), "utf8"),
   readFile(new URL("../supabase/migrations/20260714213000_add_independent_ai_research.sql", import.meta.url), "utf8"),
   readFile(new URL("../supabase/migrations/20260714220000_hide_expired_ai_research.sql", import.meta.url), "utf8"),
+  readFile(new URL("../supabase/migrations/20260715070000_manual_ai_research_button.sql", import.meta.url), "utf8"),
 ]);
 const aiInternalPolicies = await readFile(
   new URL("../supabase/migrations/20260714214500_explicit_ai_internal_policies.sql", import.meta.url),
@@ -161,6 +162,11 @@ assert.doesNotMatch(aiInternalPolicies, /to anon|to authenticated/);
 assert.match(aiExpiryPolicy, /expires_at is null or expires_at > now\(\)/);
 assert.match(aiExpiryPolicy, /for select to anon, authenticated/);
 assert.match(aiExpiryPolicy, /body := '\{\}'::jsonb/);
+assert.match(aiManualMigration, /twss_claim_manual_ai_request/);
+assert.match(aiManualMigration, /cron\.unschedule/);
+assert.match(aiManualMigration, /'mode', 'manual-only'/);
+assert.match(aiManualMigration, /to service_role/);
+assert.doesNotMatch(aiManualMigration, /grant execute[\s\S]*to anon|grant execute[\s\S]*to authenticated/);
 assert.match(aiVaultReader, /from vault\.decrypted_secrets/);
 assert.match(aiVaultReader, /to service_role/);
 assert.doesNotMatch(aiVaultReader, /grant execute[\s\S]*to anon|grant execute[\s\S]*to authenticated/);
@@ -169,10 +175,13 @@ assert.match(aiEdge, /GEMINI_API_KEY/);
 assert.match(aiEdge, /configured: false/);
 assert.match(aiEdge, /selectAiCandidates/);
 assert.match(aiEdge, /twss_reserve_ai_calls/);
+assert.match(aiEdge, /body\.mode === "manual"/);
+assert.match(aiEdge, /verifyUserRequest/);
+assert.match(aiEdge, /twss_claim_manual_ai_request/);
 assert.doesNotMatch(aiEdge, /opportunity_score_history/);
 assert.doesNotMatch(aiEdge, /stock_analysis_cache\?on_conflict/);
 assert.match(aiShared, /quantitativeResultReadOnly/);
 assert.match(aiShared, /不得覆寫、重算/);
 assert.match(marketHandler, /readAiResearch\(symbol\)/);
 
-console.log("Backend pipeline tests passed: bounded cursors, three schedules, Vault auth, RLS, and read-only grants");
+console.log("Backend pipeline tests passed: bounded cursors, manual AI gate, Vault auth, RLS, and read-only grants");

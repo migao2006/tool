@@ -117,9 +117,10 @@ const normalized = normalizeAiAnalysis({
 assert.equal(normalized.aiConfidence, 76);
 assert.throws(() => normalizeAiAnalysis({ verdict: "強力買進" }), /觀察結論/);
 
-const [edge, migration, vaultMigration, opportunityEngine, deepData] = await Promise.all([
+const [edge, migration, manualMigration, vaultMigration, opportunityEngine, deepData] = await Promise.all([
   readFile(new URL("../supabase/functions/twss-ai-research/index.ts", import.meta.url), "utf8"),
   readFile(new URL("../supabase/migrations/20260714213000_add_independent_ai_research.sql", import.meta.url), "utf8"),
+  readFile(new URL("../supabase/migrations/20260715070000_manual_ai_research_button.sql", import.meta.url), "utf8"),
   readFile(new URL("../supabase/migrations/20260715060000_add_vault_gemini_secret_reader.sql", import.meta.url), "utf8"),
   readFile(new URL("../src/opportunity-engine.js", import.meta.url)),
   readFile(new URL("../src/deep-data.js", import.meta.url)),
@@ -132,12 +133,19 @@ assert.match(edge, /\[REDACTED\]/);
 assert.match(edge, /x-goog-api-key/);
 assert.match(edge, /body\.mode === "models"/);
 assert.match(edge, /twss_reserve_ai_calls/);
+assert.match(edge, /body\.mode === "manual"/);
+assert.match(edge, /verifyUserRequest\(request\)/);
+assert.match(edge, /loadCandidateBySymbol\(symbol\)/);
+assert.match(edge, /twss_claim_manual_ai_request/);
+assert.match(edge, /使用者按下 AI 研究摘要/);
 assert.match(edge, /Math\.min\(2, selected\.length\)/, "provider concurrency must remain bounded");
 assert.match(edge, /selectAiCandidates/);
 assert.match(edge, /CANDIDATE_GROUPS\.map/, "candidate queries must be balanced before applying group quotas");
 assert.match(edge, /group_name=eq\.\$\{group\}/);
 assert.doesNotMatch(edge, /opportunity_score_history/);
 assert.doesNotMatch(edge, /stock_analysis_cache\?on_conflict/);
+const manualLoader = edge.slice(edge.indexOf("async function loadCandidateBySymbol"), edge.indexOf("function publicResearch"));
+assert.doesNotMatch(manualLoader, /confidence=gte|score=gte|official=eq/, "manual research must not inherit automatic candidate gates");
 assert.match(vaultMigration, /security invoker/);
 assert.match(vaultMigration, /revoke all on function public\.twss_get_gemini_api_key\(\) from public, anon, authenticated/);
 assert.match(vaultMigration, /grant execute on function public\.twss_get_gemini_api_key\(\) to service_role/);
@@ -147,7 +155,16 @@ assert.match(migration, /p_daily_limit integer default 12/);
 assert.match(migration, /least\(20/);
 assert.match(migration, /using \(status = 'ready'\)/);
 assert.doesNotMatch(migration, /grant (insert|update|delete|all).*to anon/i);
+assert.match(manualMigration, /mode = 'manual'/);
+assert.match(manualMigration, /twss_claim_manual_ai_request/);
+assert.match(manualMigration, /p_user_daily_limit integer default 6/);
+assert.match(manualMigration, /v_active_count >= 2/);
+assert.match(manualMigration, /twss_reserve_ai_calls\(1, v_global_limit\)/);
+assert.match(manualMigration, /cron\.job where jobname = 'twss-ai-research-weekday'/);
+assert.match(manualMigration, /cron\.unschedule/);
+assert.match(manualMigration, /'mode', 'manual-only'/);
+assert.doesNotMatch(manualMigration, /grant execute[\s\S]*to anon|grant execute[\s\S]*to authenticated/);
 assert.equal(createHash("sha256").update(opportunityEngine).digest("hex"), "fa661f98c196904eb9123c1d900fa67a59fe4f044d504b93d11c7001775e58dd", "AI release must not modify opportunity scoring");
 assert.equal(createHash("sha256").update(deepData).digest("hex"), "fb4ab0a840a89ce87ccd07c7808950c7d0d33489c541ad3da374ddb1f2c7c2c5", "AI release must not modify deep quantitative analysis");
 
-console.log("AI research tests passed: independent scoring, quota-balanced selection, deduplication, schema validation, and no-key isolation");
+console.log("AI research tests passed: manual on-demand flow, independent scoring, deduplication, quotas, and no-key isolation");

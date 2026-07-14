@@ -33,11 +33,41 @@ function adminKey() {
 }
 
 const ADMIN_KEY = adminKey();
+function publicKey() {
+  try {
+    const keys = JSON.parse(Deno.env.get("SUPABASE_PUBLISHABLE_KEYS") || "{}");
+    if (keys.default) return String(keys.default);
+  } catch {}
+  return Deno.env.get("SUPABASE_PUBLISHABLE_KEY") || Deno.env.get("SUPABASE_ANON_KEY") || "";
+}
+const PUBLIC_KEY = publicKey();
 const now = () => new Date().toISOString();
+const CORS_HEADERS = {
+  "access-control-allow-origin": "*",
+  "access-control-allow-headers": "authorization, apikey, content-type, x-client-info, x-twss-sync-token",
+  "access-control-allow-methods": "POST, OPTIONS",
+};
 const json = (payload: unknown, status = 200) => new Response(JSON.stringify(payload), {
   status,
-  headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
+  headers: { ...CORS_HEADERS, "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
 });
+
+class PublicError extends Error {
+  status: number;
+  code: string;
+  retryAfterAt: string | null;
+  constructor(message: string, status: number, code: string, retryAfterAt: string | null = null) {
+    super(message);
+    this.status = status;
+    this.code = code;
+    this.retryAfterAt = retryAfterAt;
+  }
+}
+
+function nextTaipeiMidnight() {
+  const local = new Date(Date.now() + 8 * 3_600_000);
+  return new Date(Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate() + 1) - 8 * 3_600_000).toISOString();
+}
 
 function safeErrorMessage(error: unknown, secret = "") {
   let message = error instanceof Error ? error.message : String(error);
@@ -65,11 +95,23 @@ async function rest(path: string, options: { method?: string; body?: unknown; pr
   return { data: text ? JSON.parse(text) : null, response };
 }
 
-async function verifyRequest(request: Request) {
+async function verifySyncRequest(request: Request) {
   const token = request.headers.get("x-twss-sync-token") || "";
   if (!token) return false;
   const { data } = await rest("rpc/twss_verify_sync_token", { method: "POST", body: { p_token: token } });
   return data === true;
+}
+
+async function verifyUserRequest(request: Request) {
+  const authorization = request.headers.get("authorization") || "";
+  const key = PUBLIC_KEY || request.headers.get("apikey") || "";
+  if (!authorization.startsWith("Bearer ") || !key || !PROJECT_URL) return null;
+  const response = await fetch(`${PROJECT_URL}/auth/v1/user`, {
+    headers: { accept: "application/json", apikey: key, authorization },
+  });
+  if (!response.ok) return null;
+  const user = await response.json().catch(() => null);
+  return user?.id ? { id: String(user.id) } : null;
 }
 
 async function patchState(values: Record<string, unknown>) {
@@ -107,6 +149,29 @@ async function finishCalls(completed: number, failed: number) {
   await rest("rpc/twss_finish_ai_calls", {
     method: "POST",
     body: { p_completed: completed, p_failed: failed },
+  });
+}
+
+async function claimManualRequest(candidate: Record<string, any>, requesterHash: string) {
+  const { data } = await rest("rpc/twss_claim_manual_ai_request", {
+    method: "POST",
+    body: {
+      p_symbol: candidate.symbol,
+      p_input_hash: candidate.inputHash,
+      p_model: GEMINI_MODEL,
+      p_schema_version: AI_SCHEMA_VERSION,
+      p_requester_hash: requesterHash,
+      p_daily_limit: configuredLimit,
+      p_user_daily_limit: Math.max(1, Math.min(12, Number(Deno.env.get("AI_USER_DAILY_LIMIT")) || 6)),
+    },
+  });
+  return data && typeof data === "object" ? data : { action: "error" };
+}
+
+async function finishManualRequest(runId: string, success: boolean, errorCode: string | null = null) {
+  await rest("rpc/twss_finish_manual_ai_request", {
+    method: "POST",
+    body: { p_run_id: runId, p_success: success, p_error_code: errorCode },
   });
 }
 
@@ -160,6 +225,67 @@ async function loadCandidates() {
   return groups.flat();
 }
 
+async function loadCandidateBySymbol(symbol: string) {
+  if (!/^\d{4,6}[A-Z]?$/i.test(symbol)) throw new PublicError("股票代號格式不正確", 400, "INVALID_SYMBOL");
+  const select = encodeURIComponent(
+    "symbol,group_name,data_date,analysis_version,score,confidence,official,tier,stock,analysis,result,status,updated_at",
+  );
+  const params = [
+    `select=${select}`,
+    `symbol=eq.${encodeURIComponent(symbol)}`,
+    "status=eq.ready",
+    `analysis_version=eq.${encodeURIComponent(QUANT_ANALYSIS_VERSION)}`,
+    "order=updated_at.desc",
+    "limit=1",
+  ].join("&");
+  const { data } = await rest(`stock_analysis_cache?${params}`);
+  const row = Array.isArray(data) ? data[0] : null;
+  if (!row?.analysis || !CANDIDATE_GROUPS.includes(row.group_name)) {
+    throw new PublicError("這檔股票的後端深度資料仍在累積，完成後即可產生摘要", 409, "ANALYSIS_NOT_READY");
+  }
+  return row;
+}
+
+function publicResearch(row: Record<string, any>, cached = false) {
+  return {
+    available: true,
+    cached,
+    symbol: String(row.symbol),
+    group: row.group_name,
+    dataDate: row.data_date || null,
+    provider: row.provider || "google-gemini",
+    model: row.model || GEMINI_MODEL,
+    schemaVersion: row.schema_version || AI_SCHEMA_VERSION,
+    selectedReason: row.selected_reason || "使用者手動要求 AI 研究摘要",
+    verdict: row.verdict || row.analysis?.verdict || "中性觀察",
+    aiConfidence: Number(row.ai_confidence ?? row.analysis?.aiConfidence) || 0,
+    analysis: row.analysis,
+    generatedAt: row.generated_at || null,
+    expiresAt: row.expires_at || null,
+  };
+}
+
+async function loadExactResearch(candidate: Record<string, any>) {
+  const select = encodeURIComponent(
+    "symbol,group_name,data_date,input_hash,provider,model,schema_version,selected_reason,verdict,ai_confidence,analysis,generated_at,expires_at,status",
+  );
+  const params = [
+    `select=${select}`,
+    `symbol=eq.${encodeURIComponent(candidate.symbol)}`,
+    `input_hash=eq.${encodeURIComponent(candidate.inputHash)}`,
+    `model=eq.${encodeURIComponent(GEMINI_MODEL)}`,
+    `schema_version=eq.${encodeURIComponent(AI_SCHEMA_VERSION)}`,
+    "status=eq.ready",
+    "order=generated_at.desc",
+    "limit=1",
+  ].join("&");
+  const { data } = await rest(`ai_stock_research?${params}`);
+  const row = Array.isArray(data) ? data[0] : null;
+  if (!row?.analysis) return null;
+  const expiresAt = Date.parse(row.expires_at || "");
+  return Number.isFinite(expiresAt) && expiresAt <= Date.now() ? null : row;
+}
+
 async function loadPrevious() {
   const select = encodeURIComponent("symbol,input_hash,model,schema_version,generated_at,expires_at");
   const { data } = await rest(`ai_stock_research?select=${select}&order=generated_at.desc&limit=2000`);
@@ -195,7 +321,7 @@ async function patchRun(id: string | null, values: Record<string, unknown>) {
   });
 }
 
-async function generateOne(ai: GoogleGenAI, candidate: Record<string, any>) {
+async function generateOne(ai: GoogleGenAI, candidate: Record<string, any>, selectedReason = "正式候選、資料信心達標且分組排名前段；僅建立獨立 AI 研究摘要") {
   const response = await ai.models.generateContent({
     model: GEMINI_MODEL,
     contents: buildAiPrompt(candidate.facts),
@@ -208,7 +334,8 @@ async function generateOne(ai: GoogleGenAI, candidate: Record<string, any>) {
   });
   const raw = String(response.text || "").trim();
   const analysis = normalizeAiAnalysis(JSON.parse(raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "")));
-  const selectedReason = "正式候選、資料信心達標且分組排名前段；僅建立獨立 AI 研究摘要";
+  const generatedAt = now();
+  const expiresAt = new Date(Date.now() + 14 * 86_400_000).toISOString();
   await rest("ai_stock_research?on_conflict=symbol,input_hash,model,schema_version", {
     method: "POST",
     body: {
@@ -225,12 +352,25 @@ async function generateOne(ai: GoogleGenAI, candidate: Record<string, any>) {
       ai_confidence: analysis.aiConfidence,
       analysis,
       input_snapshot: candidate.facts,
-      generated_at: now(),
-      expires_at: new Date(Date.now() + 14 * 86_400_000).toISOString(),
+      generated_at: generatedAt,
+      expires_at: expiresAt,
     },
     prefer: "resolution=merge-duplicates,return=minimal",
   });
-  return { symbol: candidate.symbol, verdict: analysis.verdict, confidence: analysis.aiConfidence };
+  return publicResearch({
+    symbol: candidate.symbol,
+    group_name: candidate.group_name,
+    data_date: candidate.data_date,
+    provider: "google-gemini",
+    model: GEMINI_MODEL,
+    schema_version: AI_SCHEMA_VERSION,
+    selected_reason: selectedReason,
+    verdict: analysis.verdict,
+    ai_confidence: analysis.aiConfidence,
+    analysis,
+    generated_at: generatedAt,
+    expires_at: expiresAt,
+  });
 }
 
 async function runBatch(limit: number) {
@@ -316,12 +456,60 @@ async function runBatch(limit: number) {
   return { ok: errors.length === 0, configured: true, selected: selected.length, generated, failed: errors.map((item) => item.symbol) };
 }
 
+async function runManual(symbol: string, userId: string) {
+  const geminiApiKey = await loadGeminiApiKey();
+  if (!geminiApiKey) throw new PublicError("Gemini 尚未完成後端設定", 503, "AI_NOT_CONFIGURED");
+  const row = await loadCandidateBySymbol(symbol);
+  const facts = buildAiFacts(row);
+  const candidate = { ...row, facts, inputHash: await sha256Hex(facts) };
+  const requesterHash = await sha256Hex(`twss-ai-user:${userId}`);
+  const claim = await claimManualRequest(candidate, requesterHash);
+  if (claim.action === "cached") {
+    const cached = await loadExactResearch(candidate);
+    if (cached) return publicResearch(cached, true);
+  }
+  if (claim.action === "in_progress" || claim.action === "busy") {
+    throw new PublicError("另一份 AI 摘要正在產生，請稍後再試", 409, "AI_IN_PROGRESS");
+  }
+  if (claim.action === "user_limit") {
+    throw new PublicError("你今天的手動 AI 研究次數已用完，明天可再使用", 429, "AI_USER_LIMIT", nextTaipeiMidnight());
+  }
+  if (claim.action === "global_limit") {
+    throw new PublicError("今天的 AI 研究總額度已用完，明天會自動恢復", 429, "AI_DAILY_LIMIT", nextTaipeiMidnight());
+  }
+  if (claim.action !== "generate" || !claim.run_id) {
+    throw new PublicError("AI 研究暫時忙碌，請稍後再試", 503, "AI_BUSY");
+  }
+  try {
+    const ai = new GoogleGenAI({ apiKey: geminiApiKey });
+    const result = await generateOne(
+      ai,
+      candidate,
+      "使用者按下 AI 研究摘要；僅整理既有公開資料，不影響量化分數",
+    );
+    await finishManualRequest(String(claim.run_id), true);
+    return result;
+  } catch (error) {
+    const message = safeErrorMessage(error, geminiApiKey);
+    console.error("[twss-ai-research] manual generation failed", { symbol, error: message.slice(0, 300) });
+    await finishManualRequest(String(claim.run_id), false, "AI_PROVIDER_ERROR").catch(() => undefined);
+    throw new PublicError("Gemini 暫時無法完成這份摘要，請稍後再試", 502, "AI_PROVIDER_ERROR");
+  }
+}
+
 Deno.serve(async (request) => {
+  if (request.method === "OPTIONS") return new Response("ok", { headers: CORS_HEADERS });
   if (request.method !== "POST") return json({ error: "Method not allowed" }, 405);
   try {
-    if (!await verifyRequest(request)) return json({ error: "Unauthorized" }, 401);
     let body: Record<string, unknown> = {};
     try { body = await request.json(); } catch {}
+    if (body.mode === "manual") {
+      const user = await verifyUserRequest(request);
+      if (!user) return json({ error: "請先登入再產生 AI 研究摘要", code: "LOGIN_REQUIRED" }, 401);
+      const symbol = String(body.symbol || "").trim().toUpperCase();
+      return json(await runManual(symbol, user.id));
+    }
+    if (!await verifySyncRequest(request)) return json({ error: "Unauthorized" }, 401);
     if (body.mode === "models") return json(await listGeminiModels());
     const requested = Math.max(1, Math.min(configuredLimit, Number(body.limit) || configuredLimit));
     const owner = crypto.randomUUID();
@@ -332,6 +520,9 @@ Deno.serve(async (request) => {
       await releaseLease(owner).catch(() => undefined);
     }
   } catch (error) {
+    if (error instanceof PublicError) {
+      return json({ error: error.message, code: error.code, retryAfterAt: error.retryAfterAt }, error.status);
+    }
     const message = safeErrorMessage(error, ENV_GEMINI_API_KEY);
     console.error("[twss-ai-research] batch failed", { error: message });
     await patchState({ status: "error", last_error: message.slice(0, 1000) }).catch(() => undefined);

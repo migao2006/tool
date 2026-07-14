@@ -239,7 +239,7 @@ export async function readAiResearch(symbol) {
     return {
       available: false,
       symbol: String(symbol),
-      reason: "not-selected-or-not-generated",
+      reason: "not-generated",
     };
   }
   const expiresAt = row.expires_at ? Date.parse(row.expires_at) : Number.NaN;

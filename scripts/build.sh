@@ -4,6 +4,7 @@ set -euo pipefail
 project_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 dist_root="$project_root/dist"
 
+mkdir -p "$project_root/worker"
 node "$project_root/scripts/generate-worker.mjs"
 rm -rf "$dist_root"
 mkdir -p "$dist_root/server"

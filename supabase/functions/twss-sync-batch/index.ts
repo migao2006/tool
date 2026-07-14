@@ -1,14 +1,21 @@
-// Taiwan Stock Smart v16.2 persistent batch updater.
+// Taiwan Stock Smart v16.3 persistent batch updater.
 // Called only by pg_cron with a token generated and retained in Supabase Vault.
 // @ts-ignore JavaScript modules are shared with the Vercel runtime.
-import { ANALYSIS_VERSION, buildDeepData } from "../../../src/deep-data.js";
+import {
+  ANALYSIS_VERSION,
+  buildBenchmarks,
+  buildDeepData,
+  buildTdccSnapshot,
+} from "../../../src/deep-data.js";
 // @ts-ignore JavaScript modules are shared with the Vercel runtime.
 import { handleMarketData } from "../../../src/market-data.js";
 // @ts-ignore JavaScript modules are shared with the Vercel runtime.
 import { buildPeerContexts, scoreOpportunity } from "../../../src/opportunity-engine.js";
 
-const VERSION = "16.2";
+const VERSION = "16.3";
 const PROJECT_URL = Deno.env.get("SUPABASE_URL") || "";
+const FINMIND_AUTHENTICATED = Boolean(Deno.env.get("FINMIND_TOKEN"));
+const FINMIND_HOURLY_LIMIT = FINMIND_AUTHENTICATED ? 600 : 300;
 const GROUPS = ["listed", "otc", "etf"] as const;
 type Group = typeof GROUPS[number];
 
@@ -99,6 +106,65 @@ async function getState(jobKey: string) {
   return Array.isArray(data) ? data[0] : null;
 }
 
+async function claimLease(jobKey: string, owner: string, seconds = 180) {
+  const { data } = await rest("rpc/twss_claim_sync_lease", {
+    method: "POST",
+    body: { p_job_key: jobKey, p_owner: owner, p_seconds: seconds },
+  });
+  return data === true;
+}
+
+async function releaseLease(jobKey: string, owner: string) {
+  await rest("rpc/twss_release_sync_lease", {
+    method: "POST",
+    body: { p_job_key: jobKey, p_owner: owner },
+  });
+}
+
+async function withLease(jobKey: string, task: () => Promise<unknown>) {
+  const owner = crypto.randomUUID();
+  if (!await claimLease(jobKey, owner)) {
+    return { skipped: true, reason: "active-lease", jobKey };
+  }
+  try {
+    return await task();
+  } catch (error) {
+    await patchState(jobKey, {
+      status: "error",
+      last_error: error instanceof Error ? error.message.slice(0, 2000) : String(error).slice(0, 2000),
+      next_run_at: new Date(Date.now() + 20 * 60 * 1_000).toISOString(),
+    }).catch(() => undefined);
+    throw error;
+  } finally {
+    await releaseLease(jobKey, owner).catch(() => undefined);
+  }
+}
+
+async function reserveFinmindBatch(
+  itemCosts: number[],
+  overhead: number,
+  claimCap: number,
+  metadata: Record<string, unknown>,
+) {
+  const { data } = await rest("rpc/twss_reserve_api_batch", {
+    method: "POST",
+    body: {
+      p_source: "finmind",
+      p_item_costs: itemCosts,
+      p_overhead: Math.max(0, Math.round(overhead)),
+      p_hourly_limit: FINMIND_HOURLY_LIMIT,
+      p_claim_cap: Math.max(0, Math.round(claimCap)),
+      p_metadata: { version: VERSION, ...metadata },
+    },
+  });
+  return data && typeof data === "object" ? data : {
+    items: 0,
+    claimed: 0,
+    remaining: 0,
+    retryAfterAt: null,
+  };
+}
+
 async function localPayload(type: string) {
   const url = new URL(`https://sync.internal/api/market-data?type=${type}&refresh=1`);
   const response = await handleMarketData(new Request(url), url);
@@ -108,7 +174,7 @@ async function localPayload(type: string) {
 }
 
 function groupOf(stock: Record<string, any>): Group {
-  if (stock.instrumentType === "ETF" || /^00\d{2,4}$/.test(String(stock.symbol || ""))) return "etf";
+  if (stock.instrumentType === "ETF" || /^00\d{2,4}[A-Z]?$/i.test(String(stock.symbol || ""))) return "etf";
   return stock.market === "上櫃" ? "otc" : "listed";
 }
 
@@ -125,11 +191,24 @@ function provisionalScore(stock: Record<string, any>, group: Group) {
   return growth + acceleration + quality + valuation + chip + liquidity * (group === "otc" ? 0.8 : 0.55);
 }
 
+function passesPreflight(stock: Record<string, any>, group: Group) {
+  const floor = group === "otc"
+    ? { volume: 100, value: 10_000_000 }
+    : group === "etf"
+      ? { volume: 500, value: 20_000_000 }
+      : { volume: 300, value: 20_000_000 };
+  return !stock.hardExcluded && finite(stock.close) &&
+    finite(stock.volume) && Number(stock.volume) >= floor.volume &&
+    finite(stock.value) && Number(stock.value) >= floor.value;
+}
+
 function compactStock(stock: Record<string, any>) {
   const keys = [
     "symbol", "name", "market", "instrumentType", "industry", "close", "change", "open", "high", "low",
-    "volume", "value", "transactions", "pe", "pb", "yield", "rev", "revMom", "revYtd", "revAcceleration",
+    "volume", "value", "transactions", "pe", "pb", "yield", "revenue", "revenuePreviousMonth",
+    "revenueLastYearMonth", "revenueYtd", "revenueLastYearYtd", "rev", "revMom", "revYtd", "revAcceleration",
     "revPeriod", "roe", "roePeriod", "eps", "grossMargin", "operatingMargin", "netMargin", "debt",
+    "roeEstimated", "equityRatio", "revenueUnit", "quarterRevenue", "quarterRevenueUnit", "quarterRevenuePeriod", "dataStatus", "priceDate",
     "foreign", "trust", "dealer", "inst", "marginBalance", "marginChange", "shortBalance", "shortChange", "risk",
   ];
   return Object.fromEntries(keys.map((key) => [key, stock[key]]).filter(([, value]) => value !== undefined));
@@ -144,6 +223,8 @@ function compactDeep(deep: Record<string, any>) {
     source: deep.source,
     fetchedAt: deep.fetchedAt,
     price: deep.price,
+    benchmarkCoverage: deep.benchmarkCoverage,
+    sourceDiagnostics: deep.sourceDiagnostics,
     revenue: deep.revenue,
     financial: deep.financial ? { ...deep.financial, history: undefined } : undefined,
     institutional: deep.institutional ? { ...deep.institutional, history: undefined } : undefined,
@@ -156,13 +237,58 @@ function compactDeep(deep: Record<string, any>) {
   };
 }
 
-async function syncUniverse() {
+function reusableDiagnostic(analysis: Record<string, any> | null | undefined, key: string) {
+  return ["ok", "reused"].includes(String(analysis?.sourceDiagnostics?.[key]?.status || ""));
+}
+
+function analysisRepairReasons(deep: Record<string, any>, group: Group) {
+  if (group === "etf") return [];
+  const essential = ["revenue", "income", "balance", "cashflow", "institutional", "margin"];
+  const reasons = essential.filter((key) =>
+    ["empty-no-history", "stale-source-period"].includes(String(deep?.sourceDiagnostics?.[key]?.status || "")));
+  const coverage = deep?.financial?.sourceCoverage || {};
+  if (["incomeRows", "balanceRows", "cashflowRows"].some((key) => Number(coverage[key]) <= 0)) {
+    reasons.push("financial-source-coverage");
+  }
+  return [...new Set(reasons)];
+}
+
+async function syncUniverseUnlocked() {
   await patchState("universe", { status: "running", started_at: now(), last_error: null });
   try {
-    const [stocksPayload, revenuePayload, financialPayload] = await Promise.all([
+    // Reserve the two historical-index fallbacks before any FinMind call.  If
+    // the rolling-hour budget is full, official TWSE/TPEx index rows still run
+    // and the next deep batch can retry the missing historical benchmark.
+    const benchmarkBudget = await reserveFinmindBatch([2], 0, 2, { job: "universe" });
+    const allowBenchmarkFallback = Number(benchmarkBudget.items) === 1;
+    const [stocksPayload, revenuePayload, financialPayload, holdingsPayload, benchmarksPayload, accumulatedRows] = await Promise.all([
       localPayload("stocks"),
       localPayload("revenue"),
       localPayload("financials"),
+      // TDCC is a large weekly CSV.  One slow response used to consume the
+      // entire 150-second Edge wall-clock budget because its generic retry
+      // policy could wait twice for 60 seconds.  The daily universe is allowed
+      // one bounded attempt; a later run fills holdings without blocking all
+      // prices, revenue and financial data.
+      buildTdccSnapshot({ timeout: 20_000, retries: 0 }).catch((error: unknown) => ({
+        bySymbol: {},
+        date: "",
+        error: error instanceof Error ? error.message : String(error),
+      })),
+      buildBenchmarks({
+        finmindRetries: 0,
+        officialRetries: 0,
+        officialTimeout: 20_000,
+        allowFinmind: allowBenchmarkFallback,
+      }).catch((error: unknown) => ({
+        listed: [],
+        otc: [],
+        coverage: { listed: false, otc: false },
+        error: error instanceof Error ? error.message : String(error),
+      })),
+      rest("stock_analysis_cache?select=symbol,stock&status=eq.ready&limit=2000")
+        .then((result) => Array.isArray(result.data) ? result.data : [])
+        .catch(() => []),
     ]);
     const merged = new Map<string, Record<string, any>>(
       (stocksPayload.stocks || []).map((stock: Record<string, any>) => [String(stock.symbol), { ...stock }]),
@@ -171,10 +297,92 @@ async function syncUniverse() {
       const current = merged.get(String(row.symbol));
       if (current) Object.assign(current, row);
     }
+    // Official cross-section feeds occasionally omit a company even though its
+    // current period was already verified through deep history.  Preserve that
+    // accumulated value instead of turning it back into a missing field at the
+    // next daily universe refresh.
+    for (const row of accumulatedRows) {
+      const current = merged.get(String(row.symbol));
+      const stored = row.stock || {};
+      if (!current || !finite(stored.revenue)) continue;
+      if (!finite(current.revenue) || String(stored.revPeriod || "") >= String(current.revPeriod || "")) {
+        Object.assign(current, Object.fromEntries(
+          [
+            "revenue", "revenuePreviousMonth", "revenueLastYearMonth", "revenueYtd", "revenueLastYearYtd",
+            "rev", "revMom", "revYtd", "revAcceleration", "revPeriod",
+          ].map((key) => [key, stored[key]]).filter(([, value]) => value !== undefined),
+        ));
+      }
+    }
     const stocks = [...merged.values()];
     if (stocks.length < 100) throw new Error(`Universe coverage too low: ${stocks.length}`);
     const contexts = buildPeerContexts(stocks);
     const dataDate = stocksPayload.date || new Date().toISOString().slice(0, 10);
+    const groupDates = {
+      listed: stocksPayload.dates?.price?.twse || dataDate,
+      otc: stocksPayload.dates?.price?.tpex || dataDate,
+      etf: stocksPayload.dates?.price?.twse || dataDate,
+    };
+    const revenueMap = new Map(
+      (revenuePayload.fundamentals || []).map((row: Record<string, any>) => [String(row.symbol), row]),
+    );
+    const financialMap = new Map(
+      (financialPayload.fundamentals || []).map((row: Record<string, any>) => [String(row.symbol), row]),
+    );
+    const sourceDiagnostics = {
+      stocks: {
+        count: stocks.length,
+        markets: stocksPayload.markets || {},
+        dates: stocksPayload.dates || {},
+        sourceStatus: stocksPayload.sourceStatus || {},
+      },
+      revenue: {
+        period: revenuePayload.period || null,
+        publishedAt: revenuePayload.publishedAt || null,
+        rows: revenueMap.size,
+        accumulatedDeepRows: accumulatedRows.filter((row: Record<string, any>) => finite(row.stock?.revenue)).length,
+        matched: stocks.filter((stock) => groupOf(stock) !== "etf" && revenueMap.has(String(stock.symbol))).length,
+        missingAmount: stocks.filter((stock) => groupOf(stock) !== "etf" && !finite(stock.revenue)).length,
+        eligibleMissingAmount: stocks.filter((stock) => {
+          const group = groupOf(stock);
+          return group !== "etf" && !finite(stock.revenue) && passesPreflight(stock, group);
+        }).length,
+        excludedMissingAmount: stocks.filter((stock) => {
+          const group = groupOf(stock);
+          return group !== "etf" && !finite(stock.revenue) && !passesPreflight(stock, group);
+        }).length,
+        yoyNotApplicable: stocks.filter((stock) =>
+          groupOf(stock) !== "etf" && !finite(stock.rev) &&
+          finite(stock.revenueLastYearMonth) && Number(stock.revenueLastYearMonth) === 0).length,
+        dates: revenuePayload.dates || {},
+        sourceStatus: revenuePayload.sourceStatus || {},
+        coverage: revenuePayload.coverage || {},
+      },
+      financial: {
+        period: financialPayload.period || null,
+        publishedAt: financialPayload.publishedAt || null,
+        rows: financialMap.size,
+        matched: stocks.filter((stock) => groupOf(stock) !== "etf" && financialMap.has(String(stock.symbol))).length,
+        dates: financialPayload.dates || {},
+        sourceStatus: financialPayload.sourceStatus || {},
+        coverage: financialPayload.coverage || {},
+      },
+      holdings: {
+        date: holdingsPayload.date || null,
+        rows: Object.keys(holdingsPayload.bySymbol || {}).length,
+        error: holdingsPayload.error || null,
+      },
+      benchmarks: {
+        coverage: benchmarksPayload.coverage || {},
+        source: benchmarksPayload.source || {},
+        error: benchmarksPayload.error || null,
+      },
+      preflight: Object.fromEntries(GROUPS.map((group) => {
+        const groupRows = stocks.filter((stock) => groupOf(stock) === group);
+        const eligible = groupRows.filter((stock) => passesPreflight(stock, group)).length;
+        return [group, { total: groupRows.length, eligible, excluded: groupRows.length - eligible }];
+      })),
+    };
     const updatedAt = now();
     const masters = stocks.map((stock) => ({
       symbol: String(stock.symbol),
@@ -184,16 +392,39 @@ async function syncUniverse() {
       security_type: groupOf(stock) === "etf" ? "ETF" : "股票",
       source: stock.market === "上櫃" ? "TPEx" : "TWSE",
       active: true,
-      last_trade_date: dataDate,
+      last_trade_date: groupDates[groupOf(stock)] || dataDate,
       metadata: { instrumentType: stock.instrumentType || (groupOf(stock) === "etf" ? "ETF" : "股票") },
       updated_at: updatedAt,
     }));
     await upsert("stock_master", masters, "symbol");
     const snapshots = stocks.map((stock) => {
       const group = groupOf(stock);
+      const priceDate = groupDates[group] || dataDate;
+      const revenueRow = revenueMap.get(String(stock.symbol));
+      const dataStatus = group === "etf" ? {
+        revenue: "not-applicable",
+        financial: "not-applicable",
+      } : {
+        revenue: finite(stock.revenue)
+          ? "available"
+          : revenueRow ? "source-row-incomplete" : "source-not-returned",
+        revenueYoy: finite(stock.rev)
+          ? "available"
+          : finite(stock.revenueLastYearMonth) && Number(stock.revenueLastYearMonth) === 0
+            ? "not-applicable-prior-year-zero"
+            : "missing",
+        financial: financialMap.has(String(stock.symbol)) ? "available" : "source-not-returned",
+        quarterRevenue: finite(stock.quarterRevenue)
+          ? "available"
+          : financialMap.has(String(stock.symbol)) ? "source-row-incomplete-or-not-comparable" : "source-not-returned",
+      };
+      const peerContext = {
+        ...(contexts[String(stock.symbol)] || {}),
+        holdings: holdingsPayload.bySymbol?.[String(stock.symbol)] || null,
+      };
       return {
         symbol: String(stock.symbol),
-        trade_date: dataDate,
+        trade_date: priceDate,
         market: stock.market || "上市",
         industry: stock.industry || "未分類",
         instrument_type: group === "etf" ? "ETF" : "股票",
@@ -222,16 +453,27 @@ async function syncUniverse() {
         short_change: finite(stock.shortChange) ? Math.round(Number(stock.shortChange)) : null,
         is_disposition: Boolean(stock.disp),
         is_full_delivery: Boolean(stock.full),
-        preliminary_score: stock.hardExcluded ? null : Number(provisionalScore(stock, group).toFixed(4)),
-        peer_context: contexts[String(stock.symbol)] || {},
-        raw_data: stock,
-        source_dates: stocksPayload.dates || {},
+        preliminary_score: passesPreflight(stock, group)
+          ? Number(provisionalScore(stock, group).toFixed(4))
+          : null,
+        peer_context: peerContext,
+        raw_data: compactStock({ ...stock, dataStatus, priceDate }),
+        source_dates: {
+          price: priceDate,
+          revenue: stock.revPeriod || revenuePayload.period || null,
+          financial: stock.roePeriod || financialPayload.period || null,
+          dataStatus,
+        },
         source: stock.market === "上櫃" ? "TPEx/TWSE/FinMind" : "TWSE/FinMind",
         updated_at: updatedAt,
       };
     });
     await upsert("stock_snapshots", snapshots, "symbol,trade_date", 150);
     const counts = Object.fromEntries(GROUPS.map((group) => [group, stocks.filter((stock) => groupOf(stock) === group).length]));
+    const eligibleCounts = Object.fromEntries(GROUPS.map((group) => [
+      group,
+      stocks.filter((stock) => groupOf(stock) === group && passesPreflight(stock, group)).length,
+    ]));
     await patchState("universe", {
       status: "success",
       cycle_date: dataDate,
@@ -239,25 +481,43 @@ async function syncUniverse() {
       processed_count: stocks.length,
       cursor_offset: 0,
       last_success_at: now(),
-      details: { counts, sourceDates: stocksPayload.dates || {}, version: VERSION },
+      next_run_at: new Date(Date.now() + 24 * 60 * 60 * 1_000).toISOString(),
+      details: {
+        counts,
+        eligibleCounts,
+        groupDates,
+        sources: sourceDiagnostics,
+        benchmarks: benchmarksPayload,
+        finmindBudget: benchmarkBudget,
+        version: VERSION,
+      },
     });
     for (const group of GROUPS) {
-      const existing = await getState(`deep_${group}`);
-      const retainedProgress = Math.min(counts[group], Number(existing?.processed_count) || 0);
+      const currentCache = await cachedProgress(group);
+      const retainedProgress = Math.min(
+        eligibleCounts[group],
+        currentCache.filter((row: Record<string, any>) =>
+          row.analysis_version === ANALYSIS_VERSION && row.status === "ready" &&
+          row.data_date === (groupDates[group] || dataDate)).length,
+      );
       await patchState(`deep_${group}`, {
         status: "pending",
-        cycle_date: dataDate,
+        cycle_date: groupDates[group] || dataDate,
         cursor_offset: retainedProgress,
         processed_count: retainedProgress,
-        total_items: counts[group],
+        total_items: eligibleCounts[group],
         last_error: null,
       });
     }
-    return { dataDate, total: stocks.length, counts };
+    return { dataDate, total: stocks.length, counts, eligibleCounts };
   } catch (error) {
     await patchState("universe", { status: "error", last_error: error instanceof Error ? error.message : String(error) });
     throw error;
   }
+}
+
+async function syncUniverse() {
+  return withLease("universe", syncUniverseUnlocked);
 }
 
 function filtersFor(group: Group, date: string) {
@@ -279,13 +539,28 @@ async function candidateRefs(group: Group, date: string) {
   params.set("select", "symbol,preliminary_score");
   params.set("order", "preliminary_score.desc.nullslast,symbol.asc");
   params.set("limit", "2000");
-  const { data } = await rest(`stock_snapshots?${params}`);
-  return Array.isArray(data) ? data : [];
+  const missingRevenueParams = new URLSearchParams(params);
+  missingRevenueParams.set("raw_data->>revenue", "is.null");
+  missingRevenueParams.set("limit", "500");
+  const [allResult, missingResult] = await Promise.all([
+    rest(`stock_snapshots?${params}`),
+    group === "etf"
+      ? Promise.resolve({ data: [] })
+      : rest(`stock_snapshots?${missingRevenueParams}`).catch(() => ({ data: [] })),
+  ]);
+  const missingSymbols = new Set(
+    (Array.isArray(missingResult.data) ? missingResult.data : [])
+      .map((row: Record<string, any>) => String(row.symbol)),
+  );
+  return (Array.isArray(allResult.data) ? allResult.data : []).map((row: Record<string, any>) => ({
+    ...row,
+    revenueMissing: missingSymbols.has(String(row.symbol)),
+  }));
 }
 
 async function cachedProgress(group: Group) {
   const params = new URLSearchParams({
-    select: "symbol,analysis_version,status,fetched_at,updated_at",
+    select: "symbol,analysis_version,data_date,status,fetched_at,updated_at,last_attempt_at,last_error,attempt_count,next_retry_at,error_kind,needs_repair,repair_reasons",
     group_name: `eq.${group}`,
     limit: "2000",
   });
@@ -296,21 +571,103 @@ async function cachedProgress(group: Group) {
 async function selectedCandidateRows(group: Group, date: string, limit: number) {
   const [refs, cached] = await Promise.all([candidateRefs(group, date), cachedProgress(group)]);
   const current = new Map(
-    cached.filter((row: Record<string, any>) => row.analysis_version === ANALYSIS_VERSION)
+    cached.filter((row: Record<string, any>) =>
+      row.analysis_version === ANALYSIS_VERSION && row.data_date === date && row.status === "ready")
       .map((row: Record<string, any>) => [String(row.symbol), row]),
   );
-  const missing = refs.filter((row: Record<string, any>) => !current.has(String(row.symbol)));
-  const currentCandidateCount = refs.length - missing.length;
-  const cycleComplete = refs.length > 0 && missing.length === 0;
-  const chosen = (cycleComplete
-    ? [...refs].sort((left: Record<string, any>, right: Record<string, any>) => {
+  const failed = new Map(
+    cached.filter((row: Record<string, any>) =>
+      row.analysis_version === ANALYSIS_VERSION && row.last_error)
+      .map((row: Record<string, any>) => [String(row.symbol), row]),
+  );
+  // Never let one persistently unavailable symbol block the rest of a market.
+  // New candidates run first; failed candidates are retried after the unseen
+  // backlog, oldest failure first.
+  const allMissing = refs.filter((row: Record<string, any>) => !current.has(String(row.symbol)));
+  const unseenPool = allMissing.filter((row: Record<string, any>) => !failed.has(String(row.symbol)));
+  // The official current-month cross-section can legitimately publish fewer
+  // rows than the tradable company universe (for example 2330 was absent while
+  // its per-company FinMind filing was already available).  Reserve half of a
+  // company batch for these gaps so the backend repairs monthly/quarterly
+  // revenue within the same strict API ledger instead of permanently ranking
+  // missing companies below already-complete rows.
+  const backfillSlots = group === "etf" ? 0 : Math.max(1, Math.ceil(limit / 2));
+  const revenueBackfill = unseenPool.filter((row: Record<string, any>) => row.revenueMissing);
+  const ordinaryUnseen = unseenPool.filter((row: Record<string, any>) => !row.revenueMissing);
+  const priorityWindow: Record<string, any>[] = [];
+  for (let index = 0; index < backfillSlots; index += 1) {
+    if (revenueBackfill[index]) priorityWindow.push(revenueBackfill[index]);
+    if (ordinaryUnseen[index]) priorityWindow.push(ordinaryUnseen[index]);
+  }
+  const unseen = [
+    // Interleave repair and score-ranked candidates.  The quota ledger may
+    // shrink a ten-row request to six rows; a block layout would then spend
+    // five of six slots on repairs despite the stated 50% policy.
+    ...priorityWindow,
+    ...ordinaryUnseen.slice(backfillSlots),
+    ...revenueBackfill.slice(backfillSlots),
+  ];
+  const dueFailures = allMissing.filter((row: Record<string, any>) => {
+    const failure = failed.get(String(row.symbol));
+    return failure && (!failure.next_retry_at || String(failure.next_retry_at) <= now());
+  })
+    .sort((left: Record<string, any>, right: Record<string, any>) => {
+      const leftFailure = failed.get(String(left.symbol));
+      const rightFailure = failed.get(String(right.symbol));
+      if (Boolean(leftFailure) !== Boolean(rightFailure)) return leftFailure ? 1 : -1;
+      if (!leftFailure || !rightFailure) return 0;
+      return String(leftFailure.updated_at || "").localeCompare(String(rightFailure.updated_at || ""));
+    });
+  const currentCandidateCount = refs.length - allMissing.length;
+  const dueRepairs = refs.filter((row: Record<string, any>) => {
+    const cachedRow = current.get(String(row.symbol));
+    if (!cachedRow?.needs_repair) return false;
+    if ((cachedRow.repair_reasons || []).some((reason: string) => [
+      "v16.3-source-coverage-audit",
+      "financial-source-coverage",
+      "etf-direction-classification",
+    ].includes(reason))) return true;
+    const fetchedAt = Date.parse(String(cachedRow.fetched_at || cachedRow.updated_at || ""));
+    return !Number.isFinite(fetchedAt) || fetchedAt <= Date.now() - 6 * 60 * 60 * 1_000;
+  });
+  // Backoff errors are no longer allowed to freeze refreshes of every ready
+  // symbol.  Once the unseen backlog is exhausted, retry due failures first
+  // and use any remaining slots for the oldest successful analyses.
+  const cycleComplete = refs.length > 0 && unseen.length === 0;
+  const refreshRows = [...refs]
+    .filter((row: Record<string, any>) => {
+      const cachedRow = current.get(String(row.symbol));
+      if (!cachedRow) return false;
+      if (cachedRow.last_error && cachedRow.next_retry_at && String(cachedRow.next_retry_at) > now()) return false;
+      const fetchedAt = Date.parse(String(cachedRow.fetched_at || cachedRow.updated_at || ""));
+      return !Number.isFinite(fetchedAt) || fetchedAt <= Date.now() - 6 * 60 * 60 * 1_000;
+    })
+    .sort((left: Record<string, any>, right: Record<string, any>) => {
       const leftAt = current.get(String(left.symbol))?.fetched_at || current.get(String(left.symbol))?.updated_at || "";
       const rightAt = current.get(String(right.symbol))?.fetched_at || current.get(String(right.symbol))?.updated_at || "";
       return leftAt.localeCompare(rightAt) || String(left.symbol).localeCompare(String(right.symbol));
-    })
-    : missing
-  ).slice(0, limit);
-  if (!chosen.length) return { rows: [], total: refs.length, currentCount: currentCandidateCount, cycleComplete };
+    });
+  const repairSlots = Math.min(dueRepairs.length, Math.max(1, Math.floor(limit / 4)));
+  const priorityRepairs = dueRepairs.slice(0, repairSlots);
+  const primary = unseen.length ? unseen : [...dueFailures, ...refreshRows];
+  const prioritized: Record<string, any>[] = [];
+  for (let index = 0; index < Math.max(primary.length, priorityRepairs.length); index += 1) {
+    if (primary[index]) prioritized.push(primary[index]);
+    if (priorityRepairs[index]) prioritized.push(priorityRepairs[index]);
+  }
+  const chosen = prioritized
+    .filter((row: Record<string, any>, index: number, rows: Record<string, any>[]) =>
+      rows.findIndex((candidate) => String(candidate.symbol) === String(row.symbol)) === index)
+    .slice(0, limit);
+  if (!chosen.length) return {
+    rows: [],
+    total: refs.length,
+    currentCount: currentCandidateCount,
+    cycleComplete,
+    waitingRetry: allMissing.length - unseen.length - dueFailures.length,
+    readySymbols: new Set(current.keys()),
+    revenueBackfillPending: revenueBackfill.length,
+  };
   const symbols = chosen.map((row: Record<string, any>) => String(row.symbol));
   const params = filtersFor(group, date);
   params.set("symbol", `in.(${symbols.join(",")})`);
@@ -321,13 +678,24 @@ async function selectedCandidateRows(group: Group, date: string, limit: number) 
     (left: Record<string, any>, right: Record<string, any>) =>
       (order.get(String(left.symbol)) ?? 999) - (order.get(String(right.symbol)) ?? 999),
   );
-  return { rows, total: refs.length, currentCount: currentCandidateCount, cycleComplete };
+  return {
+    rows,
+    total: refs.length,
+    currentCount: currentCandidateCount,
+    cycleComplete,
+    waitingRetry: allMissing.length - unseen.length - dueFailures.length,
+    readySymbols: new Set(current.keys()),
+    revenueBackfillPending: revenueBackfill.length,
+  };
 }
 
 async function persistDeep(stock: Record<string, any>, group: Group, deep: Record<string, any>, result: Record<string, any>) {
   const symbol = String(stock.symbol);
   const updatedAt = now();
-  const dataDate = deep.price?.lastDate || stock.trade_date || new Date().toISOString().slice(0, 10);
+  // data_date is the ranking/universe cycle key.  The actual upstream dates
+  // remain in analysis.price/sourceDiagnostics; mixing them here caused a
+  // one-day FinMind publication lag to be treated as an unfinished cycle.
+  const dataDate = stock.trade_date || deep.price?.lastDate || new Date().toISOString().slice(0, 10);
   const priceRows = (deep.priceHistory || []).slice(-280).map((row: Record<string, any>) => ({
     symbol,
     trade_date: row.date,
@@ -399,6 +767,37 @@ async function persistDeep(stock: Record<string, any>, group: Group, deep: Recor
     upsert("stock_institutional_flows", institutionalRows, "symbol,trade_date"),
     upsert("stock_margin_history", marginRows, "symbol,trade_date"),
   ]);
+  const deepRevenueIsCurrent = finite(deep.revenue?.revenue) &&
+    (!stock.revPeriod || !deep.revenue?.period || deep.revenue.period >= stock.revPeriod);
+  const cacheStock = {
+    ...stock,
+    revenue: deepRevenueIsCurrent ? deep.revenue.revenue : stock.revenue,
+    revenueUnit: "TWD",
+    rev: deepRevenueIsCurrent ? deep.revenue.yoy : stock.rev,
+    revMom: deepRevenueIsCurrent ? deep.revenue.mom : stock.revMom,
+    revYtd: deepRevenueIsCurrent ? deep.revenue.ytdYoy : stock.revYtd,
+    revAcceleration: deepRevenueIsCurrent ? deep.revenue.acceleration : stock.revAcceleration,
+    revPeriod: deepRevenueIsCurrent ? deep.revenue.period : stock.revPeriod,
+  };
+  // Deep history is authoritative for the candidate itself.  Feed any monthly
+  // revenue recovered here back into the daily snapshot so the next universe
+  // pass does not keep treating an OpenAPI coverage gap as zero growth.
+  if (deep.revenue?.revenue != null) {
+    await rest(
+      `stock_snapshots?symbol=eq.${encodeURIComponent(symbol)}&trade_date=eq.${encodeURIComponent(stock.trade_date || dataDate)}`,
+      {
+        method: "PATCH",
+        body: {
+          revenue_growth: cacheStock.rev ?? null,
+          preliminary_score: Number(provisionalScore(cacheStock, group).toFixed(4)),
+          raw_data: cacheStock,
+          updated_at: updatedAt,
+        },
+        prefer: "return=minimal",
+      },
+    );
+  }
+  const repairReasons = analysisRepairReasons(deep, group);
   await upsert("stock_analysis_cache", [{
     symbol,
     group_name: group,
@@ -408,11 +807,17 @@ async function persistDeep(stock: Record<string, any>, group: Group, deep: Recor
     confidence: result.confidence || 0,
     official: Boolean(result.official),
     tier: result.tier,
-    stock: compactStock(stock),
+    stock: compactStock(cacheStock),
     analysis: compactDeep(deep),
     result,
     status: "ready",
+    needs_repair: repairReasons.length > 0,
+    repair_reasons: repairReasons,
     last_error: null,
+    attempt_count: 0,
+    next_retry_at: null,
+    error_kind: null,
+    last_attempt_at: updatedAt,
     fetched_at: deep.fetchedAt || updatedAt,
     updated_at: updatedAt,
   }], "symbol");
@@ -434,6 +839,37 @@ async function persistDeep(stock: Record<string, any>, group: Group, deep: Recor
 async function persistFailure(stock: Record<string, any>, group: Group, error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
   const updatedAt = now();
+  const { data: previousRows } = await rest(
+    `stock_analysis_cache?select=status,analysis,attempt_count&symbol=eq.${encodeURIComponent(String(stock.symbol))}&limit=1`,
+  );
+  const attemptCount = Math.min(20, Number(previousRows?.[0]?.attempt_count || 0) + 1);
+  const statusCode = Number((error as any)?.status) || null;
+  const errorKind = statusCode === 402 || statusCode === 429
+    ? "rate-limit"
+    : statusCode && statusCode >= 500 || (error as any)?.name === "AbortError"
+      ? "upstream-temporary"
+      : "source-or-network";
+  const retryMinutes = errorKind === "rate-limit"
+    ? 60
+    : Math.min(360, 5 * (2 ** Math.min(6, attemptCount - 1)));
+  const previous = Array.isArray(previousRows) ? previousRows[0] : null;
+  const retryAt = new Date(Date.now() + retryMinutes * 60 * 1_000).toISOString();
+  if (previous?.status === "ready" && previous.analysis) {
+    // A transient refresh failure must never destroy the last-known-good row.
+    // Keep it visible and attach retry diagnostics separately.
+    await rest(`stock_analysis_cache?symbol=eq.${encodeURIComponent(String(stock.symbol))}`, {
+      method: "PATCH",
+      body: {
+        last_error: message.slice(0, 2000),
+        attempt_count: attemptCount,
+        next_retry_at: retryAt,
+        error_kind: errorKind,
+        last_attempt_at: updatedAt,
+      },
+      prefer: "return=minimal",
+    });
+    return;
+  }
   await upsert("stock_analysis_cache", [{
     symbol: String(stock.symbol),
     group_name: group,
@@ -448,26 +884,43 @@ async function persistFailure(stock: Record<string, any>, group: Group, error: u
     result: {},
     status: "error",
     last_error: message.slice(0, 2000),
+    attempt_count: attemptCount,
+    next_retry_at: retryAt,
+    error_kind: errorKind,
+    last_attempt_at: updatedAt,
     fetched_at: updatedAt,
     updated_at: updatedAt,
   }], "symbol");
 }
 
-async function syncDeep(group: Group, requestedLimit: number) {
+async function syncDeepUnlocked(group: Group, requestedLimit: number) {
   const jobKey = `deep_${group}`;
-  const limit = Math.max(1, Math.min(3, Number(requestedLimit) || 2));
   let universe = await getState("universe");
+  if (universe?.status === "running" ||
+      (universe?.lease_until && Date.parse(String(universe.lease_until)) > Date.now())) {
+    return { skipped: true, reason: "universe-refresh-running", group };
+  }
   if (!universe?.cycle_date) {
     await syncUniverse();
     universe = await getState("universe");
   }
-  const date = universe?.cycle_date;
+  const persistedBenchmarks = universe?.details?.benchmarks;
+  const benchmarksReady = persistedBenchmarks?.coverage?.listed === true &&
+    persistedBenchmarks?.coverage?.otc === true;
+  // Each run has a fair request slice.  Reused monthly/quarterly histories
+  // cost only four FinMind calls instead of eight, so the same strict request
+  // budget can validate twice as many companies after the first cycle.
+  const groupLimit = group === "etf"
+    ? (FINMIND_AUTHENTICATED ? 23 : 19)
+    : (FINMIND_AUTHENTICATED ? 22 : 10);
+  const limit = Math.max(1, Math.min(groupLimit, Number(requestedLimit) || groupLimit));
+  const date = universe?.details?.groupDates?.[group] || universe?.cycle_date;
   if (!date) throw new Error("Universe date is unavailable");
   const state = await getState(jobKey);
   const selection = await selectedCandidateRows(group, date, limit);
-  const { rows, total, currentCount, cycleComplete } = selection;
-  const completedFirstCycle = cycleComplete && Number(state?.processed_count || 0) < total;
-  const cycleNumber = (Number(state?.cycle_number) || 0) + (completedFirstCycle ? 1 : 0);
+  let rows = selection.rows;
+  const { total, currentCount, cycleComplete, waitingRetry = 0, revenueBackfillPending = 0 } = selection;
+  const cycleNumber = Number(state?.cycle_number) || 0;
   await patchState(jobKey, {
     status: "running",
     started_at: now(),
@@ -479,20 +932,97 @@ async function syncDeep(group: Group, requestedLimit: number) {
     last_error: null,
   });
   if (!rows.length) {
+    const completionKey = `${date}:${ANALYSIS_VERSION}`;
+    const completedNow = currentCount === total && total > 0 && state?.details?.completedCycleKey !== completionKey;
     await patchState(jobKey, {
       status: "success",
       last_success_at: now(),
       cursor_offset: currentCount,
       processed_count: currentCount,
-      details: { message: "No candidates", remaining: Math.max(0, total - currentCount), version: VERSION },
+      next_run_at: new Date(Date.now() + 20 * 60 * 1_000).toISOString(),
+      cycle_number: cycleNumber + (completedNow ? 1 : 0),
+      details: {
+        ...(state?.details || {}),
+        ...(completedNow ? { completedCycleKey: completionKey, completedCycleAt: now() } : {}),
+        message: waitingRetry ? "Waiting for retry backoff" : "No candidates",
+        waitingRetry,
+        revenueBackfillPending,
+        remaining: Math.max(0, total - currentCount),
+        version: VERSION,
+      },
     });
-    return { group, date, total, processed: 0, verified: currentCount, remaining: Math.max(0, total - currentCount) };
+    return {
+      group, date, total, processed: 0, verified: currentCount,
+      remaining: Math.max(0, total - currentCount), revenueBackfillPending,
+    };
   }
   const symbols = rows.map((row: Record<string, any>) => String(row.symbol));
   const { data: cachedRows } = await rest(
     `stock_analysis_cache?select=symbol,analysis&symbol=in.(${symbols.join(",")})`,
   );
   const cache = new Map((Array.isArray(cachedRows) ? cachedRows : []).map((row: Record<string, any>) => [String(row.symbol), row.analysis]));
+  const expectedRevenuePeriod = universe?.details?.sources?.revenue?.period || null;
+  const expectedFinancialPeriod = universe?.details?.sources?.financial?.period || null;
+  const itemCosts = rows.map((row: Record<string, any>) => {
+    if (group === "etf") return 1;
+    const stock = row.raw_data || {};
+    const analysis = cache.get(String(row.symbol));
+    const compatible = analysis?.analysisVersion === ANALYSIS_VERSION;
+    const revenuePeriod = expectedRevenuePeriod || stock.revPeriod;
+    const financialPeriod = expectedFinancialPeriod || stock.roePeriod;
+    const reusableRevenue = compatible && analysis?.revenue?.period &&
+      finite(analysis.revenue.revenue) && Number(analysis.revenue.months) > 0 &&
+      reusableDiagnostic(analysis, "revenue") &&
+      (!revenuePeriod || analysis.revenue.period === revenuePeriod);
+    const financialCoverage = analysis?.financial?.sourceCoverage || {};
+    const reusableFinancial = compatible && analysis?.financial?.period &&
+      Number(analysis.financial.quarters) > 0 &&
+      Number(financialCoverage.incomeRows) > 0 && Number(financialCoverage.balanceRows) > 0 &&
+      Number(financialCoverage.cashflowRows) > 0 &&
+      ["income", "balance", "cashflow"].every((key) => reusableDiagnostic(analysis, key)) &&
+      (!financialPeriod || analysis.financial.period === financialPeriod);
+    // Price + institutional + margin + lending are always refreshed.  Monthly
+    // history adds one request; income/balance/cash-flow add three.
+    return 4 + (reusableRevenue ? 0 : 1) + (reusableFinancial ? 0 : 3);
+  });
+  const claimCap = group === "etf"
+    ? (FINMIND_AUTHENTICATED ? 23 : 19)
+    // Without a token FinMind allows 300 requests per rolling hour.  A
+    // 50-request company slice plus the 19-request ETF slice lets the existing
+    // staggered schedule converge on 300 instead of idling around 260; the
+    // atomic ledger still trims the final batch so the ceiling is never
+    // crossed.  Authenticated projects retain the 88-request fair slice that
+    // converges on the documented 600-request ceiling.
+    : (FINMIND_AUTHENTICATED ? 88 : 50);
+  const finmindBudget = await reserveFinmindBatch(
+    itemCosts,
+    benchmarksReady ? 0 : 2,
+    claimCap,
+    { job: jobKey, group, requestedItems: rows.length },
+  );
+  rows = rows.slice(0, Math.max(0, Number(finmindBudget.items) || 0));
+  const revenueBackfillSelected = group === "etf" ? [] : rows
+    .filter((row: Record<string, any>) => !finite(row.raw_data?.revenue))
+    .map((row: Record<string, any>) => String(row.symbol));
+  if (!rows.length) {
+    const retryAt = finmindBudget.retryAfterAt || new Date(Date.now() + 20 * 60 * 1_000).toISOString();
+    await patchState(jobKey, {
+      status: "pending",
+      next_run_at: retryAt,
+      details: {
+        message: "Waiting for FinMind rolling-hour budget",
+        waitingRetry,
+        revenueBackfillPending,
+        remaining: Math.max(0, total - currentCount),
+        finmindBudget,
+        version: VERSION,
+      },
+    });
+    return {
+      group, date, total, processed: 0, verified: currentCount,
+      remaining: Math.max(0, total - currentCount), revenueBackfillPending, finmindBudget,
+    };
+  }
   const successes: string[] = [];
   const failures: { symbol: string; error: string }[] = [];
   const persisted = new Set<string>();
@@ -505,8 +1035,14 @@ async function syncDeep(group: Group, requestedLimit: number) {
         row.market || stock.market || "上市",
         {
           reuse: cache.get(stock.symbol),
-          expectedRevenuePeriod: stock.revPeriod || null,
-          expectedFinancialPeriod: stock.roePeriod || null,
+          expectedRevenuePeriod: expectedRevenuePeriod || stock.revPeriod,
+          expectedFinancialPeriod: expectedFinancialPeriod || stock.roePeriod,
+          expectedTradeDate: stock.trade_date,
+          currentQuote: stock,
+          bypassCache: true,
+          finmindRetries: 0,
+          benchmarks: benchmarksReady ? persistedBenchmarks : undefined,
+          holdings: row.peer_context?.holdings,
         },
       );
       const result = scoreOpportunity({
@@ -523,7 +1059,6 @@ async function syncDeep(group: Group, requestedLimit: number) {
       failures.push({ symbol: stock.symbol, error: message });
       try {
         await persistFailure(stock, group, error);
-        persisted.add(stock.symbol);
       } catch (persistError) {
         failures.push({
           symbol: stock.symbol,
@@ -532,23 +1067,34 @@ async function syncDeep(group: Group, requestedLimit: number) {
       }
     }
   }
-  const newlyPersisted = cycleComplete
-    ? 0
-    : rows.filter((row: Record<string, any>) => persisted.has(String(row.symbol))).length;
+  const newlyPersisted = rows.filter((row: Record<string, any>) =>
+    persisted.has(String(row.symbol)) && !selection.readySymbols?.has(String(row.symbol))).length;
   const processed = Math.min(total, currentCount + newlyPersisted);
+  const completionKey = `${date}:${ANALYSIS_VERSION}`;
+  const completedNow = processed === total && total > 0 && state?.details?.completedCycleKey !== completionKey;
   await patchState(jobKey, {
     status: failures.length ? "partial" : "success",
     cursor_offset: processed,
     processed_count: processed,
+    cycle_number: cycleNumber + (completedNow ? 1 : 0),
     last_symbol: rows.at(-1)?.symbol || null,
     last_error: failures.length ? failures.map((item) => `${item.symbol}: ${item.error}`).join(" | ").slice(0, 2000) : null,
     last_success_at: successes.length ? now() : state?.last_success_at || null,
+    next_run_at: new Date(Date.now() + 20 * 60 * 1_000).toISOString(),
     details: {
+      ...(state?.details || {}),
+      ...(completedNow ? { completedCycleKey: completionKey, completedCycleAt: now() } : {}),
       successes,
       failures,
       batchSize: rows.length,
+      batchLimit: limit,
+      finmindQuota: FINMIND_HOURLY_LIMIT,
+      finmindBudget,
       verified: processed,
       remaining: Math.max(0, total - processed),
+      waitingRetry,
+      revenueBackfillPending,
+      revenueBackfillSelected,
       refreshCycle: cycleComplete,
       version: VERSION,
     },
@@ -563,7 +1109,14 @@ async function syncDeep(group: Group, requestedLimit: number) {
     refreshCycle: cycleComplete,
     successes,
     failures,
+    revenueBackfillPending,
+    revenueBackfillSelected,
+    finmindBudget,
   };
+}
+
+async function syncDeep(group: Group, requestedLimit: number) {
+  return withLease(`deep_${group}`, () => syncDeepUnlocked(group, requestedLimit));
 }
 
 Deno.serve(async (req: Request) => {

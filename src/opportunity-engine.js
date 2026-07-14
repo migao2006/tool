@@ -95,7 +95,9 @@ function companyCategories(stock, deep, context, group) {
       item("eps_yoy", "EPS 年增", 10, financial.epsYoy, growthScore(financial.epsYoy), "12 季財報"),
       item("margin_trend", "營業利益率年變化", 7, financial.operatingMarginYoyChange, interpolate(financial.operatingMarginYoyChange, [[-8, 0], [-3, 25], [0, 55], [2, 78], [5, 100]]), "12 季財報"),
       item("cash_conversion", "近四季盈餘現金轉換", group === "otc" ? 5 : 7, financial.cashConversion, cashConversionScore(financial.cashConversion, group), "現金流量表（TTM）"),
-      item("post_release", "營收公布後 5 日反應", 4, revenue.postRelease5, interpolate(revenue.postRelease5, [[-10, 0], [-3, 25], [0, 50], [3, 72], [8, 100]]), "營收公布日＋價量"),
+      ...(revenue.postReleaseStatus === "pending-five-trading-days" ? [] : [
+        item("post_release", "營收公布後 5 日反應", 4, revenue.postRelease5, interpolate(revenue.postRelease5, [[-10, 0], [-3, 25], [0, 50], [3, 72], [8, 100]]), "營收公布日＋價量"),
+      ]),
     ]),
     category("chip", "法人與籌碼", 25, [
       item("foreign20", "外資 20 日累計", foreignWeight, chip.foreign20, flowScore(chip.foreign20), "法人歷史"),
@@ -104,7 +106,9 @@ function companyCategories(stock, deep, context, group) {
       item("trust_streak", "投信連買天數", group === "otc" ? 10 : 5, chip.trustStreak, interpolate(chip.trustStreak, [[0, 40], [1, 58], [3, 80], [5, 95], [8, 100]]), "法人歷史"),
       item("inst_intensity", "法人買超占量", 18, chip.intensity5, interpolate(chip.intensity5, [[-8, 0], [-2, 25], [0, 50], [1, 65], [3, 82], [7, 100]]), "法人歷史＋價量"),
       item("margin20", "融資 20 日增減", 11, margin.marginChange20, inverseChangeScore(margin.marginChange20), "融資融券歷史"),
-      item("margin_usage", "融資使用率", 7, margin.marginUsage, interpolate(margin.marginUsage, [[0, 92], [10, 85], [25, 62], [40, 35], [60, 0]]), "融資融券歷史"),
+      ...(margin.financingEligible === false ? [] : [
+        item("margin_usage", "融資使用率", 7, margin.marginUsage, interpolate(margin.marginUsage, [[0, 92], [10, 85], [25, 62], [40, 35], [60, 0]]), "融資融券歷史"),
+      ]),
       item("large_holders", "400 張以上持股", concentrationWeight, holdings.large400Ratio, interpolate(holdings.large400Ratio, [[20, 20], [40, 48], [60, 72], [75, 88], [90, 100]]), "TDCC 週資料"),
       item("retail_holders", "10 張以下持股", group === "otc" ? 8 : 5, holdings.retail10Ratio, interpolate(holdings.retail10Ratio, [[0, 100], [10, 82], [25, 55], [45, 25], [70, 0]]), "TDCC 週資料"),
     ]),
@@ -294,9 +298,31 @@ export function scoreOpportunity({ stock, deep, risk = {}, context = {} }) {
   const totalExpected = sum(categories.map((entry) => entry.weight));
   const covered = sum(categories.map((entry) => entry.weight * entry.coverage / 100));
   const riskCoverage = risk?.coverageComplete === false ? 0.7 : 1;
-  const confidence = clamp(Math.round((covered / totalExpected) * 100 * riskCoverage));
+  const factorCoverage = totalExpected ? covered / totalExpected : 0;
+  const historyCoverage = group === "etf"
+    ? (
+        Math.min(1, Number(deep?.price?.rows || 0) / 120) * 0.85 +
+        (deep?.etf ? 1 : 0) * 0.15
+      )
+    : (
+        Math.min(1, Number(deep?.revenue?.continuousMonths || 0) / 24) * 0.30 +
+        Math.min(1, Number(deep?.financial?.continuousQuarters || 0) / 8) * 0.10 +
+        (Number(deep?.financial?.sourceCoverage?.balanceRows || 0) > 0 ? 0.05 : 0) +
+        (Number(deep?.financial?.sourceCoverage?.cashflowRows || 0) > 0 ? 0.05 : 0) +
+        Math.min(1, Number(deep?.price?.rows || 0) / 120) * 0.25 +
+        Math.min(1, Number(deep?.institutional?.days || 0) / 20) * 0.15 +
+        Math.min(1, Number(deep?.margin?.days || 0) / 20) * 0.10
+      );
+  const confidence = clamp(Math.round(factorCoverage * historyCoverage * 100 * riskCoverage));
   const missing = categories.flatMap((entry) => entry.items.filter((factor) => !finite(factor.score)).map((factor) => factor.label));
-  const official = confidence >= 70 && !riskResult.hardExcluded && finalScore >= 60;
+  const staleEssentialSource = group !== "etf" && ["revenue", "income", "balance", "cashflow"]
+    .some((key) => deep?.sourceDiagnostics?.[key]?.status === "stale-source-period");
+  const official = confidence >= 70 &&
+    deep?.price?.sufficient === true &&
+    risk?.coverageComplete !== false &&
+    !staleEssentialSource &&
+    !riskResult.hardExcluded &&
+    finalScore >= 60;
   const reasons = categories
     .flatMap((entry) => entry.items.filter((factor) => finite(factor.score) && factor.score >= 75).map((factor) => ({ label: factor.label, score: factor.score })))
     .sort((a, b) => b.score - a.score)
@@ -309,7 +335,9 @@ export function scoreOpportunity({ stock, deep, risk = {}, context = {} }) {
     score: finalScore,
     baseScore: round(baseScore, 1),
     confidence,
+    historyCoverage: round(historyCoverage * 100, 1),
     official,
+    freshnessVerified: !staleEssentialSource,
     tier: scoreTier(finalScore),
     categories,
     risk: riskResult,

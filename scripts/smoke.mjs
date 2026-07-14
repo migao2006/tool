@@ -62,6 +62,7 @@ const json = (payload, status = 200) =>
 const fullFetch = async (input) => {
   const url = String(input);
   if (url.includes("api.finmindtrade.com") && url.includes("dataset=TaiwanStockPrice")) {
+    assert.doesNotMatch(url, /TaiwanStockPriceAdj/, "the paid adjusted-price dataset must not block free-level technical history");
     const symbol = new URL(url).searchParams.get("data_id");
     return json({
       status: 200,
@@ -188,6 +189,18 @@ const fullFetch = async (input) => {
   if (url.includes("mopsfin_t187ap07_O_ci")) {
     return json(otcSymbols.map((SecuritiesCompanyCode) => ({ Date: "1150713", 年度: "115", 季別: "1", SecuritiesCompanyCode, 資產總計: "1000", 負債總計: "300", 權益總計: "700" })));
   }
+  if (url.includes("lfkdkdyaatdlizryiyon.supabase.co/rest/v1/stock_price_history")) {
+    return json(Array.from({ length: 130 }, (_, index) => ({
+      trade_date: new Date(Date.UTC(2026, 0, 1 + index)).toISOString().slice(0, 10),
+      open: 50 + index * 0.1,
+      high: 51 + index * 0.1,
+      low: 49 + index * 0.1,
+      close: 50.5 + index * 0.1,
+      volume: 600,
+      trade_value: 30_000_000,
+      transactions: 2_000,
+    })).reverse());
+  }
   if (/t187ap0[67]_[LO]_|mopsfin_t187ap0[67]_O_/.test(url)) return json([]);
   if (url.includes("supabase.co/functions/v1/twss-market-data")) {
     if (url.includes("type=stocks")) return json({ stocks: [], date: "2026-07-09" });
@@ -205,7 +218,7 @@ async function payload(path) {
 }
 
 const health = await payload("/api/health");
-assert.equal(health.version, "16.2");
+assert.equal(health.version, "16.3");
 assert.deepEqual(health.markets, ["上市股票", "上櫃股票", "ETF"]);
 
 const stocks = await payload("/api/market-data?type=stocks&refresh=1");
@@ -250,18 +263,22 @@ assert.equal(revenue.period, "2026-06");
 assert.equal(revenue.publishedAt, "2026-07-13");
 const otcRevenue = revenue.fundamentals.find((row) => row.symbol === "4101");
 assert.equal(otcRevenue.rev, 20);
-assert.equal(otcRevenue.revenuePreviousMonth, 485000);
-assert.equal(otcRevenue.revenueLastYearMonth, 416667);
-assert.equal(otcRevenue.revenueYtd, 2900000);
-assert.equal(otcRevenue.revenueLastYearYtd, 2589286);
+assert.equal(otcRevenue.revenuePreviousMonth, 485000000);
+assert.equal(otcRevenue.revenueLastYearMonth, 416667000);
+assert.equal(otcRevenue.revenueYtd, 2900000000);
+assert.equal(otcRevenue.revenueLastYearYtd, 2589286000);
+assert.equal(otcRevenue.revenueUnit, "TWD");
 assert.equal(otcRevenue.revAcceleration, 8);
 assert.equal(revenue.fundamentals.some((row) => row.symbol === "0050"), false);
+assert.match(revenue.sourceStatus.fallback, /橫截面未列個股由後端逐檔/);
 
 const financials = await payload("/api/market-data?type=financials&refresh=1");
 assert.equal(financials.fundamentals.length, 50);
 assert.equal(financials.period, "2026 Q1");
 const listedFinancial = financials.fundamentals.find((row) => row.symbol === "1101");
 assert.equal(listedFinancial.eps, 2.5);
+assert.equal(listedFinancial.quarterRevenue, 1_000_000);
+assert.equal(listedFinancial.quarterRevenueUnit, "TWD");
 assert.equal(listedFinancial.grossMargin, 40);
 assert.equal(listedFinancial.operatingMargin, 20);
 assert.equal(listedFinancial.netMargin, 15);
@@ -278,9 +295,9 @@ const otcHistory = await payload("/api/market-data?type=history&symbol=4101&mark
 assert.equal(otcHistory.market, "上櫃");
 assert.equal(otcHistory.count, 130);
 assert.equal(otcHistory.history.length, 130);
-assert.match(otcHistory.source, /FinMind TaiwanStockPrice（上櫃）/);
+assert.match(otcHistory.source, /Supabase 後端歷史資料庫/);
 
-const appResponse = await worker.fetch(new Request("https://example.test/app.js?v=16.2"), {}, {});
+const appResponse = await worker.fetch(new Request("https://example.test/app.js?v=16.3-ui3"), {}, {});
 const appSource = await appResponse.text();
 assert.match(appSource, /官方日期已核對/);
 assert.match(appSource, /各資料來源日期/);
@@ -288,30 +305,45 @@ assert.match(appSource, /上市機會榜/);
 assert.match(appSource, /上櫃機會榜/);
 assert.match(appSource, /ETF 觀察榜/);
 assert.match(appSource, /ETF 不適用/);
-assert.match(appSource, /await wait\(1600\)/);
+assert.match(appSource, /Promise\.allSettled/);
+assert.match(appSource, /value\/1000000/);
 assert.match(appSource, /market:stock\.market\|\|'上市'/);
 assert.match(appSource, /每日深度快照/);
+assert.match(appSource, /aria-label','關閉視窗/);
+assert.match(appSource, /event\.key==='Escape'/);
+assert.match(appSource, /sw\.js\?v=16\.3-ui3/);
+assert.doesNotMatch(appSource, /廣告|促銷|VIP|贊助|免費試用|立即購買|解鎖/);
 assert.doesNotMatch(appSource, /_\=\$\{Date\.now\(\)\}/);
 
-const smartResponse = await worker.fetch(new Request("https://example.test/smart.js?v=16.2"), {}, {});
+const smartResponse = await worker.fetch(new Request("https://example.test/smart.js?v=16.3-ui3"), {}, {});
 const smartSource = await smartResponse.text();
-assert.match(smartSource, /OPPORTUNITY ENGINE · \$\{VERSION\}/);
+assert.match(smartSource, /機會股排行/);
 assert.match(smartSource, /風險排除 → 成長確認 → 籌碼確認 → 價量進場判斷/);
 assert.match(smartSource, /上市股提高外資/);
 assert.match(smartSource, /上櫃股提高營收加速度/);
 assert.match(smartSource, /ETF 不使用月營收、EPS、ROE/);
 assert.match(smartSource, /資料信心低於 70% 不進正式榜/);
 assert.match(smartSource, /近四季現金轉換/);
+assert.match(smartSource, /最新月營收/);
+assert.match(smartSource, /營收公布後反應：待滿 5 個交易日/);
+assert.match(smartSource, /融資：不適用（不可融資）/);
 assert.match(smartSource, /backtest\.json/);
 assert.match(smartSource, /cache: 'no-store'/);
 assert.match(smartSource, /globalThis\.twssUltimateSnapshot/);
 assert.match(smartSource, /backend-rankings/);
-assert.match(smartSource, /後端每批 2 檔持續累積/);
+assert.match(smartSource, /後端持續累積/);
+assert.match(smartSource, /舊模型快照不作為 v16\.3 正式候選/);
+assert.doesNotMatch(smartSource, /廣告|促銷|VIP|贊助|免費試用|立即購買|解鎖/);
+
+const stylesResponse = await worker.fetch(new Request("https://example.test/styles.css?v=16.3-ui3"), {}, {});
+const stylesSource = await stylesResponse.text();
+assert.match(stylesSource, /min-width:48px/);
+assert.match(stylesSource, /max-height:min\(76dvh,640px\)/);
 
 const latestResponse = await worker.fetch(new Request("https://example.test/data/latest.json?v=16"), {}, {});
 assert.equal(latestResponse.ok, true);
 const latestSnapshot = await latestResponse.json();
-assert.equal(latestSnapshot.version, "16.2");
+assert.equal(latestSnapshot.version, "16.3");
 assert.ok(latestSnapshot.groups.listed.length >= 1);
 assert.ok(latestSnapshot.groups.otc.length >= 1);
 assert.ok(latestSnapshot.groups.etf.length >= 1);

@@ -1,12 +1,12 @@
-const CACHE='twss-v16.2-persistent-backend';
+const CACHE='twss-v16.3-ui3';
 const STATIC=[
   '/',
-  '/app.js?v=16.2',
-  '/patch.js?v=16.2',
-  '/smart.js?v=16.2',
-  '/styles.css?v=16.2',
-  '/manifest.webmanifest?v=16.2',
-  '/icon.svg?v=16.2'
+  '/app.js?v=16.3-ui3',
+  '/patch.js?v=16.3-ui3',
+  '/smart.js?v=16.3-ui3',
+  '/styles.css?v=16.3-ui3',
+  '/manifest.webmanifest?v=16.3',
+  '/icon.svg?v=16.3'
 ];
 
 self.addEventListener('install',event=>event.waitUntil(
@@ -28,15 +28,16 @@ self.addEventListener('fetch',event=>{
     return;
   }
   if(url.pathname.startsWith('/data/')){
+    const cacheKey=new Request(url.origin+url.pathname);
     event.respondWith(
       fetch(event.request,{cache:'no-store'})
         .then(response=>{
           if(!response.ok)return response;
           const copy=response.clone();
-          caches.open(CACHE).then(cache=>cache.put(event.request,copy));
+          caches.open(CACHE).then(cache=>cache.put(cacheKey,copy));
           return response;
         })
-        .catch(()=>caches.match(event.request))
+        .catch(()=>caches.match(cacheKey))
     );
     return;
   }

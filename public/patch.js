@@ -1,6 +1,6 @@
 (() => {
   'use strict';
-  const PATCH_VERSION = 'v16.2';
+  const PATCH_VERSION = 'v16.3';
   const PREDICTION_KEY = 'twss-predictions-v15';
   const JOURNAL_KEY = 'twss-journal-v15';
   const patchState = { verifyQuery: '', mineTab: 'watch', backtestCache: new Map() };

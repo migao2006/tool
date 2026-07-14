@@ -30,12 +30,14 @@ const files = (await readdir(snapshotDir)).filter((name) => /^\d{4}-\d{2}-\d{2}\
 const snapshots = [];
 for (const file of files) {
   const payload = JSON.parse(await readFile(resolve(snapshotDir, file), "utf8"));
-  if (Array.isArray(payload.marketPrices) && payload.dataDate) snapshots.push(payload);
+  if (Array.isArray(payload.marketPrices) && payload.dataDate && payload.snapshotCoverage?.backtestReady === true) {
+    snapshots.push(payload);
+  }
 }
 
 if (snapshots.length < minimumSnapshots) {
   await save({
-    version: "16.2",
+    version: "16.3",
     generatedAt: new Date().toISOString(),
     status: "insufficient_history",
     snapshotCount: snapshots.length,
@@ -143,7 +145,7 @@ function grouped(field, minimum = 1) {
 }
 
 await save({
-  version: "16.2",
+  version: "16.3",
   generatedAt: new Date().toISOString(),
   status: "ready",
   snapshotCount: snapshots.length,

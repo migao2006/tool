@@ -4,7 +4,6 @@
 revoke all on
   public.stock_master,
   public.stock_snapshots,
-  public.data_sync_status,
   public.stock_price_history,
   public.stock_monthly_revenues,
   public.stock_quarterly_financials,
@@ -18,7 +17,6 @@ from anon, authenticated;
 grant select on
   public.stock_master,
   public.stock_snapshots,
-  public.data_sync_status,
   public.stock_price_history,
   public.stock_monthly_revenues,
   public.stock_quarterly_financials,

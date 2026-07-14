@@ -3,8 +3,10 @@ name: Update Taiwan market snapshot
 on:
   workflow_dispatch:
   schedule:
-    # 22:30 Asia/Taipei. The collectors verify each source's own data date.
-    - cron: "30 14 * * *"
+    # Weekdays 22:30 Asia/Taipei (14:30 UTC). Supabase owns upstream collection;
+    # this workflow exports the last-good backend. A point-in-time backtest
+    # sample is sealed only after every market reaches its coverage threshold.
+    - cron: "30 14 * * 1-5"
 
 permissions:
   contents: write
@@ -17,17 +19,18 @@ jobs:
   update:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      # Optional public Repository Variables for a fork/new Supabase project.
+      # Empty values intentionally fall back to the checked-in current project.
+      SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+      SUPABASE_PUBLISHABLE_KEY: ${{ vars.SUPABASE_PUBLISHABLE_KEY }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - name: Collect and score one bounded candidate pool
-        env:
-          FINMIND_TOKEN: ${{ secrets.FINMIND_TOKEN }}
-          SNAPSHOT_COMPANY_LIMIT: 10
-          SNAPSHOT_ETF_LIMIT: 10
-        run: npm run update-data
+      - name: Export the centrally rate-limited persistent backend
+        run: npm run export-data
       - name: Rebuild point-in-time backtest when enough snapshots exist
         run: npm run backtest:snapshots
       - name: Validate generated files

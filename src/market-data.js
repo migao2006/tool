@@ -1,11 +1,10 @@
 import {
   buildBenchmarks,
-  buildDeepData,
   buildEtfProfiles,
-  buildPriceHistory,
   buildRiskSnapshot,
 } from "./deep-data.js";
 import {
+  readBackendAnalysis,
   readBackendHistory,
   readBackendRankings,
   readBackendStatus,
@@ -15,7 +14,7 @@ const SUPABASE_EDGE = "https://lfkdkdyaatdlizryiyon.supabase.co/functions/v1/tws
 const TWSE_OPEN = "https://openapi.twse.com.tw/v1";
 const TWSE_WEB = "https://www.twse.com.tw";
 const TPEX_OPEN = "https://www.tpex.org.tw/openapi/v1";
-const VERSION = "16.2";
+const VERSION = "16.3";
 
 const FINANCIAL_CATEGORIES = ["ci", "fh", "basi", "bd", "ins", "mim"];
 
@@ -178,7 +177,7 @@ function symbolOf(row) {
 }
 
 function instrumentTypeOf(symbol) {
-  if (/^00\d{2,4}$/.test(symbol)) return "ETF";
+  if (/^00\d{2,4}[A-Z]?$/i.test(symbol)) return "ETF";
   if (/^[1-9]\d{3}$/.test(symbol)) return "股票";
   return "其他";
 }
@@ -652,7 +651,6 @@ async function buildStocks() {
     fetchJson(`${TPEX_OPEN}/mopsfin_t187ap03_O`),
     fetchJson(`${TPEX_OPEN}/tpex_mainboard_margin_balance`),
     fetchJson(`${TPEX_OPEN}/tpex_3insti_daily_trading`),
-    fetchEdge("?type=stocks", 20_000),
   ]);
 
   const twseOpenPricePayload = fulfilled(initial[0], []);
@@ -670,7 +668,10 @@ async function buildStocks() {
   const tpexMargin = rows(tpexMarginPayload);
   const tpexInstitutionalPayload = fulfilled(initial[8], []);
   const tpexInstitutional = rows(tpexInstitutionalPayload);
-  const edge = fulfilled(initial[9], null);
+  let edge = null;
+  if (twseOpenPrices.length < 20 || tpexPrices.length < 20) {
+    edge = await fetchEdge("?type=stocks", 20_000).catch(() => null);
+  }
   const edgeStocks =
     edge && Array.isArray(edge.stocks)
       ? edge.stocks.map((stock) => ({
@@ -902,6 +903,13 @@ async function buildStocks() {
 function revenueFundamental(row) {
   const symbol = symbolOf(row);
   if (!isCompanySymbol(symbol)) return null;
+  // MOPS t187ap05 amount columns are published in NT$ thousands.  FinMind
+  // history and the normalized backend tables use NT$; convert at ingestion so
+  // a source fallback can never create a 1,000x display/scoring mismatch.
+  const amountTwd = (...keys) => {
+    const value = numeric(pick(row, ...keys));
+    return value == null ? null : value * 1_000;
+  };
   const rev = numeric(
     pick(
       row,
@@ -924,47 +932,33 @@ function revenueFundamental(row) {
   );
   return {
     symbol,
-    revenue: numeric(
-      pick(
-        row,
+    revenue: amountTwd(
         "營業收入-當月營收",
         "當月營收",
         "CurrentMonthRevenue",
         "RevenueCurrentMonth",
-      ),
     ),
-    revenuePreviousMonth: numeric(
-      pick(
-        row,
+    revenuePreviousMonth: amountTwd(
         "營業收入-上月營收",
         "上月營收",
         "PreviousMonthRevenue",
-      ),
     ),
-    revenueLastYearMonth: numeric(
-      pick(
-        row,
+    revenueLastYearMonth: amountTwd(
         "營業收入-去年當月營收",
         "去年當月營收",
         "SameMonthLastYearRevenue",
-      ),
     ),
-    revenueYtd: numeric(
-      pick(
-        row,
+    revenueYtd: amountTwd(
         "累計營業收入-當月累計營收",
         "當月累計營收",
         "CumulativeRevenueCurrentMonth",
-      ),
     ),
-    revenueLastYearYtd: numeric(
-      pick(
-        row,
+    revenueLastYearYtd: amountTwd(
         "累計營業收入-去年累計營收",
         "去年累計營收",
         "CumulativeRevenueLastYear",
-      ),
     ),
+    revenueUnit: "TWD",
     rev,
     revMom: numeric(
       pick(
@@ -999,9 +993,15 @@ function ratio(amount, base) {
 function financialFundamental(row, balance, category) {
   const symbol = symbolOf(row);
   if (!/^\d{4}$/.test(symbol)) return null;
-  const operatingRevenue = numeric(
+  const directRevenue = numeric(
     pick(row, "營業收入", "營業收入合計", "OperatingRevenue", "收益", "收入"),
   );
+  const netInterestIncome = numeric(pick(row, "利息淨收益", "淨利息收入", "NetInterestIncome"));
+  const netNonInterestIncome = numeric(pick(row, "利息以外淨收益", "非利息淨收益", "NetNonInterestIncome"));
+  const operatingRevenue = directRevenue ??
+    (netInterestIncome != null || netNonInterestIncome != null
+      ? (netInterestIncome || 0) + (netNonInterestIncome || 0)
+      : null);
   const grossProfit = numeric(
     pick(
       row,
@@ -1044,6 +1044,9 @@ function financialFundamental(row, balance, category) {
   const roe = netIncome != null && equity ? (netIncome / equity) * 100 * annualizer : null;
   return {
     symbol,
+    quarterRevenue: operatingRevenue == null ? null : operatingRevenue * 1_000,
+    quarterRevenueUnit: "TWD",
+    quarterRevenuePeriod: quarterText(row),
     eps: numeric(
       pick(
         row,
@@ -1087,13 +1090,14 @@ async function buildRevenue() {
   const settled = await Promise.allSettled([
     fetchJson(`${TWSE_OPEN}/opendata/t187ap05_L`, 20_000),
     fetchJson(`${TPEX_OPEN}/mopsfin_t187ap05_O`, 20_000),
-    fetchEdge("?type=revenue", 20_000),
   ]);
   const listedPayload = fulfilled(settled[0], []);
   const otcPayload = fulfilled(settled[1], []);
   const listed = rows(listedPayload);
   const otc = rows(otcPayload);
-  const edge = fulfilled(settled[2], null);
+  const edge = listed.length < 20 || otc.length < 20
+    ? await fetchEdge("?type=revenue", 20_000).catch(() => null)
+    : null;
   const edgeRows = edge && Array.isArray(edge.fundamentals) ? edge.fundamentals : [];
   const official = [...listed, ...otc].map(revenueFundamental).filter(Boolean);
   if (official.length < 20 && edgeRows.length < 20) {
@@ -1124,8 +1128,22 @@ async function buildRevenue() {
     },
     source: "MOPS / TWSE / TPEx",
     sourceStatus: {
-      listed: listed.length >= 20 ? "TWSE MOPS 官方" : "備援",
-      otc: otc.length >= 20 ? "TPEx MOPS 官方" : "備援",
+      listed: settled[0].status === "fulfilled"
+        ? `TWSE MOPS 官方 ${listed.length} 筆`
+        : `TWSE 來源錯誤：${text(settled[0].reason?.message || settled[0].reason)}`,
+      otc: settled[1].status === "fulfilled"
+        ? `TPEx MOPS 官方 ${otc.length} 筆`
+        : `TPEx 來源錯誤：${text(settled[1].reason?.message || settled[1].reason)}`,
+      fallback: edge
+        ? `Supabase 備援 ${edgeRows.length} 筆`
+        : "官方 L/O 來源已回傳；橫截面未列個股由後端逐檔歷史補齊",
+    },
+    coverage: {
+      listedRows: listed.length,
+      otcRows: otc.length,
+      fallbackRows: edgeRows.length,
+      mergedRows: fundamentals.length,
+      failures: settled.filter((entry) => entry.status === "rejected").length,
     },
   };
 }
@@ -1172,10 +1190,7 @@ async function buildFinancials() {
       },
     );
   }
-  const settled = await Promise.allSettled([
-    ...requests.map((request) => request.promise),
-    fetchEdge("?type=financials", 24_000),
-  ]);
+  const settled = await Promise.allSettled(requests.map((request) => request.promise));
   const incomeRows = [];
   const balanceMap = new Map();
   const publicationDates = { listed: [], otc: [] };
@@ -1195,13 +1210,19 @@ async function buildFinancials() {
     }
   });
 
-  const edge = fulfilled(settled.at(-1), null);
-  const edgeRows = edge && Array.isArray(edge.fundamentals) ? edge.fundamentals : [];
   const official = incomeRows
     .map(({ row, category }) =>
       financialFundamental(row, balanceMap.get(symbolOf(row)), category),
     )
     .filter(Boolean);
+  const needsFallback = official.length < 20 ||
+    counts.listedIncome < 20 || counts.listedBalance < 20 ||
+    counts.otcIncome < 20 || counts.otcBalance < 20 ||
+    requests.some((_, index) => settled[index].status === "rejected");
+  const edge = needsFallback
+    ? await fetchEdge("?type=financials", 24_000).catch(() => null)
+    : null;
+  const edgeRows = edge && Array.isArray(edge.fundamentals) ? edge.fundamentals : [];
   if (official.length < 20 && edgeRows.length < 20) {
     throw new Error("公開資訊觀測站財報資料暫時無法取得");
   }
@@ -1239,7 +1260,15 @@ async function buildFinancials() {
           ? `TPEx MOPS 六類財報 ${counts.otcIncome} 檔`
           : "備援",
       formats: "一般業、金控、銀行、證券、保險及異業",
+      failedFormats: requests
+        .map((request, index) => settled[index].status === "rejected"
+          ? `${request.market}:${request.statement}:${request.category}` : null)
+        .filter(Boolean),
+      fallback: edge
+        ? `Supabase 備援 ${edgeRows.length} 筆`
+        : "官方來源覆蓋完整，未呼叫舊備援",
     },
+    coverage: { ...counts, mergedRows: fundamentals.length },
   };
 }
 
@@ -1252,8 +1281,8 @@ export function sourcesPayload() {
     requestPolicy: {
       parallelPerSource: "1–2",
       minimumGap: "1.2–1.8 秒",
-      retries: "429、逾時及 5xx 最多重試 2 次並指數退避",
-      history: "全市場快照先持久化，再由上市、上櫃、ETF 獨立游標每批 2 檔深度驗證",
+      retries: "排程 FinMind 失敗由下一批持久退避；官方全市場來源的逾時、429、5xx 最多即時重試 2 次",
+      history: "全市場快照先持久化，再由上市、上櫃、ETF 獨立游標依滑動配額動態批次深度驗證",
     },
     sources: [
       {
@@ -1335,7 +1364,7 @@ export async function handleMarketData(request, url = new URL(request.url)) {
       return jsonResponse(await buildRiskSnapshot(), {}, force ? 0 : 600);
     }
     if (type === "benchmarks") {
-      return jsonResponse(await buildBenchmarks(), {}, force ? 0 : 21_600);
+      return jsonResponse(await buildBenchmarks({ allowFinmind: false }), {}, force ? 0 : 21_600);
     }
     if (type === "etf-profiles") {
       return jsonResponse(await buildEtfProfiles(), {}, force ? 0 : 21_600);
@@ -1349,23 +1378,16 @@ export async function handleMarketData(request, url = new URL(request.url)) {
     }
     if (type === "deep") {
       const symbol = text(url.searchParams.get("symbol"));
-      const instrumentType = text(url.searchParams.get("instrumentType")) || "股票";
-      const market = text(url.searchParams.get("market")) || "上市";
-      const payload = await buildDeepData(symbol, instrumentType, market);
-      return jsonResponse(payload, {}, force ? 0 : 28_800);
+      const payload = await readBackendAnalysis(symbol);
+      return jsonResponse(payload, {}, force ? 0 : 120);
     }
     if (type === "history") {
       const symbol = text(url.searchParams.get("symbol"));
       const market = text(url.searchParams.get("market")) || "上市";
-      const months = numeric(url.searchParams.get("months")) || 18;
-      let payload;
-      if (!force) {
-        try {
-          const stored = await readBackendHistory(symbol, 280);
-          if (stored.history.length >= 60) payload = stored;
-        } catch {}
+      const payload = { ...(await readBackendHistory(symbol, 280)), market };
+      if (payload.history.length < 20) {
+        throw new Error(`${market} ${symbol} 尚未完成後端歷史累積，請稍後再試`);
       }
-      payload ||= await buildPriceHistory(symbol, market, months);
       return jsonResponse(payload, {}, force ? 0 : 3_600);
     }
     if (type === "revenue") {
@@ -1385,11 +1407,7 @@ export async function handleMarketData(request, url = new URL(request.url)) {
       return jsonResponse(payload, {}, force ? 0 : 21_600);
     }
     if (type !== "stocks") {
-      const forwarded = new URLSearchParams(url.searchParams);
-      forwarded.delete("_");
-      forwarded.delete("refresh");
-      const payload = await fetchEdge(`?${forwarded.toString()}`);
-      return jsonResponse(payload, {}, force ? 0 : 3_600);
+      return jsonResponse({ error: `不支援的資料類型：${type}` }, { status: 400 });
     }
     if (!force && stockCache?.expires > Date.now()) {
       return jsonResponse(stockCache.payload, {}, 120);

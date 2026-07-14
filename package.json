@@ -1,6 +1,6 @@
 {
   "name": "taiwan-stock-smart-picker",
-  "version": "16.2.0",
+  "version": "16.3.0",
   "displayName": "台股智慧選股",
   "private": true,
   "type": "module",
@@ -14,6 +14,7 @@
     "audit": "node scripts/audit-live.mjs",
     "dev": "node scripts/dev-server.mjs",
     "update-data": "node scripts/update-market-data.mjs",
+    "export-data": "node scripts/export-backend-snapshot.mjs",
     "backtest:snapshots": "node scripts/backtest-snapshots.mjs",
     "test:pipeline": "node scripts/backend-pipeline-test.mjs",
     "test:backend": "node scripts/backend-store-test.mjs",

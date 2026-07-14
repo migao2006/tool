@@ -17,6 +17,8 @@ const stock = {
 };
 
 const price = {
+  rows: 280,
+  sufficient: true,
   lastClose: 100,
   ma20: 96,
   ma60: 91,
@@ -41,6 +43,8 @@ const completeDeep = {
   missing: [],
   price,
   revenue: {
+    months: 36,
+    continuousMonths: 36,
     yoy: 25,
     avg3Yoy: 22,
     ytdYoy: 18,
@@ -51,6 +55,9 @@ const completeDeep = {
     postRelease5: 3,
   },
   financial: {
+    quarters: 12,
+    continuousQuarters: 12,
+    sourceCoverage: { incomeRows: 120, balanceRows: 140, cashflowRows: 80 },
     epsYoy: 28,
     operatingMarginYoyChange: 2,
     cashConversion: 1.1,
@@ -61,6 +68,7 @@ const completeDeep = {
     debtRatio: 35,
   },
   institutional: {
+    days: 63,
     foreign20: 8_000,
     foreignStreak: 4,
     trust20: 1_200,
@@ -68,7 +76,7 @@ const completeDeep = {
     intensity5: 3.5,
     inst5: 2_000,
   },
-  margin: { marginChange5: -100, marginChange20: -400, marginUsage: 14 },
+  margin: { days: 63, marginChange5: -100, marginChange20: -400, marginUsage: 14 },
   holdings: { large400Ratio: 68, retail10Ratio: 18 },
 };
 
@@ -86,6 +94,28 @@ assert.equal(complete.categories.length, 5);
 assert.ok(complete.confidence >= 95, `complete confidence was ${complete.confidence}`);
 assert.ok(complete.score >= 60, `complete score was ${complete.score}`);
 assert.equal(complete.official, true);
+
+const unverifiedRiskCoverage = scoreOpportunity({
+  stock,
+  deep: completeDeep,
+  risk: { coverageComplete: false },
+  context,
+});
+assert.equal(unverifiedRiskCoverage.official, false, "an incomplete official risk list must block formal ranking");
+
+const staleFundamentals = scoreOpportunity({
+  stock,
+  deep: {
+    ...completeDeep,
+    sourceDiagnostics: {
+      revenue: { status: "stale-source-period", actualPeriod: "2026-05", expectedPeriod: "2026-06" },
+    },
+  },
+  risk: { coverageComplete: true },
+  context,
+});
+assert.equal(staleFundamentals.official, false, "a stale essential period must not enter the formal ranking");
+assert.equal(staleFundamentals.freshnessVerified, false);
 
 // Missing fundamentals are removed from the denominator of the score itself,
 // but remain visible in confidence; they must never silently become zeroes.

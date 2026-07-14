@@ -35,7 +35,7 @@ function provisionalScore(stock, group) {
 }
 
 function groupOf(stock) {
-  if (stock.instrumentType === "ETF" || /^00\d{2,4}$/.test(stock.symbol)) return "etf";
+  if (stock.instrumentType === "ETF" || /^00\d{2,4}[A-Z]?$/i.test(stock.symbol)) return "etf";
   return stock.market === "上櫃" ? "otc" : "listed";
 }
 
@@ -201,8 +201,8 @@ try {
 } catch {}
 
 const snapshot = {
-  version: "16.2",
-  methodology: "persistent-batched-opportunity-engine-v16.2",
+  version: "16.3",
+  methodology: "persistent-batched-opportunity-engine-v16.3",
   generatedAt,
   dataDate: stocksPayload.date,
   sourceDates: {

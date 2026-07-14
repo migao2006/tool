@@ -1,19 +1,50 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
-const [sync, schema, grants, cron, trim, config] = await Promise.all([
+const [sync, baseSchema, schema, grants, cron, acceleratedCron, leases, quota, preserve, repairQueue, clearEtfRepairs, etfDirectionRepair, lateCoverageRepair, clearOldVersionRepairs, trim, config, marketHandler, workflow, exporter, backtest] = await Promise.all([
   readFile(new URL("../supabase/functions/twss-sync-batch/index.ts", import.meta.url), "utf8"),
+  readFile(new URL("../supabase/migrations/20260714040000_base_schema.sql", import.meta.url), "utf8"),
   readFile(new URL("../supabase/migrations/20260714090000_add_persistent_stock_backend.sql", import.meta.url), "utf8"),
   readFile(new URL("../supabase/migrations/20260714090500_harden_stock_backend_grants.sql", import.meta.url), "utf8"),
   readFile(new URL("../supabase/migrations/20260714091000_schedule_persistent_stock_sync.sql", import.meta.url), "utf8"),
+  readFile(new URL("../supabase/migrations/20260714134000_ultimate_speed_and_data_repairs.sql", import.meta.url), "utf8"),
+  readFile(new URL("../supabase/migrations/20260714134500_sync_leases_retry_retention.sql", import.meta.url), "utf8"),
+  readFile(new URL("../supabase/migrations/20260714135000_finmind_sliding_quota.sql", import.meta.url), "utf8"),
+  readFile(new URL("../supabase/migrations/20260714135500_preserve_last_good_and_schedule_guard.sql", import.meta.url), "utf8"),
+  readFile(new URL("../supabase/migrations/20260714144000_analysis_repair_queue.sql", import.meta.url), "utf8"),
+  readFile(new URL("../supabase/migrations/20260714144500_clear_etf_repair_flags.sql", import.meta.url), "utf8"),
+  readFile(new URL("../supabase/migrations/20260714162500_repair_etf_direction_classification.sql", import.meta.url), "utf8"),
+  readFile(new URL("../supabase/migrations/20260714163500_requeue_late_legacy_financial_coverage.sql", import.meta.url), "utf8"),
+  readFile(new URL("../supabase/migrations/20260714164500_clear_incompatible_version_repair_flags.sql", import.meta.url), "utf8"),
   readFile(new URL("../supabase/migrations/20260714091500_trim_analysis_cache_payloads.sql", import.meta.url), "utf8"),
   readFile(new URL("../supabase/config.toml", import.meta.url), "utf8"),
+  readFile(new URL("../src/market-data.js", import.meta.url), "utf8"),
+  readFile(new URL("../.github/workflows/update-market-data.yml", import.meta.url), "utf8"),
+  readFile(new URL("./export-backend-snapshot.mjs", import.meta.url), "utf8"),
+  readFile(new URL("./backtest-snapshots.mjs", import.meta.url), "utf8"),
 ]);
 
-assert.match(sync, /Math\.min\(3, Number\(requestedLimit\) \|\| 2\)/, "batch size must stay bounded");
+assert.match(sync, /FINMIND_AUTHENTICATED \? 22 : 10/, "reused company batches must double throughput inside the same request slice");
+assert.match(sync, /FINMIND_AUTHENTICATED \? 23 : 19/, "ETF batches must use their fair rolling-hour slice");
+assert.match(sync, /twss_reserve_api_batch/, "every persistent batch must reserve the shared FinMind budget");
+assert.match(sync, /return 4 \+ \(reusableRevenue \? 0 : 1\) \+ \(reusableFinancial \? 0 : 3\)/, "request cost must reflect reusable history");
 assert.match(sync, /cursor_offset: processed/, "successful batches must persist their verified count");
-assert.match(sync, /const missing = refs\.filter/, "newly discovered symbols must be processed before refreshes");
+assert.match(sync, /const allMissing = refs\.filter/, "newly discovered symbols must be processed before refreshes");
+assert.match(sync, /const dueRepairs = refs\.filter/, "ready rows with an empty essential source must re-enter the repair queue");
+assert.match(sync, /financialCoverage\.cashflowRows/, "financial reuse must require verified cash-flow coverage");
+assert.match(sync, /finite\(stock\.revenueLastYearMonth\).*Number\(stock\.revenueLastYearMonth\) === 0/s, "null prior-year revenue must not be treated as zero");
 assert.match(sync, /analysis_version === ANALYSIS_VERSION/, "a new analysis version must trigger revalidation");
+assert.match(sync, /row\.status === "ready"/, "failed analyses must not be mistaken for verified candidates");
+assert.match(sync, /finmindRetries: 0/, "scheduled batches must defer retries to later runs to keep the hourly cap exact");
+assert.match(sync, /twss_claim_sync_lease/, "scheduled batches must use a distributed lease");
+assert.match(sync, /next_retry_at/, "failed symbols must use persisted retry backoff");
+assert.match(sync, /previous\?\.status === "ready"/, "a refresh failure must preserve the last-known-good analysis");
+assert.match(sync, /currentQuote: stock/, "same-day official quotes must close the historical provider lag");
+assert.match(sync, /bypassCache: true/, "reserved scheduled calls must not be hidden by an eight-hour memory cache");
+assert.match(sync, /passesPreflight\(stock, group\)/, "liquidity and hard-risk exclusions must run before expensive history requests");
+assert.match(sync, /missingRevenueParams\.set\("raw_data->>revenue", "is\.null"\)/, "the deep queue must identify cross-section revenue gaps explicitly");
+assert.match(sync, /const backfillSlots = group === "etf" \? 0 : Math\.max\(1, Math\.ceil\(limit \/ 2\)\)/, "company batches must reserve half their slots for missing-revenue repair");
+assert.match(sync, /FINMIND_AUTHENTICATED \? 88 : 50/, "free-level company batches may claim up to 50 calls while the shared ledger enforces 300 per rolling hour");
 assert.doesNotMatch(sync.match(/function compactDeep[\s\S]*?\n}/)?.[0] || "", /priceHistory:/, "rank caches must not duplicate price history");
 assert.match(sync, /row\[key\] === undefined \? null : row\[key\]/, "bulk rows must preserve missing values as null");
 assert.match(sync, /for \(const row of rows\)/, "a failed symbol must not cancel sibling symbols");
@@ -27,6 +58,11 @@ for (const table of [
 ]) {
   assert.match(schema, new RegExp(`alter table public\\.${table} enable row level security`));
 }
+for (const table of ["stock_master", "stock_snapshots"]) {
+  assert.match(baseSchema, new RegExp(`alter table public\\.${table} enable row level security`));
+  assert.match(baseSchema, new RegExp(`create policy ${table}_public_read`));
+}
+assert.doesNotMatch(grants, /data_sync_status/, "fresh migrations must not depend on an undefined legacy table");
 assert.match(schema, /vault\.create_secret/);
 assert.match(schema, /revoke all on function public\.twss_verify_sync_token/);
 assert.match(grants, /revoke all on[\s\S]*from anon, authenticated/);
@@ -35,6 +71,46 @@ assert.match(grants, /grant select on[\s\S]*to anon, authenticated/);
 assert.match(cron, /"group":"listed","limit":2/);
 assert.match(cron, /"group":"otc","limit":2/);
 assert.match(cron, /"group":"etf","limit":2/);
+assert.match(acceleratedCron, /"group":"listed","limit":22/);
+assert.match(acceleratedCron, /"group":"otc","limit":22/);
+assert.match(acceleratedCron, /"group":"etf","limit":23/);
+assert.match(acceleratedCron, /300\/600 calls per 60 minutes/);
+assert.match(acceleratedCron, /stock_monthly_revenues/);
+assert.match(acceleratedCron, /stock_quarterly_financials/);
+assert.match(leases, /lease_until/);
+assert.match(leases, /twss_prune_history/);
+assert.match(leases, /attempt_count/);
+assert.match(leases, /p_seconds integer default 180/);
+assert.match(quota, /reserved_at > v_now - interval '60 minutes'/);
+assert.match(quota, /pg_advisory_xact_lock/);
+assert.match(quota, /revoke all on function public\.twss_reserve_api_batch/);
+assert.match(quota, /enable row level security/);
+assert.match(preserve, /last_attempt_at/);
+assert.match(preserve, /'43 6 \* \* 1-5'/);
+assert.match(repairQueue, /needs_repair boolean not null default false/);
+assert.match(repairQueue, /idx_stock_analysis_cache_repair_queue/);
+assert.match(repairQueue, /group_name <> 'etf'/, "the initial repair audit must not enqueue ETF rows for company-only data");
+assert.match(clearEtfRepairs, /where group_name = 'etf'/, "the follow-up migration must clear legacy ETF repair flags");
+assert.match(clearEtfRepairs, /set needs_repair = false/);
+assert.match(etfDirectionRepair, /etf-direction-classification/);
+assert.match(etfDirectionRepair, /\{etf,leveraged\}/);
+assert.match(etfDirectionRepair, /\{etf,inverse\}/);
+assert.match(lateCoverageRepair, /financial-source-coverage/);
+assert.match(lateCoverageRepair, /sourceCoverage,incomeRows/);
+assert.match(lateCoverageRepair, /analysis_version = '16\.3-ultimate-data-audit'/);
+assert.match(clearOldVersionRepairs, /analysis_version <> '16\.3-ultimate-data-audit'/);
+assert.match(sync, /repair_reasons.*some[\s\S]*etf-direction-classification/, "one-time migration repairs must not wait six hours");
+assert.match(sync, /financial-source-coverage/, "fresh analyses must persist incomplete financial-source coverage as a repair reason");
+assert.match(marketHandler, /readBackendAnalysis\(symbol\)/);
+assert.doesNotMatch(marketHandler, /payload \|\|= await buildPriceHistory/);
+assert.match(workflow, /npm run export-data/);
+assert.doesNotMatch(workflow, /npm run update-data/);
+assert.match(exporter, /flag: "wx"/, "point-in-time files must be create-only");
+assert.match(exporter, /error\?\.code !== "EEXIST"/, "only an existing immutable snapshot may be skipped");
+assert.match(exporter, /skippedExistingSnapshot/, "the export must report an immutable-snapshot skip");
+assert.match(exporter, /backtestReady/);
+assert.match(exporter, /minimumGroupRatio: 0\.75/);
+assert.match(backtest, /snapshotCoverage\?\.backtestReady === true/, "partial daily rankings must never enter the point-in-time backtest");
 assert.match(config, /verify_jwt = false/);
 assert.match(config, /entrypoint = "\.\/functions\/twss-sync-batch\/index\.ts"/);
 assert.match(trim, /analysis - 'priceHistory'/);

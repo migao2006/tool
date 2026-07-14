@@ -1,4 +1,4 @@
-import { buildPriceHistory } from "../src/deep-data.js";
+import { readBackendHistory } from "../src/backend-store.js";
 
 const endpoints = {
   twseOpenPrice: "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL",
@@ -31,7 +31,7 @@ const rocDate = (value) => {
 async function get(name, url) {
   try {
     const response = await fetch(url, {
-      headers: { accept: "application/json", "user-agent": "TaiwanStockSmartPicker-Audit/16.2" },
+      headers: { accept: "application/json", "user-agent": "TaiwanStockSmartPicker-Audit/16.3" },
       signal: AbortSignal.timeout(45_000),
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -66,7 +66,7 @@ const twseInstitutionalDate = rocDate(twseInstitutional.date);
 
 const twsePriceTable = twsePrice.tables?.find((table) => String(table.title || "").includes("每日收盤行情"));
 await sleep(1500);
-const otcHistory = await buildPriceHistory("6613", "上櫃", 18);
+const otcHistory = { ...(await readBackendHistory("6613", 280)), market: "上櫃" };
 const report = [
   { source: "TWSE 上市行情（指定日）", date: rocDate(twsePrice.date), rows: twsePriceTable?.data?.length || 0 },
   { source: "TWSE 上市估值（指定日）", date: rocDate(twseValuation.date), rows: twseValuation.data?.length || 0 },
@@ -83,7 +83,7 @@ const report = [
   { source: "TWSE 大盤指數歷史", date: rocDate(arrays.twseIndex.at(-1)?.Date), rows: arrays.twseIndex.length },
   { source: "TPEx 櫃買指數歷史", date: rocDate(arrays.tpexIndex.at(-1)?.Date), rows: arrays.tpexIndex.length },
   { source: "TWSE ETF 基本資料", date: rocDate(arrays.etfProfiles[0]?.出表日期), rows: arrays.etfProfiles.length },
-  { source: "FinMind 上櫃 6613 歷史日線", date: otcHistory.period, rows: otcHistory.count },
+  { source: "Supabase／FinMind 原始行情（含公司行動隔離）：上櫃 6613", date: otcHistory.period, rows: otcHistory.count },
 ];
 
 const requiredTpexInstitutional = [

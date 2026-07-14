@@ -1,4 +1,4 @@
-# v16.2 持久化後端
+# v16.3 持久化後端
 
 這一版把「一次只深度驗證 10 檔」改成可續跑的資料管線。GitHub 靜態快照仍是前端備援；正式頁面會合併 Supabase 已累積的深度結果，因此完成檔數會隨排程增加，而不是每次從零開始。
 
@@ -6,9 +6,12 @@
 
 1. `universe` 取得 TWSE、TPEx、MOPS 的全市場快照並寫入 `stock_master`、`stock_snapshots`。
 2. `deep_listed`、`deep_otc`、`deep_etf` 各自依初篩分數與股票代號排序。
-3. 每次最多處理 2 檔，成功後保存歷史資料、評分與下一個 `cursor_offset`。
-4. 單檔失敗記錄在 `last_error`，同批其他股票仍可完成；下一次從游標繼續。
-5. 前端讀取 `stock_analysis_cache`，與 `public/data/latest.json` 合併後分成上市、上櫃、ETF 三榜。
+3. 冷資料無 Token 時上市／上櫃／ETF 每次最多處理 6／6／19 檔，有 Token 時最多 11／11／23；歷史可重用時公司批次可提高到 10／10 或 22／22。實際數量會依滑動 60 分鐘剩餘額度縮小。成功後保存歷史資料、評分與下一個進度。
+4. API 回傳成功但必要內容為空或落後期別時，保留 last-good 並設為修復候選；每批最多四分之一槽位處理這類缺口。財報快取只有 income、balance、cashflow 三者都有來源覆蓋時才可重用。
+4. 單檔失敗會保存 `error_kind`、`attempt_count`、`next_retry_at`；同批其他股票仍可完成，新股票優先於退避中的失敗股票。
+5. 前端優先讀取 `stock_analysis_cache`；`public/data/latest.json` 是同版本後端匯出備援，不合併舊模型結果。
+
+當期 TWSE／TPEx 月營收橫斷面若少於交易母體，公司批次會把一半候選名額優先給 `raw_data.revenue` 缺漏者；逐檔歷史成功後會回寫 `stock_snapshots`，下一輪便恢復正常分數排序。這個補缺不另開旁路，所有 FinMind 呼叫仍先由中央滑動配額帳本保留。
 
 全市場母體與目前正式排程分開：母體包含所有可辨識股票及 ETF；深度候選另套用流動性、風險與必要資料門檻。因此上櫃母體數與 `deep_otc.total_items` 不必完全相同。
 
@@ -18,16 +21,19 @@
 
 | 工作 | UTC | 台灣時間 | 每批 |
 | --- | --- | --- | ---: |
-| 全市場更新 | 平日 06:45 | 平日 14:45 | 全市場一次 |
-| 上市深度 | 每小時 05、35 分 | 每小時 05、35 分 | 2 檔 |
-| 上櫃深度 | 每小時 15、45 分 | 每小時 15、45 分 | 2 檔 |
-| ETF 深度 | 每小時 25、55 分 | 每小時 25、55 分 | 2 檔 |
+| 全市場更新 | 平日 06:43 | 平日 14:43 | 全市場一次 |
+| 上市深度 | 每小時 01、21、41 分 | 每小時 01、21、41 分 | 冷資料最多 6；可重用 10；有 Token 時 11／22 |
+| 上櫃深度 | 每小時 08、28、48 分 | 每小時 08、28、48 分 | 冷資料最多 6；可重用 10；有 Token 時 11／22 |
+| ETF 深度 | 每小時 15、35、55 分 | 每小時 15、35、55 分 | 最多 19；有 Token 23 |
 
-台灣與 UTC 的分鐘相同，只有小時相差 8 小時。三組刻意錯開，FinMind 仍由單一佇列控制在約 1.35 秒以上的請求間隔。
+台灣與 UTC 的分鐘相同，只有小時相差 8 小時。三組錯開 6～7 分鐘；FinMind 使用兩個通道並以 0.5 秒錯開啟動。每批開始前會透過資料庫 advisory lock 統計最近 60 分鐘的所有保留量，無 Token 上限 300、有 Token 上限 600；額度不足就縮小批次或等待，不會在整點邊界超額。此上限已依 [FinMind 官方說明](https://finmind.github.io/quickstart/) 核對。
+
+冷公司資料一次最多消耗 8 次 FinMind 呼叫；營收與財報可重用時為 4 次；ETF 為 1 次。三組每 20 分鐘的 claim cap 分別是無 Token 50／50／19、有 Token 88／88／23，再由中央帳本做最後裁切。無 Token 的錯開排程會逼近 300 次／60 分鐘，最後一批依剩餘量自動縮小；有 Token 時同理逼近 600。這讓單一 Edge invocation 保持在 [Supabase Free plan 150 秒 wall-clock 上限](https://supabase.com/docs/guides/functions/limits)內，同時把可用額度用滿。
 
 ## 資料與單位
 
 - 價量：最多 280 個交易日。
+- 價量使用目前 FinMind 帳號層級可取得的 `TaiwanStockPrice`，並補入較新的 TWSE／TPEx 同日官方盤後 OHLCV。`TaiwanStockPriceAdj` 需要較高帳號權限，因此不再讓它阻斷整批技術面；近 40 日若有超過 35% 的疑似公司行動跳空，該檔技術評分會被隔離並標示原因。
 - 月營收：最多 40 個月；評分正式需求至少 24 個月。
 - 財務：最多 12 季。
 - 法人與融資融券：各最多 30 個交易日。
@@ -35,11 +41,13 @@
 - 現金轉換採 `近四季營業現金流合計 ÷ 近四季淨利合計`。不足四季時才顯示最新季替代值，並標示 `cashConversionBasis`。
 - 資料庫保存來源原始數值，畫面端才依欄位轉成張、百分比、億元或倍數。
 - 排行榜 JSON 不重複內嵌 280 日價量；明細頁從 `stock_price_history` 另讀，避免候選數增加後 API 回應過大。
+- `stock_sync_state` 的資料庫租約避免 cron 與手動工作重複選中同一批股票。
+- 每日清理超過 60 日的全市場原始快照，並保留較長的點時分數與必要歷史，避免 Free-plan 儲存無上限增長。
 
 ## 權限
 
 - `anon` 與 `authenticated` 只有公開市場資料表的 `SELECT` 權限。
-- 所有新資料表都啟用 RLS，沒有公開寫入 policy。
+- 所有公開市場資料表（包含 `stock_master`、`stock_snapshots`）都啟用 RLS，只有 public-read policy，沒有公開寫入 policy。
 - 批次函式使用 Supabase 伺服器密鑰寫入；密鑰只存在 Edge Runtime 環境。
 - pg_cron 的 `x-twss-sync-token` 由 Vault 產生與保存，原始碼沒有權杖明文。
 - `twss-sync-batch` 雖設定 `verify_jwt = false`，函式本身會先呼叫 service-role-only 的 `twss_verify_sync_token`；缺少或錯誤權杖會回傳 HTTP 401。
@@ -48,24 +56,58 @@
 
 ## 從原始碼重新部署
 
-需要 Supabase CLI 1.215.0 以上，並先把 repository 連結到正確專案：
+使用目前版 Supabase CLI；先執行 `supabase db push --help`，確認可用 `--dry-run` 與 `--include-all`。官方旗標定義見 [Supabase CLI `db push`](https://supabase.com/docs/reference/cli/introduction#supabase-db-push)。
+
+### 更新既有正式專案
+
+v16.3 新增 `20260714040000_base_schema.sql`，它的時間戳早於部分已在原專案套用的 migration。既有專案若只執行一般 `db push`，CLI 可能把它視為 out-of-order；必須先 dry-run 檢查，再明確使用 `--include-all`：
 
 ```sh
 supabase login
 supabase link --project-ref lfkdkdyaatdlizryiyon
+supabase db push --dry-run --include-all
+supabase db push --include-all
+supabase functions deploy twss-sync-batch
+```
+
+`20260714040000_base_schema.sql` 使用 `create table if not exists`、policy 存在檢查與可重複的權限設定，因此補套到既有專案不會清空資料。不要使用 `db reset --linked`，那會重建遠端資料庫。
+
+### 建立全新 Supabase 專案
+
+全新專案沒有 out-of-order 歷史，先完成下方「更換專案」清單，再使用一般推送：
+
+```sh
+supabase login
+supabase link --project-ref YOUR_PROJECT_REF
+supabase db push --dry-run
 supabase db push
+supabase functions deploy twss-sync-batch
+```
+
+若有 FinMind Token，只設在 Edge Function secrets；不要放進 GitHub 或 Vercel 公開環境：
+
+```sh
+supabase secrets set FINMIND_TOKEN=YOUR_TOKEN
 supabase functions deploy twss-sync-batch
 ```
 
 `supabase/config.toml` 已指定自訂 entrypoint 與 `verify_jwt = false`。不可移除函式內的 Vault 權杖驗證。
 
-若是在另一個 Supabase 專案重建，必須同步修改：
+若是在另一個 Supabase 專案重建，必須在 `db push` 與 Vercel 部署前同步修改：
 
-- `src/backend-store.js` 的公開 project URL／publishable key
-- `20260714091000_schedule_persistent_stock_sync.sql` 的函式 URL
 - `supabase/config.toml` 的 `project_id`
+- 所有 migration 內的 `https://<project-ref>.supabase.co/functions/v1/twss-sync-batch`；後面的排程 migration 會覆寫前面的工作，不能只改一個檔案
+- `src/backend-store.js` 與 `scripts/export-backend-snapshot.mjs` 的預設 project URL／publishable key，或在 Vercel／GitHub Repository Variables 設定 `SUPABASE_URL`、`SUPABASE_PUBLISHABLE_KEY`
+- `src/market-data.js` 的舊 `twss-market-data` 備援 URL；此舊函式不包含在本 repository，沒有部署時應視為可選備援，不可誤認為主要資料源
+- `vercel.json` 的 Content-Security-Policy `connect-src`
 
-不要把新專案的伺服器密鑰寫進任何檔案。
+可先執行下列搜尋，直到不再殘留舊 project ref；公開 publishable key 可以出現在前端，但伺服器 secret/service-role key 絕不可提交：
+
+```sh
+rg -n "lfkdkdyaatdlizryiyon|sb_publishable_" src scripts supabase vercel.json
+```
+
+`data_sync_status` 是舊版遺留且 v16.3 未使用的表名；fresh migration 不再依賴它。正式同步狀態只讀 `stock_sync_state`。
 
 ## 查看進度
 
@@ -73,7 +115,8 @@ supabase functions deploy twss-sync-batch
 
 ```sql
 select job_key, status, cycle_date, total_items, processed_count,
-       cursor_offset, last_symbol, last_error, last_success_at
+       cursor_offset, last_symbol, last_error, last_success_at,
+       details ->> 'version' as worker_version
 from public.stock_sync_state
 order by job_key;
 ```
@@ -89,3 +132,22 @@ order by group_name;
 ```
 
 第一輪尚未跑完並不是錯誤；`processed_count` 與 `cursor_offset` 持續增加，且 `last_error` 為空，即代表正常累積。
+
+發佈 v16.3 前還要確認分析版本與資料缺漏原因：
+
+```sql
+select analysis_version, group_name, status, count(*)
+from public.stock_analysis_cache
+group by analysis_version, group_name, status
+order by analysis_version, group_name, status;
+
+select group_name,
+       count(*) filter (where stock ->> 'revenue' is null) as missing_monthly_revenue,
+       count(*) filter (where analysis -> 'financial' ->> 'revenue' is null) as missing_quarterly_revenue
+from public.stock_analysis_cache
+where status = 'ready'
+group by group_name
+order by group_name;
+```
+
+月營收缺漏要再對照 `analysis.missing` 與 `analysis.sourceDiagnostics.revenue`；季營業額則對照 `analysis.financial.revenueStatus`。來源未回傳、歷史不足、去年同期為零、金融業口徑不可比與 API 失敗是不同狀態，不可一律當成 0。只有 `analysis_version = '16.3-ultimate-data-audit'` 的 ready rows 才會進正式 v16.3 排行榜。

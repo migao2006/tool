@@ -2,12 +2,18 @@ const TWSE_OPEN = "https://openapi.twse.com.tw/v1";
 const TPEX_OPEN = "https://www.tpex.org.tw/openapi/v1";
 const FINMIND = "https://api.finmindtrade.com/api/v4/data";
 const TDCC_HOLDINGS = "https://opendata.tdcc.com.tw/getOD.ashx?id=1-5";
-export const ANALYSIS_VERSION = "16.2-persistent-backend-cash-ttm";
+export const ANALYSIS_VERSION = "16.3-ultimate-data-audit";
+const VALID_SYMBOL = /^\d{4,6}[A-Z]?$/i;
+const ETF_SYMBOL = /^00\d{2,4}[A-Z]?$/i;
 
 const memoryCache = new Map();
 const queues = new Map();
 const policies = [
-  { match: "api.finmindtrade.com", key: "finmind", gap: 1_350, concurrency: 1 },
+  // The documented FinMind ceiling is hourly, not a one-request-per-second
+  // ceiling.  The persistent worker now reserves every call in a sliding
+  // 60-minute database ledger, so a short two-lane burst is safe and keeps an
+  // Edge invocation well inside its wall-clock limit.
+  { match: "api.finmindtrade.com", key: "finmind", gap: 500, concurrency: 2 },
   { match: "openapi.twse.com.tw", key: "twse", gap: 1_250, concurrency: 2 },
   { match: "www.tpex.org.tw", key: "tpex", gap: 1_250, concurrency: 2 },
   { match: "opendata.tdcc.com.tw", key: "tdcc", gap: 2_000, concurrency: 1 },
@@ -118,9 +124,10 @@ async function request(url, { format = "json", timeout = 35_000, retries = 2 } =
       try {
         const headers = {
           accept: format === "json" ? "application/json" : "text/csv,text/plain,*/*",
-          "user-agent": "TaiwanStockSmartPicker/16.2",
+          "user-agent": "TaiwanStockSmartPicker/16.3",
         };
-        const token = globalThis.process?.env?.FINMIND_TOKEN;
+        const token = globalThis.process?.env?.FINMIND_TOKEN ||
+          globalThis.Deno?.env?.get?.("FINMIND_TOKEN");
         if (token && url.includes("api.finmindtrade.com")) {
           headers.authorization = `Bearer ${token}`;
         }
@@ -171,14 +178,19 @@ function objectRows(payload) {
   return [];
 }
 
-async function finmind(dataset, symbol, startDate, endDate) {
+async function finmind(dataset, symbol, startDate, endDate, options = {}) {
   const params = new URLSearchParams({
     dataset,
     data_id: symbol,
     start_date: startDate,
     end_date: endDate,
   });
-  const payload = await request(`${FINMIND}?${params}`);
+  const payload = await request(`${FINMIND}?${params}`, {
+    // Scheduled jobs deliberately use zero in-request retries.  A failed symbol
+    // is retried by a later batch, which keeps the hourly request ceiling exact
+    // instead of allowing one transient 5xx to silently exceed it.
+    retries: options.retries ?? 2,
+  });
   if (Number(payload?.status) !== 200 || !Array.isArray(payload?.data)) {
     const error = new Error(payload?.msg || `${dataset} 無資料`);
     error.status = Number(payload?.status) || 502;
@@ -203,6 +215,24 @@ function normalizePrice(rows) {
     }))
     .filter((row) => /^\d{4}-\d{2}-\d{2}$/.test(row.date) && finite(row.close))
     .sort((a, b) => a.date.localeCompare(b.date));
+}
+
+function mergeCurrentQuote(rows, quote) {
+  const date = isoDate(quote?.trade_date || quote?.priceDate || quote?.date);
+  const close = number(quote?.close);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !finite(close)) return rows;
+  const current = {
+    date,
+    open: number(quote?.open) ?? close,
+    high: number(quote?.high) ?? close,
+    low: number(quote?.low) ?? close,
+    close,
+    volume: number(quote?.volume),
+    value: number(quote?.value),
+    transactions: number(quote?.transactions),
+  };
+  return [...rows.filter((row) => row.date !== date), current]
+    .sort((left, right) => left.date.localeCompare(right.date));
 }
 
 function sma(values, period, offset = 0) {
@@ -387,6 +417,9 @@ function normalizeRevenue(rows) {
     const priorYear = byPeriod.get(`${row.year - 1}-${String(row.month).padStart(2, "0")}`);
     row.mom = previous?.revenue ? round((row.revenue / previous.revenue - 1) * 100) : null;
     row.yoy = priorYear?.revenue ? round((row.revenue / priorYear.revenue - 1) * 100) : null;
+    row.yoyStatus = priorYear?.revenue === 0
+      ? "prior-year-zero"
+      : priorYear ? "ready" : "prior-year-unavailable";
   });
   return normalized;
 }
@@ -394,37 +427,58 @@ function normalizeRevenue(rows) {
 function revenueSummary(rows, prices) {
   if (!rows.length) return { months: 0 };
   const latest = rows.at(-1);
-  const yoyValues = rows.slice(-3).map((row) => row.yoy);
-  let consecutiveAcceleration = 0;
+  const monthOrdinal = (row) => Number(row.year) * 12 + Number(row.month) - 1;
+  let continuousMonths = 1;
   for (let index = rows.length - 1; index > 0; index -= 1) {
-    if (!finite(rows[index].yoy) || !finite(rows[index - 1].yoy) || rows[index].yoy <= rows[index - 1].yoy) break;
+    if (monthOrdinal(rows[index]) - monthOrdinal(rows[index - 1]) !== 1) break;
+    continuousMonths += 1;
+  }
+  const continuousRows = rows.slice(-continuousMonths);
+  const yoyValues = continuousRows.length >= 3
+    ? continuousRows.slice(-3).map((row) => row.yoy)
+    : [];
+  let consecutiveAcceleration = 0;
+  for (let index = continuousRows.length - 1; index > 0; index -= 1) {
+    if (!finite(continuousRows[index].yoy) || !finite(continuousRows[index - 1].yoy) || continuousRows[index].yoy <= continuousRows[index - 1].yoy) break;
     consecutiveAcceleration += 1;
   }
   const sameMonthHistory = rows.filter((row) => row.month === latest.month && row.year < latest.year);
-  const prior11 = rows.slice(-12, -1);
+  const prior11 = continuousRows.length >= 12 ? continuousRows.slice(-12, -1) : [];
   const currentYear = rows.filter((row) => row.year === latest.year && row.month <= latest.month);
   const previousYear = rows.filter((row) => row.year === latest.year - 1 && row.month <= latest.month);
   const ytd = sum(currentYear.map((row) => row.revenue));
   const priorYtd = sum(previousYear.map((row) => row.revenue));
+  const completeYtd = currentYear.length === latest.month && previousYear.length === latest.month;
   const releaseIndex = prices.findIndex((row) => row.date >= latest.availableAt);
   const postRelease5 = releaseIndex >= 0 && prices[releaseIndex + 5]
     ? round((prices[releaseIndex + 5].close / prices[releaseIndex].close - 1) * 100)
     : null;
+  const postReleaseStatus = finite(postRelease5)
+    ? "ready"
+    : releaseIndex >= 0
+      ? "pending-five-trading-days"
+      : "release-not-in-price-range";
+  const postReleaseObservedDays = releaseIndex >= 0
+    ? Math.max(0, prices.length - releaseIndex - 1)
+    : null;
   const priorSameMean = mean(sameMonthHistory.slice(-3).map((row) => row.revenue));
   return {
     months: rows.length,
+    continuousMonths,
+    historyStart: rows[0]?.period || null,
     period: latest.period,
     availableAt: latest.availableAt,
     revenue: latest.revenue,
     yoy: latest.yoy,
+    yoyStatus: latest.yoyStatus,
     mom: latest.mom,
-    ytdYoy: priorYtd ? round((ytd / priorYtd - 1) * 100) : null,
-    avg3Yoy: round(mean(yoyValues)),
-    acceleration: finite(latest.yoy) && finite(rows.at(-2)?.yoy)
-      ? round(latest.yoy - rows.at(-2).yoy)
+    ytdYoy: completeYtd && priorYtd ? round((ytd / priorYtd - 1) * 100) : null,
+    avg3Yoy: yoyValues.length === 3 && yoyValues.every(finite) ? round(mean(yoyValues)) : null,
+    acceleration: continuousRows.length >= 2 && finite(latest.yoy) && finite(continuousRows.at(-2)?.yoy)
+      ? round(latest.yoy - continuousRows.at(-2).yoy)
       : null,
-    acceleration3: finite(rows.at(-3)?.yoy) && finite(latest.yoy)
-      ? round((latest.yoy - rows.at(-3).yoy) / 2)
+    acceleration3: continuousRows.length >= 3 && finite(continuousRows.at(-3)?.yoy) && finite(latest.yoy)
+      ? round((latest.yoy - continuousRows.at(-3).yoy) / 2)
       : null,
     consecutiveAcceleration,
     new12MonthHigh: prior11.length ? latest.revenue > Math.max(...prior11.map((row) => row.revenue)) : null,
@@ -433,6 +487,8 @@ function revenueSummary(rows, prices) {
       : null,
     seasonalGrowth: priorSameMean ? round((latest.revenue / priorSameMean - 1) * 100) : null,
     postRelease5,
+    postReleaseStatus,
+    postReleaseObservedDays,
   };
 }
 
@@ -443,6 +499,8 @@ function refreshRevenueReaction(summary, prices) {
   return {
     ...summary,
     postRelease5: round((prices[releaseIndex + 5].close / prices[releaseIndex].close - 1) * 100),
+    postReleaseStatus: "ready",
+    postReleaseObservedDays: Math.max(5, prices.length - releaseIndex - 1),
   };
 }
 
@@ -452,8 +510,12 @@ function pivot(rows) {
     const date = isoDate(row.date);
     if (!map.has(date)) map.set(date, { date, values: {}, origins: {} });
     const current = map.get(date);
-    current.values[clean(row.type)] = number(row.value);
-    current.origins[clean(row.origin_name)] = number(row.value);
+    const type = clean(row.type);
+    current.values[type] = number(row.value);
+    // FinMind commonly emits an amount followed by a matching `_per` ratio
+    // with the same Chinese origin name.  Letting the ratio overwrite the
+    // amount turned receivables/inventory into values such as 19 or 31.
+    if (!/_per$/i.test(type)) current.origins[clean(row.origin_name)] = number(row.value);
   });
   return [...map.values()].sort((a, b) => a.date.localeCompare(b.date));
 }
@@ -469,6 +531,44 @@ function statementValue(period, types, originPattern) {
     if (found) return found[1];
   }
   return null;
+}
+
+function receivablesValue(period) {
+  const combined = statementValue(
+    period,
+    ["NotesAndAccountsReceivableNet", "NotesAndAccountsReceivable"],
+    /應收票據及帳款.*淨額|應收票據及帳款合計/,
+  );
+  if (finite(combined)) return combined;
+  const components = [
+    "AccountsReceivableNet",
+    "AccountsReceivable",
+    "BillsReceivableNet",
+    "NotesReceivableNet",
+  ].map((type) => period?.values?.[type]).filter(finite);
+  if (components.length) return sum(components);
+  return statementValue(period, [], /應收帳款.*淨額|應收票據.*淨額/);
+}
+
+function financialRevenueValue(period) {
+  const companyRevenue = statementValue(period, ["Revenue"], /營業收入|收益合計/);
+  if (finite(companyRevenue)) return { value: companyRevenue, status: "available", basis: "revenue" };
+  const financeIncome = statementValue(period, ["Income"], /^收益$/);
+  if (finite(financeIncome)) return { value: financeIncome, status: "available", basis: "finance-income" };
+  const netInterest = statementValue(period, ["NetInterestIncome"], /利息淨收益|淨利息收入/);
+  const netNonInterest = statementValue(period, ["NetNonInterestIncome"], /非利息淨收益|淨非利息收入/);
+  if (finite(netInterest) || finite(netNonInterest)) {
+    return {
+      value: sum([netInterest, netNonInterest]),
+      status: "available",
+      basis: "bank-net-income-components",
+    };
+  }
+  const insuranceResult = Object.keys(period?.origins || {}).some((name) =>
+    /保險服務結果|保險財務結果|其他營業結果/.test(name));
+  return insuranceResult
+    ? { value: null, status: "source-not-comparable", basis: "insurance-results" }
+    : { value: null, status: "source-not-returned", basis: null };
 }
 
 function quarterFromDate(date) {
@@ -498,7 +598,8 @@ function financialSummary(incomeRows, balanceRows, cashRows) {
   // Applying `standalone` to both made Q2-Q4 margins/EPS and cash conversion
   // incorrect, especially for smaller TPEx companies.
   const incomeSeries = (getter) => incomes.map((row) => getter(row));
-  const revenueValues = incomeSeries((row) => statementValue(row, ["Revenue"], /營業收入|收益合計/));
+  const revenueDetails = incomeSeries(financialRevenueValue);
+  const revenueValues = revenueDetails.map((row) => row.value);
   const grossValues = incomeSeries((row) => statementValue(row, ["GrossProfit"], /營業毛利/));
   const operatingValues = incomeSeries((row) => statementValue(row, ["OperatingIncome"], /營業利益/));
   const netValues = incomeSeries((row) => statementValue(row, ["IncomeAfterTaxes", "ProfitLoss"], /本期淨利|本期稅後/));
@@ -523,13 +624,15 @@ function financialSummary(incomeRows, balanceRows, cashRows) {
     const currentAssets = statementValue(balance, ["CurrentAssets"], /^流動資產/);
     const currentLiabilities = statementValue(balance, ["CurrentLiabilities"], /^流動負債/);
     const inventory = statementValue(balance, ["Inventories", "Inventory"], /存貨/);
-    const receivables = statementValue(balance, ["AccountsReceivable", "NotesAndAccountsReceivable"], /應收帳款|應收票據及帳款/);
+    const receivables = receivablesValue(balance);
     const interest = interestValues[globalIndex];
     return {
       date: income.date,
       period: `${income.date.slice(0, 4)} Q${quarterFromDate(income.date)}`,
       availableAt: addDays(income.date, quarterFromDate(income.date) === 4 ? 90 : 45),
       revenue: round(revenue, 0),
+      revenueStatus: revenueDetails[globalIndex]?.status || "source-not-returned",
+      revenueBasis: revenueDetails[globalIndex]?.basis || null,
       netIncome: round(netIncome, 0),
       eps: round(epsValues[globalIndex]),
       grossMargin: revenue ? round((grossProfit / revenue) * 100) : null,
@@ -540,7 +643,9 @@ function financialSummary(incomeRows, balanceRows, cashRows) {
       freeCashFlow: finite(cashflow.ocf) && finite(cashflow.capex)
         ? round(cashflow.ocf + cashflow.capex, 0)
         : null,
-      cashConversion: netIncome ? round(cashflow.ocf / netIncome) : null,
+      cashConversion: finite(netIncome) && netIncome > 0 && finite(cashflow.ocf)
+        ? round(cashflow.ocf / netIncome)
+        : null,
       inventory: round(inventory, 0),
       receivables: round(receivables, 0),
       debtRatio: assets ? round((liabilities / assets) * 100) : null,
@@ -552,8 +657,15 @@ function financialSummary(incomeRows, balanceRows, cashRows) {
     };
   });
   const latest = quarters.at(-1) || {};
-  const yearAgo = quarters.at(-5) || {};
-  const trailing = quarters.slice(-4);
+  const quarterOrdinal = (quarter) => Number(quarter?.date?.slice(0, 4)) * 4 + quarterFromDate(quarter?.date || "0000-00-00") - 1;
+  const latestOrdinal = quarterOrdinal(latest);
+  const yearAgo = quarters.find((quarter) => quarterOrdinal(quarter) === latestOrdinal - 4) || {};
+  let continuousQuarters = quarters.length ? 1 : 0;
+  for (let index = quarters.length - 1; index > 0; index -= 1) {
+    if (quarterOrdinal(quarters[index]) - quarterOrdinal(quarters[index - 1]) !== 1) break;
+    continuousQuarters += 1;
+  }
+  const trailing = continuousQuarters >= 4 ? quarters.slice(-4) : [];
   const completeTtm = trailing.length === 4 && trailing.every((quarter) =>
     finite(quarter.netIncome) && finite(quarter.operatingCashFlow),
   );
@@ -568,13 +680,28 @@ function financialSummary(incomeRows, balanceRows, cashRows) {
   const ttmCashConversion = completeTtm && ttmNetIncome > 0
     ? round(ttmOperatingCashFlow / ttmNetIncome)
     : null;
+  const cashConversion = completeTtm
+    ? ttmCashConversion
+    : latest.cashConversion ?? null;
+  const cashConversionBasis = completeTtm
+    ? ttmNetIncome > 0 ? "TTM" : "TTM-nonpositive-net-income"
+    : finite(latest.cashConversion) ? "latest-quarter" : "insufficient-positive-income";
   const growth = (current, previous) => finite(current) && finite(previous) && Number(previous) !== 0
     ? round((Number(current) / Math.abs(Number(previous)) - 1) * 100)
     : null;
   return {
     quarters: quarters.length,
+    continuousQuarters,
+    sourceCoverage: {
+      incomeRows: incomeRows.length,
+      balanceRows: balanceRows.length,
+      cashflowRows: cashRows.length,
+    },
     period: latest.period || "",
     availableAt: latest.availableAt || "",
+    revenue: latest.revenue ?? null,
+    revenueStatus: latest.revenueStatus || "source-not-returned",
+    revenueBasis: latest.revenueBasis || null,
     eps: latest.eps ?? null,
     epsYoy: growth(latest.eps, yearAgo.eps),
     revenueYoy: growth(latest.revenue, yearAgo.revenue),
@@ -592,8 +719,8 @@ function financialSummary(incomeRows, balanceRows, cashRows) {
     // working-capital swing as the company's normal cash conversion.
     operatingCashFlow: ttmOperatingCashFlow ?? latest.operatingCashFlow ?? null,
     freeCashFlow: ttmFreeCashFlow ?? latest.freeCashFlow ?? null,
-    cashConversion: ttmCashConversion ?? latest.cashConversion ?? null,
-    cashConversionBasis: ttmCashConversion == null ? "latest-quarter" : "TTM",
+    cashConversion,
+    cashConversionBasis,
     ttmNetIncome,
     ttmOperatingCashFlow,
     ttmFreeCashFlow,
@@ -671,6 +798,7 @@ function marginSummary(rows) {
       marginBalance: number(row.MarginPurchaseTodayBalance),
       marginLimit: number(row.MarginPurchaseLimit),
       shortBalance: number(row.ShortSaleTodayBalance),
+      note: clean(row.Note),
     }))
     .filter((row) => finite(row.marginBalance))
     .sort((a, b) => a.date.localeCompare(b.date));
@@ -682,9 +810,12 @@ function marginSummary(rows) {
     days: daily.length,
     date: latest.date || "",
     marginBalance: latest.marginBalance ?? null,
+    marginLimit: latest.marginLimit ?? null,
     marginChange5: change("marginBalance", 5),
     marginChange20: change("marginBalance", 20),
     marginUsage: latest.marginLimit ? round((latest.marginBalance / latest.marginLimit) * 100) : null,
+    financingEligible: finite(latest.marginLimit) ? Number(latest.marginLimit) > 0 : null,
+    note: latest.note || "",
     shortBalance: latest.shortBalance ?? null,
     shortChange5: change("shortBalance", 5),
     shortChange20: change("shortBalance", 20),
@@ -726,25 +857,82 @@ function parseCsvLine(line) {
   return result;
 }
 
-export async function buildTdccSnapshot() {
-  return cached("tdcc-current", 12 * 60 * 60 * 1_000, async () => {
-    const csv = await request(TDCC_HOLDINGS, { format: "text", timeout: 60_000, retries: 1 });
-    const lines = csv.replace(/^\uFEFF/, "").split(/\r?\n/).slice(1).filter(Boolean);
-    const groups = new Map();
-    for (const line of lines) {
-      const [date, symbol, level, people, shares, ratio] = parseCsvLine(line);
-      // TDCC pads many four-digit stock symbols with spaces in the fixed-width
-      // export (for example "2330  ").  Trim every key before validating it.
-      const normalizedSymbol = clean(symbol);
-      const normalizedLevel = clean(level);
-      if (!/^\d{4,6}$/.test(normalizedSymbol)) continue;
-      if (!groups.has(normalizedSymbol)) groups.set(normalizedSymbol, { date: isoDate(date), levels: {} });
-      groups.get(normalizedSymbol).levels[normalizedLevel] = {
-        people: number(people),
-        shares: number(shares),
-        ratio: number(ratio),
-      };
+async function streamTdccGroups(timeout, retries) {
+  return scheduled(TDCC_HOLDINGS, async () => {
+    let lastError;
+    for (let attempt = 0; attempt <= retries; attempt += 1) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeout);
+      try {
+        const response = await fetch(TDCC_HOLDINGS, {
+          headers: {
+            accept: "text/csv,text/plain,*/*",
+            "user-agent": "TaiwanStockSmartPicker/16.3",
+          },
+          signal: controller.signal,
+        });
+        if (!response.ok) {
+          const error = new Error(`上游 API HTTP ${response.status}`);
+          error.status = response.status;
+          throw error;
+        }
+        if (!response.body) throw new Error("TDCC 回應沒有資料串流");
+        const groups = new Map();
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let headerSkipped = false;
+        const consume = (rawLine) => {
+          const line = rawLine.replace(/\r$/, "").replace(/^\uFEFF/, "");
+          if (!line) return;
+          if (!headerSkipped) {
+            headerSkipped = true;
+            return;
+          }
+          const [date, symbol, level, people, shares, ratio] = parseCsvLine(line);
+          const normalizedSymbol = clean(symbol);
+          const normalizedLevel = clean(level);
+          if (!/^\d{4,6}$/.test(normalizedSymbol)) return;
+          if (!groups.has(normalizedSymbol)) groups.set(normalizedSymbol, { date: isoDate(date), levels: {} });
+          groups.get(normalizedSymbol).levels[normalizedLevel] = {
+            people: number(people),
+            shares: number(shares),
+            ratio: number(ratio),
+          };
+        };
+        while (true) {
+          const { done, value } = await reader.read();
+          buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+          let newline;
+          while ((newline = buffer.indexOf("\n")) >= 0) {
+            consume(buffer.slice(0, newline));
+            buffer = buffer.slice(newline + 1);
+          }
+          if (done) break;
+        }
+        consume(buffer);
+        return groups;
+      } catch (error) {
+        lastError = error;
+        const retryable = error?.name === "AbortError" || error?.status === 408 || error?.status === 429 || error?.status >= 500;
+        if (!retryable || attempt === retries) throw error;
+        await wait(1_400 * 2 ** attempt);
+      } finally {
+        clearTimeout(timer);
+      }
     }
+    throw lastError;
+  });
+}
+
+export async function buildTdccSnapshot(options = {}) {
+  const timeout = Math.max(5_000, Number(options.timeout) || 60_000);
+  const retries = Math.max(0, Number.isFinite(Number(options.retries)) ? Number(options.retries) : 1);
+  return cached(`tdcc-current:${timeout}:${retries}`, 12 * 60 * 60 * 1_000, async () => {
+    // Stream the weekly file line by line.  Materialising the whole CSV and a
+    // second array of lines exceeded the Edge worker memory limit and could
+    // stop every other market source from being persisted.
+    const groups = await streamTdccGroups(timeout, retries);
     const bySymbol = {};
     groups.forEach((item, symbol) => {
       const total = item.levels["17"]?.shares;
@@ -880,11 +1068,15 @@ function normalizeBenchmark(rows, fields) {
     .sort((a, b) => a.date.localeCompare(b.date));
 }
 
-export async function buildBenchmarks() {
-  return cached("benchmarks", 6 * 60 * 60 * 1_000, async () => {
+export async function buildBenchmarks(options = {}) {
+  const finmindRetries = options.finmindRetries ?? 2;
+  const allowFinmind = options.allowFinmind !== false;
+  const officialRetries = Math.max(0, Number.isFinite(Number(options.officialRetries)) ? Number(options.officialRetries) : 2);
+  const officialTimeout = Math.max(5_000, Number(options.officialTimeout) || 35_000);
+  return cached(`benchmarks:${finmindRetries}:${officialRetries}:${officialTimeout}:${allowFinmind ? "fallback" : "official-only"}`, 6 * 60 * 60 * 1_000, async () => {
     const settled = await Promise.allSettled([
-      request(`${TWSE_OPEN}/indicesReport/MI_5MINS_HIST`),
-      request(`${TPEX_OPEN}/tpex_index`),
+      request(`${TWSE_OPEN}/indicesReport/MI_5MINS_HIST`, { timeout: officialTimeout, retries: officialRetries }),
+      request(`${TPEX_OPEN}/tpex_index`, { timeout: officialTimeout, retries: officialRetries }),
     ]);
     let listed = settled[0].status === "fulfilled"
       ? normalizeBenchmark(objectRows(settled[0].value), { close: "ClosingIndex" })
@@ -896,12 +1088,12 @@ export async function buildBenchmarks() {
     // The official OpenAPI index feeds may only expose the current month.  Do
     // not pretend 7–10 observations are a 20/60-day benchmark; use FinMind's
     // documented total-return-index history as the bounded fallback.
-    if (listed.length < 65 || otc.length < 65) {
+    if (allowFinmind && (listed.length < 65 || otc.length < 65)) {
       const endDate = new Date().toISOString().slice(0, 10);
       const startDate = monthsAgo(8);
       const historical = await Promise.allSettled([
-        listed.length < 65 ? finmind("TaiwanStockTotalReturnIndex", "TAIEX", startDate, endDate) : Promise.resolve([]),
-        otc.length < 65 ? finmind("TaiwanStockTotalReturnIndex", "TPEx", startDate, endDate) : Promise.resolve([]),
+        listed.length < 65 ? finmind("TaiwanStockTotalReturnIndex", "TAIEX", startDate, endDate, { retries: finmindRetries }) : Promise.resolve([]),
+        otc.length < 65 ? finmind("TaiwanStockTotalReturnIndex", "TPEx", startDate, endDate, { retries: finmindRetries }) : Promise.resolve([]),
       ]);
       const listedHistory = historical[0].status === "fulfilled"
         ? normalizeBenchmark(historical[0].value, { close: "price" })
@@ -929,7 +1121,11 @@ export async function buildBenchmarks() {
 
 export async function buildEtfProfiles() {
   return cached("etf-profiles", 12 * 60 * 60 * 1_000, async () => {
-    const rows = objectRows(await request(`${TWSE_OPEN}/opendata/t187ap47_L`));
+    const settled = await Promise.allSettled([
+      request(`${TWSE_OPEN}/opendata/t187ap47_L`),
+      request("https://mis.twse.com.tw/stock/data/all_etf.txt"),
+    ]);
+    const rows = settled[0].status === "fulfilled" ? objectRows(settled[0].value) : [];
     const bySymbol = {};
     rows.forEach((row) => {
       const symbol = clean(row["基金代號"]);
@@ -937,50 +1133,125 @@ export async function buildEtfProfiles() {
       const name = clean(row["基金簡稱"] ?? row["基金中文名稱"]);
       const type = clean(row["基金類型"]);
       const note = clean(row["備註"]);
-      const combined = `${name} ${type} ${note}`;
+      const benchmark = clean(row["標的指數/追蹤指數名稱"]);
+      const direction = etfDirectionFlags({ name, type, note, benchmark });
       bySymbol[symbol] = {
         publishedAt: isoDate(row["出表日期"]),
         fundType: type,
-        benchmark: clean(row["標的指數/追蹤指數名稱"]),
+        benchmark,
         foreignExposure: truthyFlag(row["是否包含國外成分股"]),
         units: number(row["發行單位數/轉換數"]),
         inceptionDate: isoDate(row["成立日期"]),
         listingDate: isoDate(row["上市日期"]),
-        leveraged: /槓桿|正2|兩倍|2X/i.test(combined),
-        inverse: /反向|反1|-1X/i.test(combined),
+        leveraged: direction.leveraged,
+        inverse: direction.inverse,
         bond: /債券|債/i.test(`${type} ${name}`),
       };
     });
-    return { bySymbol, count: Object.keys(bySymbol).length };
+    const findEtfRows = (value, depth = 0) => {
+      if (depth > 4 || value == null) return [];
+      if (Array.isArray(value)) {
+        const direct = value.filter((row) => row && typeof row === "object" && ETF_SYMBOL.test(clean(row.a)));
+        return direct.length ? direct : value.flatMap((item) => findEtfRows(item, depth + 1));
+      }
+      if (typeof value === "object") return Object.values(value).flatMap((item) => findEtfRows(item, depth + 1));
+      return [];
+    };
+    const navRows = settled[1].status === "fulfilled" ? findEtfRows(settled[1].value) : [];
+    navRows.forEach((row) => {
+      const symbol = clean(row.a);
+      if (!symbol) return;
+      const current = bySymbol[symbol] || {};
+      bySymbol[symbol] = {
+        ...current,
+        estimatedNav: number(row.f),
+        premiumDiscount: number(row.g),
+        previousNav: number(row.h),
+        navUpdatedAt: [clean(row.i), clean(row.j)].filter(Boolean).join(" "),
+        navSource: "TWSE MIS all_etf",
+      };
+    });
+    return {
+      bySymbol,
+      count: Object.keys(bySymbol).length,
+      coverage: { profile: rows.length > 0, premiumDiscount: navRows.length > 0 },
+    };
   });
 }
 
+function etfDirectionFlags({ name = "", type = "", note = "", benchmark = "" } = {}) {
+  // MOPS commonly uses the umbrella type `槓桿／反向指數股票型基金`
+  // for both long 2x and inverse products.  Treating that generic type as a
+  // direction made every 正2 ETF look inverse, so only use an unambiguous type
+  // plus the fund name, note and benchmark when deciding direction.
+  const genericUmbrella = /槓桿\s*[／/]\s*反向|反向\s*[／/]\s*槓桿/i.test(type);
+  const typeDirection = genericUmbrella ? "" : type;
+  const directionText = `${name} ${note} ${benchmark} ${typeDirection}`;
+  return {
+    leveraged: /正(?:向)?\s*2|兩倍|2\s*倍|2X|槓桿/i.test(directionText),
+    inverse: /反向|反\s*1|負\s*一倍|-1X/i.test(directionText),
+  };
+}
+
 export async function buildDeepData(symbol, instrumentType = "股票", market = "上市", options = {}) {
-  if (!/^\d{4,6}$/.test(symbol)) throw new Error("股票代號格式不正確");
-  const isEtf = instrumentType === "ETF" || /^00\d{2,4}$/.test(symbol);
-  return cached(`deep:${symbol}:${isEtf ? "etf" : "stock"}`, 8 * 60 * 60 * 1_000, async () => {
+  if (!VALID_SYMBOL.test(symbol)) throw new Error("股票代號格式不正確");
+  const isEtf = instrumentType === "ETF" || ETF_SYMBOL.test(symbol);
+  const cacheKey = [
+    "deep",
+    symbol,
+    isEtf ? "etf" : "stock",
+    options.expectedRevenuePeriod || "no-revenue-period",
+    options.expectedFinancialPeriod || "no-financial-period",
+    options.expectedTradeDate || options.currentQuote?.trade_date || options.currentQuote?.priceDate || "no-trade-date",
+    options.finmindRetries ?? 2,
+  ].join(":");
+  const factory = async () => {
     const endDate = new Date().toISOString().slice(0, 10);
-    const pricePromise = finmind("TaiwanStockPrice", symbol, monthsAgo(18), endDate);
-    const benchmarksPromise = buildBenchmarks();
+    const finmindRetries = options.finmindRetries ?? 2;
+    // TaiwanStockPriceAdj is a paid FinMind dataset and returns HTTP 400 for a
+    // free-level token.  Using it unconditionally made every scheduled deep
+    // analysis fail before technical indicators could be calculated.  The raw
+    // daily feed is available at the documented free level; corporate-action
+    // discontinuities remain guarded by `jumpAnomaly`, which disables the
+    // technical score instead of treating the artificial jump as momentum.
+    const pricePromise = finmind("TaiwanStockPrice", symbol, monthsAgo(18), endDate, { retries: finmindRetries });
+    const benchmarksPromise = options.benchmarks
+      ? Promise.resolve(options.benchmarks)
+      : buildBenchmarks({ finmindRetries });
     const profilePromise = isEtf ? buildEtfProfiles() : Promise.resolve({ bySymbol: {} });
-    const tdccPromise = isEtf ? Promise.resolve({ bySymbol: {}, date: "" }) : buildTdccSnapshot().catch(() => ({ bySymbol: {}, date: "" }));
+    const tdccPromise = isEtf
+      ? Promise.resolve({ bySymbol: {}, date: "" })
+      : options.holdings !== undefined
+        ? Promise.resolve({ bySymbol: { [symbol]: options.holdings }, date: options.holdings?.date || "" })
+        : buildTdccSnapshot();
     const reuseCompatible = options.reuse?.analysisVersion === ANALYSIS_VERSION;
-    const reuseRevenue = reuseCompatible && !isEtf && options.reuse?.revenue &&
+    const reusableRevenue = options.reuse?.revenue;
+    const reusableFinancial = options.reuse?.financial;
+    const reuseDiagnostics = options.reuse?.sourceDiagnostics || {};
+    const reusableSource = (key) => ["ok", "reused"].includes(reuseDiagnostics?.[key]?.status);
+    const reuseRevenue = reuseCompatible && !isEtf && reusableRevenue?.period &&
+      finite(reusableRevenue.revenue) && Number(reusableRevenue.months) > 0 &&
+      reusableSource("revenue") &&
       (!options.expectedRevenuePeriod || options.reuse.revenue.period === options.expectedRevenuePeriod)
       ? options.reuse.revenue
       : null;
-    const reuseFinancial = reuseCompatible && !isEtf && options.reuse?.financial &&
+    const financialCoverage = reusableFinancial?.sourceCoverage || {};
+    const reuseFinancial = reuseCompatible && !isEtf && reusableFinancial?.period &&
+      Number(reusableFinancial.quarters) > 0 &&
+      Number(financialCoverage.incomeRows) > 0 && Number(financialCoverage.balanceRows) > 0 &&
+      Number(financialCoverage.cashflowRows) > 0 &&
+      ["income", "balance", "cashflow"].every(reusableSource) &&
       (!options.expectedFinancialPeriod || options.reuse.financial.period === options.expectedFinancialPeriod)
       ? options.reuse.financial
       : null;
     const companyPromises = isEtf ? [] : [
-      reuseRevenue ? Promise.resolve([]) : finmind("TaiwanStockMonthRevenue", symbol, monthsAgo(48), endDate),
-      reuseFinancial ? Promise.resolve([]) : finmind("TaiwanStockFinancialStatements", symbol, monthsAgo(52), endDate),
-      reuseFinancial ? Promise.resolve([]) : finmind("TaiwanStockBalanceSheet", symbol, monthsAgo(52), endDate),
-      reuseFinancial ? Promise.resolve([]) : finmind("TaiwanStockCashFlowsStatement", symbol, monthsAgo(52), endDate),
-      finmind("TaiwanStockInstitutionalInvestorsBuySell", symbol, monthsAgo(3), endDate),
-      finmind("TaiwanStockMarginPurchaseShortSale", symbol, monthsAgo(3), endDate),
-      finmind("TaiwanStockSecuritiesLending", symbol, monthsAgo(3), endDate),
+      reuseRevenue ? Promise.resolve([]) : finmind("TaiwanStockMonthRevenue", symbol, monthsAgo(48), endDate, { retries: finmindRetries }),
+      reuseFinancial ? Promise.resolve([]) : finmind("TaiwanStockFinancialStatements", symbol, monthsAgo(52), endDate, { retries: finmindRetries }),
+      reuseFinancial ? Promise.resolve([]) : finmind("TaiwanStockBalanceSheet", symbol, monthsAgo(52), endDate, { retries: finmindRetries }),
+      reuseFinancial ? Promise.resolve([]) : finmind("TaiwanStockCashFlowsStatement", symbol, monthsAgo(52), endDate, { retries: finmindRetries }),
+      finmind("TaiwanStockInstitutionalInvestorsBuySell", symbol, monthsAgo(3), endDate, { retries: finmindRetries }),
+      finmind("TaiwanStockMarginPurchaseShortSale", symbol, monthsAgo(3), endDate, { retries: finmindRetries }),
+      finmind("TaiwanStockSecuritiesLending", symbol, monthsAgo(3), endDate, { retries: finmindRetries }),
     ];
     const settled = await Promise.allSettled([
       pricePromise,
@@ -990,7 +1261,59 @@ export async function buildDeepData(symbol, instrumentType = "股票", market = 
       ...companyPromises,
     ]);
     if (settled[0].status !== "fulfilled") throw settled[0].reason;
-    const prices = normalizePrice(settled[0].value).slice(-280);
+    const diagnostic = (index, label, reused = false, previous = null) => {
+      if (reused) return {
+        ...(previous || {}),
+        label,
+        status: "reused",
+        reusedFromStatus: previous?.status || null,
+        retryable: false,
+      };
+      const entry = settled[index];
+      if (entry?.status === "fulfilled") {
+        const rowCount = objectRows(entry.value).length;
+        return { label, status: rowCount ? "ok" : "empty-no-history", rows: rowCount, retryable: false };
+      }
+      const statusCode = Number(entry?.reason?.status) || null;
+      return {
+        label,
+        status: "upstream-error",
+        statusCode,
+        retryable: statusCode === 402 || statusCode === 408 || statusCode === 429 || statusCode >= 500 || entry?.reason?.name === "AbortError",
+        message: clean(entry?.reason?.message).slice(0, 240),
+      };
+    };
+    const sourceDiagnostics = isEtf ? {
+      price: diagnostic(0, "TaiwanStockPrice"),
+      benchmark: diagnostic(1, "market benchmark"),
+      profile: diagnostic(2, "ETF profile"),
+    } : {
+      price: diagnostic(0, "TaiwanStockPrice"),
+      benchmark: diagnostic(1, "market benchmark"),
+      holdings: diagnostic(3, "TDCC holdings", options.holdings !== undefined),
+      revenue: diagnostic(4, "TaiwanStockMonthRevenue", Boolean(reuseRevenue), reuseDiagnostics.revenue),
+      income: diagnostic(5, "TaiwanStockFinancialStatements", Boolean(reuseFinancial), reuseDiagnostics.income),
+      balance: diagnostic(6, "TaiwanStockBalanceSheet", Boolean(reuseFinancial), reuseDiagnostics.balance),
+      cashflow: diagnostic(7, "TaiwanStockCashFlowsStatement", Boolean(reuseFinancial), reuseDiagnostics.cashflow),
+      institutional: diagnostic(8, "TaiwanStockInstitutionalInvestorsBuySell"),
+      margin: diagnostic(9, "TaiwanStockMarginPurchaseShortSale"),
+      lending: diagnostic(10, "TaiwanStockSecuritiesLending"),
+    };
+    if (!isEtf) {
+      const essentialFailure = ["revenue", "income", "balance", "cashflow", "institutional", "margin"]
+        .map((key) => sourceDiagnostics[key])
+        .find((entry) => entry.status === "upstream-error");
+      if (essentialFailure) {
+        const error = new Error(`${essentialFailure.label}: ${essentialFailure.message || "上游資料取得失敗"}`);
+        error.status = essentialFailure.statusCode;
+        error.retryable = essentialFailure.retryable;
+        throw error;
+      }
+    }
+    const prices = mergeCurrentQuote(
+      normalizePrice(settled[0].value),
+      options.currentQuote,
+    ).slice(-280);
     const benchmarks = settled[1].status === "fulfilled" ? settled[1].value : { listed: [], otc: [] };
     const benchmark = market === "上櫃" ? benchmarks.otc : benchmarks.listed;
     const output = {
@@ -998,18 +1321,21 @@ export async function buildDeepData(symbol, instrumentType = "股票", market = 
       symbol,
       instrumentType: isEtf ? "ETF" : "股票",
       market,
-      source: "FinMind 歷史公開資料／TWSE／TPEx／TDCC",
+      source: "FinMind 歷史價量／TWSE／TPEx／TDCC（重大價格不連續會停用技術評分）",
       fetchedAt: new Date().toISOString(),
       price: priceSummary(prices, benchmark),
       priceHistory: prices,
       benchmarkCoverage: benchmarks.coverage || {},
+      sourceDiagnostics,
       missing: [],
     };
+    if (!output.price.sufficient) output.missing.push(`歷史價量僅 ${output.price.rows || 0} 日（未滿 120 日）`);
     if (isEtf) {
       const profiles = settled[2].status === "fulfilled" ? settled[2].value : { bySymbol: {} };
       output.etf = profiles.bySymbol[symbol] || null;
       if (!output.etf) output.missing.push("ETF 基金基本資料");
-      output.missing.push("淨值折溢價", "追蹤誤差", "經理費與內扣費用", "成分股集中度");
+      if (!finite(output.etf?.premiumDiscount)) output.missing.push("淨值折溢價");
+      output.missing.push("追蹤誤差", "經理費與內扣費用", "成分股集中度");
       return output;
     }
     const rowsAt = (index) => settled[index]?.status === "fulfilled" ? settled[index].value : [];
@@ -1028,6 +1354,31 @@ export async function buildDeepData(symbol, instrumentType = "股票", market = 
       revenue: Boolean(reuseRevenue),
       financial: Boolean(reuseFinancial),
     };
+    if (options.expectedRevenuePeriod &&
+        (!output.revenue?.period || output.revenue.period < options.expectedRevenuePeriod)) {
+      sourceDiagnostics.revenue = {
+        ...sourceDiagnostics.revenue,
+        status: "stale-source-period",
+        expectedPeriod: options.expectedRevenuePeriod,
+        actualPeriod: output.revenue?.period || null,
+      };
+      output.missing.push(`最新月營收期別落後（來源 ${output.revenue?.period || "無"}／應為 ${options.expectedRevenuePeriod}）`);
+    }
+    if (options.expectedFinancialPeriod &&
+        (!output.financial?.period || output.financial.period < options.expectedFinancialPeriod)) {
+      sourceDiagnostics.income = {
+        ...sourceDiagnostics.income,
+        status: "stale-source-period",
+        expectedPeriod: options.expectedFinancialPeriod,
+        actualPeriod: output.financial?.period || null,
+      };
+      output.missing.push(`最新財報期別落後（來源 ${output.financial?.period || "無"}／應為 ${options.expectedFinancialPeriod}）`);
+    }
+    if (!finite(output.financial?.revenue)) {
+      output.missing.push(output.financial?.revenueStatus === "source-not-comparable"
+        ? "最新季營業額（該產業報表無可比單一營業額）"
+        : "最新季營業額");
+    }
     [
       [output.revenue.months >= 24, "24～36 個月月營收"],
       [output.financial.quarters >= 8, "8～12 季財報"],
@@ -1036,11 +1387,14 @@ export async function buildDeepData(symbol, instrumentType = "股票", market = 
       [Boolean(output.holdings), "集保大戶／散戶結構"],
     ].forEach(([available, label]) => { if (!available) output.missing.push(label); });
     return output;
-  });
+  };
+  return options.bypassCache
+    ? factory()
+    : cached(cacheKey, 8 * 60 * 60 * 1_000, factory);
 }
 
 export async function buildPriceHistory(symbol, market = "上市", months = 18) {
-  if (!/^\d{4,6}$/.test(symbol)) throw new Error("股票代號格式不正確");
+  if (!VALID_SYMBOL.test(symbol)) throw new Error("股票代號格式不正確");
   const requestedMonths = clamp(Number(months) || 18, 6, 24);
   return cached(`history:${symbol}:${market}:${requestedMonths}`, 60 * 60 * 1_000, async () => {
     const endDate = new Date().toISOString().slice(0, 10);
@@ -1052,7 +1406,7 @@ export async function buildPriceHistory(symbol, market = "上市", months = 18) 
       mode: "live",
       symbol,
       market,
-      source: `FinMind TaiwanStockPrice（${market}）`,
+      source: `FinMind TaiwanStockPrice 歷史行情（${market}）`,
       count: history.length,
       period: history.at(-1)?.date || null,
       history,
@@ -1062,10 +1416,14 @@ export async function buildPriceHistory(symbol, market = "上市", months = 18) 
 
 export const deepDataInternals = {
   normalizePrice,
+  mergeCurrentQuote,
   priceSummary,
   normalizeRevenue,
   revenueSummary,
   financialSummary,
   institutionalSummary,
   marginSummary,
+  etfDirectionFlags,
+  validSymbol: (symbol) => VALID_SYMBOL.test(String(symbol || "")),
+  isEtfSymbol: (symbol) => ETF_SYMBOL.test(String(symbol || "")),
 };

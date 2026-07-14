@@ -1,0 +1,9 @@
+{
+  "version": "16.0",
+  "generatedAt": "2026-07-13T19:28:28.779Z",
+  "status": "insufficient_history",
+  "snapshotCount": 0,
+  "minimumSnapshots": 25,
+  "noLookAhead": true,
+  "message": "目前有 0 個點時快照；至少 25 個不同交易日後才產生正式回測。"
+}

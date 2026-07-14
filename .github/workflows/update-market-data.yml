@@ -1,0 +1,41 @@
+name: Update Taiwan market snapshot
+
+on:
+  workflow_dispatch:
+  schedule:
+    # 22:30 Asia/Taipei. The collectors verify each source's own data date.
+    - cron: "30 14 * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: market-data-snapshot
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Collect and score one bounded candidate pool
+        env:
+          FINMIND_TOKEN: ${{ secrets.FINMIND_TOKEN }}
+          SNAPSHOT_COMPANY_LIMIT: 10
+          SNAPSHOT_ETF_LIMIT: 10
+        run: npm run update-data
+      - name: Rebuild point-in-time backtest when enough snapshots exist
+        run: npm run backtest:snapshots
+      - name: Validate generated files
+        run: npm test
+      - name: Commit changed snapshots
+        run: |
+          git config user.name "tw-stock-data-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add public/data/latest.json public/data/backtest.json data/snapshots
+          git diff --cached --quiet || git commit -m "data: update Taiwan market snapshot"
+          git push

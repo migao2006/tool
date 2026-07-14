@@ -25,6 +25,21 @@ const [sync, baseSchema, schema, grants, cron, acceleratedCron, leases, quota, p
   readFile(new URL("./backtest-snapshots.mjs", import.meta.url), "utf8"),
 ]);
 
+const [aiEdge, aiShared, aiMigration, aiExpiryPolicy] = await Promise.all([
+  readFile(new URL("../supabase/functions/twss-ai-research/index.ts", import.meta.url), "utf8"),
+  readFile(new URL("../supabase/functions/_shared/ai-research.js", import.meta.url), "utf8"),
+  readFile(new URL("../supabase/migrations/20260714213000_add_independent_ai_research.sql", import.meta.url), "utf8"),
+  readFile(new URL("../supabase/migrations/20260714220000_hide_expired_ai_research.sql", import.meta.url), "utf8"),
+]);
+const aiInternalPolicies = await readFile(
+  new URL("../supabase/migrations/20260714214500_explicit_ai_internal_policies.sql", import.meta.url),
+  "utf8",
+);
+const aiVaultReader = await readFile(
+  new URL("../supabase/migrations/20260715060000_add_vault_gemini_secret_reader.sql", import.meta.url),
+  "utf8",
+);
+
 assert.match(sync, /FINMIND_AUTHENTICATED \? 22 : 10/, "reused company batches must double throughput inside the same request slice");
 assert.match(sync, /FINMIND_AUTHENTICATED \? 23 : 19/, "ETF batches must use their fair rolling-hour slice");
 assert.match(sync, /twss_reserve_api_batch/, "every persistent batch must reserve the shared FinMind budget");
@@ -127,6 +142,37 @@ assert.match(exporter, /minimumGroupRatio: 0\.75/);
 assert.match(backtest, /snapshotCoverage\?\.backtestReady === true/, "partial daily rankings must never enter the point-in-time backtest");
 assert.match(config, /verify_jwt = false/);
 assert.match(config, /entrypoint = "\.\/functions\/twss-sync-batch\/index\.ts"/);
+assert.match(config, /\[functions\.twss-ai-research\][\s\S]*verify_jwt = false/);
+assert.match(config, /entrypoint = "\.\/functions\/twss-ai-research\/index\.ts"/);
 assert.match(trim, /analysis - 'priceHistory'/);
+
+assert.match(aiMigration, /create table if not exists public\.ai_stock_research/);
+assert.match(aiMigration, /create table if not exists public\.ai_research_runs/);
+assert.match(aiMigration, /create table if not exists public\.ai_research_usage/);
+assert.match(aiMigration, /alter table public\.ai_stock_research enable row level security/);
+assert.match(aiMigration, /for select to anon, authenticated using \(status = 'ready'\)/);
+assert.match(aiMigration, /grant select \([\s\S]*analysis[\s\S]*\) on public\.ai_stock_research to anon, authenticated/);
+assert.match(aiMigration, /twss_reserve_ai_calls/);
+assert.match(aiMigration, /greatest\(1, least\(20/);
+assert.match(aiMigration, /'20 10 \* \* 1-5'/);
+assert.match(aiMigration, /vault\.decrypted_secrets/);
+assert.match(aiInternalPolicies, /for all to service_role using \(true\) with check \(true\)/);
+assert.doesNotMatch(aiInternalPolicies, /to anon|to authenticated/);
+assert.match(aiExpiryPolicy, /expires_at is null or expires_at > now\(\)/);
+assert.match(aiExpiryPolicy, /for select to anon, authenticated/);
+assert.match(aiExpiryPolicy, /body := '\{\}'::jsonb/);
+assert.match(aiVaultReader, /from vault\.decrypted_secrets/);
+assert.match(aiVaultReader, /to service_role/);
+assert.doesNotMatch(aiVaultReader, /grant execute[\s\S]*to anon|grant execute[\s\S]*to authenticated/);
+assert.match(aiEdge, /x-twss-sync-token/);
+assert.match(aiEdge, /GEMINI_API_KEY/);
+assert.match(aiEdge, /configured: false/);
+assert.match(aiEdge, /selectAiCandidates/);
+assert.match(aiEdge, /twss_reserve_ai_calls/);
+assert.doesNotMatch(aiEdge, /opportunity_score_history/);
+assert.doesNotMatch(aiEdge, /stock_analysis_cache\?on_conflict/);
+assert.match(aiShared, /quantitativeResultReadOnly/);
+assert.match(aiShared, /不得覆寫、重算/);
+assert.match(marketHandler, /readAiResearch\(symbol\)/);
 
 console.log("Backend pipeline tests passed: bounded cursors, three schedules, Vault auth, RLS, and read-only grants");

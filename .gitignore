@@ -3,4 +3,5 @@ dist/
 .vercel/
 .DS_Store
 *.log
+artifacts/
 site.tar.gz

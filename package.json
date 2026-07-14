@@ -1,6 +1,6 @@
 {
   "name": "taiwan-stock-smart-picker",
-  "version": "16.3.0",
+  "version": "16.4.0",
   "displayName": "台股智慧選股",
   "private": true,
   "type": "module",
@@ -20,6 +20,7 @@
     "test:backend": "node scripts/backend-store-test.mjs",
     "test:data": "node scripts/deep-data-test.mjs",
     "test:engine": "node scripts/engine-test.mjs",
-    "test": "npm run build && npm run validate && npm run test:pipeline && npm run test:backend && npm run test:data && npm run test:engine && npm run smoke"
+    "test:ai": "node scripts/ai-research-test.mjs",
+    "test": "npm run build && npm run validate && npm run test:pipeline && npm run test:backend && npm run test:data && npm run test:engine && npm run test:ai && npm run smoke"
   }
 }

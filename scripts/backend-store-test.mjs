@@ -54,10 +54,31 @@ globalThis.fetch = async (input, options = {}) => {
     }
     return Response.json(groupRows[group]);
   }
+  if (url.pathname.endsWith("/ai_stock_research")) {
+    if (url.searchParams.get("symbol") === "eq.2330") {
+      return Response.json([{
+        id: 1, symbol: "2330", group_name: "listed", data_date: "2026-07-13",
+        provider: "google-gemini", model: "gemini-2.5-flash", schema_version: "1.0",
+        selected_reason: "限量正式候選", verdict: "偏多觀察", ai_confidence: 78,
+        analysis: { verdict: "偏多觀察", aiConfidence: 78, summary: "測試摘要" },
+        generated_at: "2026-07-14T10:20:00Z", expires_at: "2026-07-28T10:20:00Z",
+      }]);
+    }
+    if (url.searchParams.get("symbol") === "eq.2454") {
+      return Response.json([{
+        id: 2, symbol: "2454", group_name: "listed", data_date: "2026-06-01",
+        provider: "google-gemini", model: "gemini-2.5-flash", schema_version: "1.0",
+        selected_reason: "限量正式候選", verdict: "中性觀察", ai_confidence: 70,
+        analysis: { verdict: "中性觀察", aiConfidence: 70, summary: "過期摘要" },
+        generated_at: "2026-06-01T10:20:00Z", expires_at: "2026-06-15T10:20:00Z",
+      }]);
+    }
+    return Response.json([]);
+  }
   return Response.json({ error: "unmocked" }, { status: 404 });
 };
 
-const { readBackendAnalysis, readBackendHistory, readBackendRankings, readBackendStatus } = await import("../src/backend-store.js");
+const { readAiResearch, readBackendAnalysis, readBackendHistory, readBackendRankings, readBackendStatus } = await import("../src/backend-store.js");
 
 const rankings = await readBackendRankings(100);
 assert.equal(rankings.mode, "live");
@@ -80,6 +101,16 @@ await assert.rejects(() => readBackendHistory("6488' or true"), /格式不正確
 const analysis = await readBackendAnalysis("2330");
 assert.equal(analysis.stock.name, "台積電");
 assert.equal(analysis.price.lastDate, "2026-07-13");
+const aiResearch = await readAiResearch("2330");
+assert.equal(aiResearch.available, true);
+assert.equal(aiResearch.analysis.summary, "測試摘要");
+assert.equal(aiResearch.aiConfidence, 78);
+assert.equal("inputHash" in aiResearch, false, "public AI endpoint must not expose prompt hashes or input snapshots");
+const noAiResearch = await readAiResearch("6488");
+assert.deepEqual(noAiResearch, { available: false, symbol: "6488", reason: "not-selected-or-not-generated" });
+const expiredAiResearch = await readAiResearch("2454");
+assert.deepEqual(expiredAiResearch, { available: false, symbol: "2454", reason: "expired" });
+await assert.rejects(() => readAiResearch("2330' or true"), /格式不正確/);
 
 const status = await readBackendStatus();
 assert.equal(status.persistent, true);

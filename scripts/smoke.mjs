@@ -202,6 +202,22 @@ const fullFetch = async (input) => {
       transactions: 2_000,
     })).reverse());
   }
+  if (url.includes("lfkdkdyaatdlizryiyon.supabase.co/rest/v1/ai_stock_research")) {
+    const symbol = new URL(url).searchParams.get("symbol")?.replace(/^eq\./, "");
+    if (symbol !== "2454") return json([]);
+    return json([{
+      id: 1, symbol: "2454", group_name: "listed", data_date: "2026-07-14",
+      provider: "google-gemini", model: "gemini-2.5-flash", schema_version: "1.0",
+      selected_reason: "限量正式候選", verdict: "中性觀察", ai_confidence: 74,
+      analysis: {
+        verdict: "中性觀察", aiConfidence: 74, summary: "量價與基本面需持續互相驗證。",
+        positives: [{ title: "營運", evidence: "營收維持成長" }], risks: [],
+        scenarios: { bullish: { condition: "站穩", observation: "續強" }, neutral: { condition: "整理", observation: "觀察" }, bearish: { condition: "跌破", observation: "風險升高" } },
+        watchItems: ["月營收"], dataWarnings: [],
+      },
+      generated_at: "2026-07-14T10:20:00Z", expires_at: "2026-07-28T10:20:00Z",
+    }]);
+  }
   if (url.includes("supabase.co/functions/v1/twss-sync-batch") && url.includes("mode=history")) {
     const symbol = new URL(url).searchParams.get("symbol");
     return json({
@@ -239,7 +255,8 @@ async function payload(path) {
 }
 
 const health = await payload("/api/health");
-assert.equal(health.version, "16.3");
+assert.equal(health.version, "16.4");
+assert.equal(health.aiResearch.affectsScores, false);
 assert.deepEqual(health.markets, ["上市股票", "上櫃股票", "ETF"]);
 
 const stocks = await payload("/api/market-data?type=stocks&refresh=1");
@@ -309,7 +326,7 @@ assert.equal(listedFinancial.roe, 100);
 assert.equal(listedFinancial.roeEstimated, true);
 
 const sources = await payload("/api/market-data?type=sources");
-assert.equal(sources.sources.length, 6);
+assert.equal(sources.sources.length, 7);
 assert.equal(sources.auditedAt, "2026-07-14");
 
 const otcHistory = await payload("/api/market-data?type=history&symbol=4101&market=上櫃&months=18&refresh=1");
@@ -324,7 +341,14 @@ assert.equal(onDemandHistory.count, 130);
 assert.equal(onDemandHistory.history.length, 130);
 assert.match(onDemandHistory.source, /按需補抓/);
 
-const appResponse = await worker.fetch(new Request("https://example.test/app.js?v=16.3-ui5"), {}, {});
+const aiResearch = await payload("/api/market-data?type=ai-research&symbol=2454");
+assert.equal(aiResearch.available, true);
+assert.equal(aiResearch.analysis.summary, "量價與基本面需持續互相驗證。");
+assert.equal(aiResearch.aiConfidence, 74);
+const missingAiResearch = await payload("/api/market-data?type=ai-research&symbol=4101");
+assert.equal(missingAiResearch.available, false);
+
+const appResponse = await worker.fetch(new Request("https://example.test/app.js?v=16.4-ai1"), {}, {});
 const appSource = await appResponse.text();
 assert.match(appSource, /官方日期已核對/);
 assert.match(appSource, /各資料來源日期/);
@@ -341,11 +365,15 @@ assert.match(appSource, /交易日不足 60 日/, "partial histories must not be
 assert.match(appSource, /120000,0/, "opening one detail must not automatically consume a second repair attempt");
 assert.match(appSource, /aria-label','關閉視窗/);
 assert.match(appSource, /event\.key==='Escape'/);
-assert.match(appSource, /sw\.js\?v=16\.3-ui5/);
+assert.match(appSource, /sw\.js\?v=16\.4-ai1/);
+assert.match(appSource, /Gemini AI 研究摘要/);
+assert.match(appSource, /不影響機會分數/);
+assert.match(appSource, /目前未列入限量 AI 精選名單/);
+assert.match(appSource, /type=ai-research/);
 assert.doesNotMatch(appSource, /廣告|促銷|VIP|贊助|免費試用|立即購買|解鎖/);
 assert.doesNotMatch(appSource, /_\=\$\{Date\.now\(\)\}/);
 
-const smartResponse = await worker.fetch(new Request("https://example.test/smart.js?v=16.3-ui5"), {}, {});
+const smartResponse = await worker.fetch(new Request("https://example.test/smart.js?v=16.4-ai1"), {}, {});
 const smartSource = await smartResponse.text();
 assert.match(smartSource, /機會股排行/);
 assert.match(smartSource, /風險排除 → 成長確認 → 籌碼確認 → 價量進場判斷/);
@@ -365,10 +393,11 @@ assert.match(smartSource, /後端持續累積/);
 assert.match(smartSource, /舊模型快照不作為 v16\.3 正式候選/);
 assert.doesNotMatch(smartSource, /廣告|促銷|VIP|贊助|免費試用|立即購買|解鎖/);
 
-const stylesResponse = await worker.fetch(new Request("https://example.test/styles.css?v=16.3-ui5"), {}, {});
+const stylesResponse = await worker.fetch(new Request("https://example.test/styles.css?v=16.4-ai1"), {}, {});
 const stylesSource = await stylesResponse.text();
 assert.match(stylesSource, /min-width:48px/);
 assert.match(stylesSource, /max-height:min\(76dvh,640px\)/);
+assert.match(stylesSource, /\.ai-card/);
 
 const latestResponse = await worker.fetch(new Request("https://example.test/data/latest.json?v=16"), {}, {});
 assert.equal(latestResponse.ok, true);

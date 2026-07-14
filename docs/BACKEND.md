@@ -1,4 +1,4 @@
-# v16.3 持久化後端
+# v16.4 持久化後端（量化核心仍為 v16.3）
 
 這一版把「一次只深度驗證 10 檔」改成可續跑的資料管線。GitHub 靜態快照仍是前端備援；正式頁面會合併 Supabase 已累積的深度結果，因此完成檔數會隨排程增加，而不是每次從零開始。
 
@@ -33,6 +33,7 @@
 | 上市深度 | 每小時 01、21、41 分 | 每小時 01、21、41 分 | 冷資料最多 6；可重用 10；有 Token 時 11／22 |
 | 上櫃深度 | 每小時 08、28、48 分 | 每小時 08、28、48 分 | 冷資料最多 6；可重用 10；有 Token 時 11／22 |
 | ETF 深度 | 每小時 15、35、55 分 | 每小時 15、35、55 分 | 最多 19；有 Token 23 |
+| Gemini 獨立摘要 | 平日 10:20 | 平日 18:20 | 預設 12，硬上限 20 |
 
 台灣與 UTC 的分鐘相同，只有小時相差 8 小時。三組錯開 6～7 分鐘；FinMind 使用兩個通道並以 0.5 秒錯開啟動。每批開始前會透過資料庫 advisory lock 統計最近 60 分鐘的所有保留量，無 Token 上限 300、有 Token 上限 600；額度不足就縮小批次或等待，不會在整點邊界超額。此上限已依 [FinMind 官方說明](https://finmind.github.io/quickstart/) 核對。
 
@@ -76,9 +77,12 @@ supabase link --project-ref lfkdkdyaatdlizryiyon
 supabase db push --dry-run --include-all
 supabase db push --include-all
 supabase functions deploy twss-sync-batch
+supabase functions deploy twss-ai-research
 ```
 
 `20260714040000_base_schema.sql` 使用 `create table if not exists`、policy 存在檢查與可重複的權限設定，因此補套到既有專案不會清空資料。不要使用 `db reset --linked`，那會重建遠端資料庫。
+
+部署既有專案前先執行 `supabase migration list` 並保留 dry-run。若 CLI 回報本地與遠端 migration history 不同步，請依 CLI 顯示的版本使用官方 `supabase migration repair`／`db pull` 流程對齊後再推送；不可用 linked reset，也不可直接忽略 history 錯誤重跑。
 
 ### 建立全新 Supabase 專案
 
@@ -90,6 +94,7 @@ supabase link --project-ref YOUR_PROJECT_REF
 supabase db push --dry-run
 supabase db push
 supabase functions deploy twss-sync-batch
+supabase functions deploy twss-ai-research
 ```
 
 若有 FinMind Token，只設在 Edge Function secrets；不要放進 GitHub 或 Vercel 公開環境：
@@ -104,7 +109,7 @@ supabase functions deploy twss-sync-batch
 若是在另一個 Supabase 專案重建，必須在 `db push` 與 Vercel 部署前同步修改：
 
 - `supabase/config.toml` 的 `project_id`
-- 所有 migration 內的 `https://<project-ref>.supabase.co/functions/v1/twss-sync-batch`；後面的排程 migration 會覆寫前面的工作，不能只改一個檔案
+- 所有 migration 內的 Edge URL，包括 `https://<project-ref>.supabase.co/functions/v1/twss-sync-batch` 與 `.../twss-ai-research`；後面的排程 migration 會覆寫前面的工作，不能只改一個檔案
 - `src/backend-store.js` 與 `scripts/export-backend-snapshot.mjs` 的預設 project URL／publishable key，或在 Vercel／GitHub Repository Variables 設定 `SUPABASE_URL`、`SUPABASE_PUBLISHABLE_KEY`
 - `src/market-data.js` 的舊 `twss-market-data` 備援 URL；此舊函式不包含在本 repository，沒有部署時應視為可選備援，不可誤認為主要資料源
 - `vercel.json` 的 Content-Security-Policy `connect-src`

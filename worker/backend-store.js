@@ -226,6 +226,47 @@ export async function readBackendAnalysis(symbol) {
   };
 }
 
+export async function readAiResearch(symbol) {
+  if (!/^\d{4,6}[A-Z]?$/i.test(String(symbol || ""))) throw new Error("股票代號格式不正確");
+  const select = encodeURIComponent(
+    "id,symbol,group_name,data_date,provider,model,schema_version,selected_reason,verdict,ai_confidence,analysis,generated_at,expires_at",
+  );
+  const { data } = await request(
+    `ai_stock_research?select=${select}&symbol=eq.${encodeURIComponent(symbol)}&order=generated_at.desc&limit=1`,
+  );
+  const row = Array.isArray(data) ? data[0] : null;
+  if (!row?.analysis) {
+    return {
+      available: false,
+      symbol: String(symbol),
+      reason: "not-selected-or-not-generated",
+    };
+  }
+  const expiresAt = row.expires_at ? Date.parse(row.expires_at) : Number.NaN;
+  if (Number.isFinite(expiresAt) && expiresAt <= Date.now()) {
+    return {
+      available: false,
+      symbol: String(symbol),
+      reason: "expired",
+    };
+  }
+  return {
+    available: true,
+    symbol: String(row.symbol),
+    group: row.group_name,
+    dataDate: row.data_date || null,
+    provider: row.provider,
+    model: row.model,
+    schemaVersion: row.schema_version,
+    selectedReason: row.selected_reason,
+    verdict: row.verdict,
+    aiConfidence: finite(row.ai_confidence) ? Number(row.ai_confidence) : null,
+    analysis: row.analysis,
+    generatedAt: row.generated_at || null,
+    expiresAt: row.expires_at || null,
+  };
+}
+
 export async function readBackendStatus() {
   const { data } = await request(
     "stock_sync_state?select=*&job_key=in.(universe,deep_listed,deep_otc,deep_etf)&order=job_key.asc",

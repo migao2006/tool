@@ -1,0 +1,7 @@
+project_id = "lfkdkdyaatdlizryiyon"
+
+[functions.twss-sync-batch]
+# pg_cron authenticates with an internal token stored in Vault. The function
+# rejects every request that cannot pass twss_verify_sync_token().
+verify_jwt = false
+entrypoint = "./functions/twss-sync-batch/index.ts"

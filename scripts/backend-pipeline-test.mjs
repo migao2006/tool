@@ -76,7 +76,7 @@ assert.match(sync, /rpc\/twss_finalize_ranking_cycle/, "a completed deep group m
 assert.match(sync, /rpc\/twss_evaluate_matured_backtests/, "completed cycles must evaluate matured results using stored data only");
 assert.match(sync, /p_model_version: VERSION/, "ranking finalization must use the frozen score-model version");
 assert.match(sync, /const VERSION = "16\.3"/, "the score model version must remain frozen at 16.3");
-assert.match(marketHandler, /const VERSION = "17\.1"/, "the public API patch version must match package 17.1");
+assert.match(marketHandler, /const VERSION = "17\.2"/, "the public API patch version must match package 17.2");
 assert.match(sync, /\[ranking-cycle\] finalization failed/, "ranking finalization failures must remain diagnosable without aborting the data sync");
 assert.match(sync, /rankingFinalization/, "the deep job state must retain finalization success or failure diagnostics");
 assert.doesNotMatch(sync, /sb_secret_[A-Za-z0-9_-]{8,}/, "server secrets must not exist in source");

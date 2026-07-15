@@ -129,7 +129,7 @@ const { readBackendAnalysis, readBackendHistory, readBackendRankings, readBacken
 
 const rankings = await readBackendRankings(100);
 assert.equal(rankings.mode, "live");
-assert.equal(rankings.version, "17.1");
+assert.equal(rankings.version, "17.2");
 assert.equal(rankings.scoreModelVersion, "16.3", "the frozen score model must remain identifiable separately from the API version");
 assert.deepEqual(rankings.backend.counts, { listed: 1, otc: 1, etf: 0 });
 assert.equal(rankings.groups.otc[0].stock.symbol, "6488");
@@ -172,16 +172,16 @@ assert.equal(analysis.price.lastDate, "2026-07-13");
 assert.equal(analysis.peer.peerCount, 12);
 assert.equal(analysis.trend.status, "ready");
 const dataHealth = await readDataHealth();
-assert.equal(dataHealth.version, "17.1");
+assert.equal(dataHealth.version, "17.2");
 assert.equal(dataHealth.overallStatus, "healthy");
 assert.equal(dataHealth.missingData.summary[0].classification, "scheduled_repair");
 assert.equal(dataHealth.missingData.datasets.revenue.retryable, 2);
 const rankingBacktest = await readRankingBacktest();
 assert.equal(rankingBacktest.status, "insufficient_history");
-assert.equal(rankingBacktest.version, "17.1", "public API patch version must override an older stored RPC label");
+assert.equal(rankingBacktest.version, "17.2", "public API patch version must override an older stored RPC label");
 assert.equal(rankingBacktest.scoreModelVersion, "16.3");
 const status = await readBackendStatus();
-assert.equal(status.version, "17.1");
+assert.equal(status.version, "17.2");
 assert.equal(status.persistent, true);
 assert.equal(status.jobs[0].processed_count, 12);
 assert.equal("benchmarks" in status.jobs[0].details, false, "status payload must omit duplicated benchmark series");

@@ -4,6 +4,7 @@
   const PREDICTION_KEY = 'twss-predictions-v15';
   const JOURNAL_KEY = 'twss-journal-v15';
   const ALERTS_KEY = 'twss-rule-alerts-v17';
+  const COMPARE_KEY = 'twss-compare-v17.2';
   // Audited legacy paid-analysis builds: responses only lived in an in-memory
   // Map and the backend, so no legacy localStorage key is known. Keep the
   // cleanup allowlist explicit and empty rather than deleting guessed user data.
@@ -21,6 +22,14 @@
   const setJournal = value => localWrite(JOURNAL_KEY, value);
   const getAlertStore = () => localRead(ALERTS_KEY, { events: [], lastSeen: {} });
   const setAlertStore = value => localWrite(ALERTS_KEY, value);
+  const getCompareStore = () => {
+    const stored = localRead(COMPARE_KEY, { group: null, symbols: [] });
+    return {
+      group: ['listed', 'otc', 'etf'].includes(stored?.group) ? stored.group : null,
+      symbols: [...new Set(Array.isArray(stored?.symbols) ? stored.symbols.map(String) : [])].slice(0, 4)
+    };
+  };
+  const setCompareStore = value => localWrite(COMPARE_KEY, value);
   const createId = () => crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const escapeText = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
   const average = values => { const valid = values.filter(value => value != null && Number.isFinite(value)); return valid.length ? valid.reduce((sum, value) => sum + value, 0) / valid.length : null; };
@@ -34,6 +43,144 @@
     const snapshot = globalThis.twssUltimateSnapshot?.();
     if (!snapshot?.groups) return [];
     return Object.entries(snapshot.groups).flatMap(([group, rows]) => (Array.isArray(rows) ? rows : []).map((row, index) => ({ ...row, group, rank: index + 1 })));
+  }
+
+  function comparisonRows() {
+    const stored = getCompareStore();
+    const deep = new Map(ultimateRows().map(row => [String(row.stock?.symbol || ''), row]));
+    return stored.symbols.map(symbol => {
+      const stock = S.stocks.find(item => String(item.symbol) === symbol);
+      if (!stock) return null;
+      const row = deep.get(symbol) || {};
+      const group = row.group || instrumentGroup(stock);
+      if (stored.group && group !== stored.group) return null;
+      return { ...row, group, stock: { ...stock, ...(row.stock || {}) }, result: row.result || null, analysis: row.analysis || null };
+    }).filter(Boolean);
+  }
+
+  function isCompared(symbol) {
+    return getCompareStore().symbols.includes(String(symbol));
+  }
+
+  function toggleComparison(symbol) {
+    const stock = S.stocks.find(item => String(item.symbol) === String(symbol));
+    if (!stock) return;
+    const group = instrumentGroup(stock);
+    const stored = getCompareStore();
+    const index = stored.symbols.indexOf(String(symbol));
+    if (index >= 0) {
+      stored.symbols.splice(index, 1);
+      if (!stored.symbols.length) stored.group = null;
+    } else {
+      if (stored.symbols.length && stored.group !== group) {
+        if (!confirm(`比較器目前是${groupLabel(stored.group)}組。要清除原比較並改成${groupLabel(group)}組嗎？`)) return;
+        stored.symbols = [];
+      }
+      if (stored.symbols.length >= 4) {
+        alert('同一組最多比較 4 檔，請先移除一檔。');
+        return;
+      }
+      stored.group = group;
+      stored.symbols.push(String(symbol));
+    }
+    setCompareStore(stored);
+    syncCompareButtons();
+    if (S.tab === 'mine' && patchState.mineTab === 'compare') render();
+  }
+
+  function syncCompareButtons() {
+    qa('[data-compare]').forEach(button => {
+      const active = isCompared(button.dataset.compare);
+      button.classList.toggle('active', active);
+      button.setAttribute('aria-pressed', String(active));
+      button.textContent = active ? '✓ 已比較' : '＋比較';
+    });
+  }
+
+  function csvCell(value) {
+    let output = value == null ? '' : String(value);
+    if (/^[=+\-@]/.test(output)) output = `'${output}`;
+    return `"${output.replaceAll('"', '""')}"`;
+  }
+
+  function downloadCsv(filename, rows) {
+    const csv = `\uFEFF${rows.map(row => row.map(csvCell).join(',')).join('\r\n')}`;
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.append(anchor);
+    anchor.click();
+    anchor.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
+
+  const finiteValue = value => value != null && Number.isFinite(Number(value)) ? Number(value) : null;
+  const displayNumber = (value, digits = 1, suffix = '') => finiteValue(value) == null ? '—' : `${fmt(Number(value), digits)}${suffix}`;
+
+  function comparisonRank(row) {
+    const trend = row.result?.trend || row.trend || row.context?.trend || {};
+    return trend.currentDate && String(row.dataDate || '') === String(trend.currentDate) && finiteValue(trend.rank) != null
+      ? `第 ${fmt(trend.rank, 0)} 名`
+      : '正式排名累積中';
+  }
+
+  function comparisonMetrics(group) {
+    const common = [
+      ['資料日期', row => row.dataDate || '—'],
+      ['正式排名', row => comparisonRank(row)],
+      ['最終分數', row => displayNumber(row.result?.score, 0, ' 分')],
+      ['資料信心', row => displayNumber(row.result?.confidence, 0, '%')],
+      ['候選狀態', row => row.result?.official ? '正式候選' : '驗證／信心未達標'],
+      ['收盤價', row => displayNumber(row.stock?.close, 2)],
+      ['風險扣分', row => displayNumber(row.result?.risk?.deduction, 0, ' 分')],
+      ['資料缺漏', row => `${row.result?.missing?.length || 0} 項`]
+    ];
+    if (group === 'etf') return [...common,
+      ['20 日動能', row => displayNumber(row.analysis?.price?.return20, 1, '%')],
+      ['20 日相對市場', row => displayNumber(row.analysis?.price?.relative20, 1, '%')],
+      ['5／20 日量能比', row => displayNumber(row.analysis?.price?.volumeRatio, 2, ' 倍')],
+      ['ATR 波動', row => displayNumber(row.analysis?.price?.atrPct, 1, '%')],
+      ['追蹤指數', row => row.analysis?.etf?.benchmark || '—'],
+      ['折溢價', row => displayNumber(row.analysis?.etf?.premiumDiscount, 2, '%')],
+      ['基金結構', row => row.analysis?.etf?.leveraged ? '槓桿型' : row.analysis?.etf?.inverse ? '反向型' : row.analysis?.etf?.fundType ? '一般型' : '—']
+    ];
+    return [...common,
+      ['3 月平均營收年增', row => displayNumber(row.analysis?.revenue?.avg3Yoy, 1, '%')],
+      ['營收加速度', row => displayNumber(row.analysis?.revenue?.acceleration3, 1, '%')],
+      ['營業利益率', row => displayNumber(row.analysis?.financial?.operatingMargin, 1, '%')],
+      ['現金轉換', row => displayNumber(row.analysis?.financial?.cashConversion, 2, ' 倍')],
+      ['20 日法人買賣超', row => displayNumber(row.analysis?.institutional?.inst20, 0, ' 張')],
+      ['近 5 日法人強度', row => displayNumber(row.analysis?.institutional?.intensity5, 1, '%')],
+      ['20 日相對大盤', row => displayNumber(row.analysis?.price?.relative20, 1, '%')],
+      ['5／20 日量能比', row => displayNumber(row.analysis?.price?.volumeRatio, 2, ' 倍')],
+      ['本益比', row => finiteValue(row.stock?.pe) > 0 ? displayNumber(row.stock.pe, 2, ' 倍') : '—'],
+      ['股價淨值比', row => displayNumber(row.stock?.pb, 2, ' 倍')]
+    ];
+  }
+
+  function exportComparison() {
+    const rows = comparisonRows();
+    if (!rows.length) return;
+    const metrics = comparisonMetrics(rows[0].group);
+    downloadCsv(`台股智選-${groupLabel(rows[0].group)}比較-${S.date || new Date().toISOString().slice(0, 10)}.csv`, [
+      ['指標', ...rows.map(row => `${row.stock.name} ${row.stock.symbol}`)],
+      ...metrics.map(([label, reader]) => [label, ...rows.map(reader)])
+    ]);
+  }
+
+  function exportGroupRanking(group) {
+    const rows = ultimateRows().filter(row => row.group === group);
+    if (!rows.length) {
+      alert(`${groupLabel(group)}深度排行榜尚未載入，請先開啟機會選股頁。`);
+      return;
+    }
+    const metrics = comparisonMetrics(group);
+    downloadCsv(`台股智選-${groupLabel(group)}排行榜-${S.date || new Date().toISOString().slice(0, 10)}.csv`, [
+      ['組內順序', '股票代號', '股票名稱', '市場', '產業', ...metrics.map(([label]) => label)],
+      ...rows.map((row, index) => [index + 1, row.stock?.symbol, row.stock?.name, groupLabel(group), row.stock?.industry || '', ...metrics.map(([, reader]) => reader(row))])
+    ]);
   }
 
   function alertSnapshot(row) {
@@ -326,6 +473,23 @@
     return `<div class="list two-col">${rows.map(({ item, stock }) => { const gain = item.addedPrice && stock.close ? (stock.close / item.addedPrice - 1) * 100 : null; const etf = instrumentGroup(stock) === 'etf'; const alert = latestAlert.get(stock.symbol); return `<div class="card clickable" data-detail="${stock.symbol}"><div class="head"><div><b>${stock.name}</b><div class="muted">${stock.symbol} · ${stock.industry}</div></div><button class="icon-btn" aria-label="從自選清單移除 ${escapeText(stock.name)}" data-watch="${stock.symbol}">移除</button></div>${alert ? `<div class="watch-alert ${alert.read ? '' : 'unread'}"><b>${escapeText(alert.title)}</b><span>${escapeText(alert.dataDate)}</span></div>` : ''}<div class="grid">${metric('目前價格', fmt(stock.close))}${metric('加入後漲跌', `<span class="${cls(gain)}">${pct(gain)}</span>`)}${metric(etf ? '商品類型' : '月營收年增', etf ? 'ETF' : pct(stock.rev))}${metric(etf ? '成交量' : '機會分數', etf ? `${fmt(stock.volume, 0)} 張` : opportunityScore(stock))}</div><button class="btn" data-forecast="${stock.symbol}" style="width:100%;margin-top:10px">查看趨勢預測</button></div>`; }).join('')}</div>`;
   }
 
+  function comparisonSection() {
+    const stored = getCompareStore();
+    const rows = comparisonRows();
+    const exportButtons = `<div class="compare-export-grid" aria-label="分組排行榜匯出">
+      <button class="btn secondary" data-export-group="listed">匯出上市 CSV</button>
+      <button class="btn secondary" data-export-group="otc">匯出上櫃 CSV</button>
+      <button class="btn secondary" data-export-group="etf">匯出 ETF CSV</button>
+    </div>`;
+    if (!rows.length) return `<div class="card empty compare-empty"><h3>尚未加入比較標的</h3><p class="muted">在機會排行榜或股票詳細頁按「＋比較」。一次只比較上市、上櫃或 ETF 的其中一組，最多 4 檔。</p>${exportButtons}</div>`;
+    const group = stored.group || rows[0].group;
+    const metrics = comparisonMetrics(group);
+    return `<div class="head compare-toolbar"><div><h3>${groupLabel(group)}候選比較</h3><div class="muted">同市場、同一資料日期並排檢查 · ${rows.length}／4 檔</div></div><button id="exportComparison" class="btn">匯出比較 CSV</button></div>
+      <div class="card compare-table-wrap"><table class="compare-table"><caption class="sr-only">${groupLabel(group)}候選比較表</caption><thead><tr><th scope="col">指標</th>${rows.map(row => `<th scope="col"><button class="compare-stock" data-detail="${row.stock.symbol}"><b>${escapeText(row.stock.name)}</b><span>${escapeText(row.stock.symbol)}</span></button><button class="compare-remove" type="button" data-compare-remove="${row.stock.symbol}" aria-label="從比較移除 ${escapeText(row.stock.name)}">移除</button></th>`).join('')}</tr></thead><tbody>${metrics.map(([label, reader]) => `<tr><th scope="row">${escapeText(label)}</th>${rows.map(row => `<td>${escapeText(reader(row))}</td>`).join('')}</tr>`).join('')}</tbody></table></div>
+      <div class="notice"><b>比較限制</b><br>這裡只整理既有公開資料與量化結果，不重新計分；正式排名尚未封存時會明確顯示「累積中」。不同市場不放在同一張表。</div>
+      ${exportButtons}`;
+  }
+
   function actionLabel(value) { return ({ observe: '觀察', buy: '買入紀錄', sell: '賣出紀錄', review: '事後檢討' })[value] || value; }
   function horizonLabel(value) { return ({ short: '短線 1–5 日', swing: '波段 1–4 週', medium: '中期 1–6 月', long: '長期 6 月以上' })[value] || '未設定期間'; }
   function journalSection() {
@@ -337,8 +501,12 @@
 
   function minePage() {
     const unread = refreshRuleAlerts().events?.filter(event => !event.read).length || 0;
-    const section = patchState.mineTab === 'watch' ? watchSection() : patchState.mineTab === 'alerts' ? alertSection() : journalSection();
-    return `<h2>我的</h2><div class="patch-tabs"><button data-patch-mine="watch" class="${patchState.mineTab === 'watch' ? 'active' : ''}">自選清單</button><button data-patch-mine="alerts" class="${patchState.mineTab === 'alerts' ? 'active' : ''}">規則提醒${unread ? `<span class="nav-count">${unread}</span>` : ''}</button><button data-patch-mine="journal" class="${patchState.mineTab === 'journal' ? 'active' : ''}">投資紀錄</button></div>${section}${disclaimer()}`;
+    const compareCount = getCompareStore().symbols.length;
+    const section = patchState.mineTab === 'watch' ? watchSection()
+      : patchState.mineTab === 'alerts' ? alertSection()
+        : patchState.mineTab === 'compare' ? comparisonSection()
+          : journalSection();
+    return `<h2>我的</h2><div class="patch-tabs"><button data-patch-mine="watch" class="${patchState.mineTab === 'watch' ? 'active' : ''}">自選清單</button><button data-patch-mine="compare" class="${patchState.mineTab === 'compare' ? 'active' : ''}">候選比較${compareCount ? `<span class="nav-count">${compareCount}</span>` : ''}</button><button data-patch-mine="alerts" class="${patchState.mineTab === 'alerts' ? 'active' : ''}">規則提醒${unread ? `<span class="nav-count">${unread}</span>` : ''}</button><button data-patch-mine="journal" class="${patchState.mineTab === 'journal' ? 'active' : ''}">投資紀錄</button></div>${section}${disclaimer()}`;
   }
   function openJournalModal(record = null, stock = null) {
     const item = record || { local_id: createId(), symbol: stock?.symbol || '', stock_name: stock?.name || '', entry_date: new Date().toISOString().slice(0, 10), action: 'observe', price: stock?.close ?? null, quantity: null, horizon: 'swing', thesis: '', risk_plan: '', target_plan: '', emotion: '', followed_plan: null, exit_price: null, exit_date: '', return_pct: null, result_note: '' };
@@ -366,6 +534,26 @@
   }
 
   function bindPatch() {
+    qa('.ultimate-card .smart-actions').forEach(actions => {
+      const symbol = q('[data-forecast]', actions)?.dataset.forecast;
+      if (!symbol || q('[data-compare]', actions)) return;
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'btn secondary compare-action';
+      button.dataset.compare = symbol;
+      actions.append(button);
+    });
+    syncCompareButtons();
+    qa('[data-compare]').forEach(button => button.onclick = event => {
+      event.stopPropagation();
+      toggleComparison(button.dataset.compare);
+    });
+    qa('[data-compare-remove]').forEach(button => button.onclick = event => {
+      event.stopPropagation();
+      toggleComparison(button.dataset.compareRemove);
+    });
+    q('#exportComparison')?.addEventListener('click', exportComparison);
+    qa('[data-export-group]').forEach(button => button.onclick = () => exportGroupRanking(button.dataset.exportGroup));
     qa('[data-verify-group]').forEach(button => button.onclick = () => { patchState.verifyGroup = button.dataset.verifyGroup; render(); });
     qa('[data-verify-horizon]').forEach(button => button.onclick = () => { patchState.verifyHorizon = button.dataset.verifyHorizon; render(); });
     q('#patchVerifySearch')?.addEventListener('input', event => { patchState.verifyQuery = event.target.value; });
@@ -423,6 +611,16 @@
     } catch {
       recordPrediction(stock, calculateForecast(stock, null));
     }
+    const actions = q('[data-journal-stock]', modalRoot)?.closest('.row');
+    if (actions && !q('[data-compare]', actions)) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'btn secondary';
+      button.dataset.compare = symbol;
+      button.onclick = event => { event.stopPropagation(); toggleComparison(symbol); };
+      actions.append(button);
+      syncCompareButtons();
+    }
   };
 
   const originalBind = bind;
@@ -451,7 +649,7 @@
   fetch('/api/market-data?type=ranking-backtest', { cache: 'no-store' })
     .then(response => response.ok ? response.json() : null)
     .catch(() => null)
-    .then(value => value?.byGroup ? value : fetch('/data/backtest.json?v=17.1', { cache: 'no-store' })
+    .then(value => value?.byGroup ? value : fetch('/data/backtest.json?v=17.2', { cache: 'no-store' })
       .then(response => response.ok ? response.json() : null).catch(() => null))
     .then(value => { if (value) patchState.rankingBacktest = value; if (S.tab === 'verify') render(); })
     .catch(() => {});

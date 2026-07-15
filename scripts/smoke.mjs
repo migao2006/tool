@@ -191,7 +191,7 @@ const fullFetch = async (input) => {
   }
   if (url.includes("supabase.co/rest/v1/rpc/twss_public_data_health")) {
     return json({
-      version: "17.1",
+      version: "17.2",
       overallStatus: "healthy",
       dataDate: "2026-07-13",
       sources: { price: { status: "healthy", latest: "2026-07-13" } },
@@ -203,7 +203,7 @@ const fullFetch = async (input) => {
   }
   if (url.includes("supabase.co/rest/v1/rpc/twss_public_ranking_backtest")) {
     return json({
-      version: "17.1", status: "insufficient_history", snapshotCount: 0, minimumSnapshots: 25,
+      version: "17.2", status: "insufficient_history", snapshotCount: 0, minimumSnapshots: 25,
       noLookAhead: true, byGroup: { listed: {}, otc: {}, etf: {} },
     });
   }
@@ -257,19 +257,19 @@ async function payload(path) {
 }
 
 const health = await payload("/api/health");
-assert.equal(health.version, "17.1");
+assert.equal(health.version, "17.2");
 assert.equal("aiResearch" in health, false);
 assert.deepEqual(health.markets, ["上市股票", "上櫃股票", "ETF"]);
 
 const dataHealth = await payload("/api/market-data?type=data-health&refresh=1");
-assert.equal(dataHealth.version, "17.1");
+assert.equal(dataHealth.version, "17.2");
 assert.equal(dataHealth.overallStatus, "healthy");
 assert.equal(dataHealth.scoreHistory.status, "accumulating");
 assert.equal(dataHealth.missingData.summary[0].classification, "scheduled_repair");
 
 const rankingBacktest = await payload("/api/market-data?type=ranking-backtest&refresh=1");
 assert.equal(rankingBacktest.status, "insufficient_history");
-assert.equal(rankingBacktest.version, "17.1");
+assert.equal(rankingBacktest.version, "17.2");
 assert.equal(rankingBacktest.scoreModelVersion, "16.3");
 assert.equal(rankingBacktest.noLookAhead, true);
 
@@ -359,7 +359,7 @@ assert.match(onDemandHistory.source, /按需補抓/);
 const removedResearchResponse = await worker.fetch(new Request("https://example.test/api/ai-research"), {}, {});
 assert.equal(removedResearchResponse.status, 404);
 
-const appResponse = await worker.fetch(new Request("https://example.test/app.js?v=17.1"), {}, {});
+const appResponse = await worker.fetch(new Request("https://example.test/app.js?v=17.2"), {}, {});
 const appSource = await appResponse.text();
 assert.match(appSource, /官方日期已核對/);
 assert.match(appSource, /各資料來源日期/);
@@ -376,13 +376,26 @@ assert.match(appSource, /交易日不足 60 日/, "partial histories must not be
 assert.match(appSource, /120000,0/, "opening one detail must not automatically consume a second repair attempt");
 assert.match(appSource, /aria-label','關閉視窗/);
 assert.match(appSource, /event\.key==='Escape'/);
-assert.match(appSource, /sw\.js\?v=17\.1/);
+assert.match(appSource, /sw\.js\?v=17\.2/);
 assert.doesNotMatch(appSource, /gemini|ai[-_ ]?research|AI 研究|AI 摘要|data-ai/i,
   "paid research UI and endpoints must be fully removed");
 assert.doesNotMatch(appSource, /廣告|促銷|VIP|贊助|免費試用|立即購買|解鎖/);
 assert.doesNotMatch(appSource, /_\=\$\{Date\.now\(\)\}/);
 
-const smartResponse = await worker.fetch(new Request("https://example.test/smart.js?v=17.1"), {}, {});
+const patchResponse = await worker.fetch(new Request("https://example.test/patch.js?v=17.2"), {}, {});
+const patchSource = await patchResponse.text();
+assert.match(patchSource, /候選比較/);
+assert.match(patchSource, /同一組最多比較 4 檔/);
+assert.match(patchSource, /不同市場不放在同一張表/);
+assert.match(patchSource, /text\/csv;charset=utf-8/);
+assert.match(patchSource, /匯出上市 CSV/);
+assert.match(patchSource, /匯出上櫃 CSV/);
+assert.match(patchSource, /匯出 ETF CSV/);
+assert.match(patchSource, /正式排名累積中/);
+assert.doesNotMatch(patchSource, /gemini|ai[-_ ]?research|AI 研究|AI 摘要|data-ai/i,
+  "paid research UI and endpoints must remain removed from the comparison release");
+
+const smartResponse = await worker.fetch(new Request("https://example.test/smart.js?v=17.2"), {}, {});
 const smartSource = await smartResponse.text();
 assert.match(smartSource, /機會股排行/);
 assert.match(smartSource, /風險排除 → 成長確認 → 籌碼確認 → 價量進場判斷/);
@@ -402,10 +415,12 @@ assert.match(smartSource, /後端持續累積/);
 assert.match(smartSource, /舊模型快照不作為 v16\.3 正式候選/);
 assert.doesNotMatch(smartSource, /廣告|促銷|VIP|贊助|免費試用|立即購買|解鎖/);
 
-const stylesResponse = await worker.fetch(new Request("https://example.test/styles.css?v=17.1"), {}, {});
+const stylesResponse = await worker.fetch(new Request("https://example.test/styles.css?v=17.2"), {}, {});
 const stylesSource = await stylesResponse.text();
 assert.match(stylesSource, /min-width:48px/);
 assert.match(stylesSource, /max-height:min\(76dvh,640px\)/);
+assert.match(stylesSource, /compare-table-wrap/);
+assert.match(stylesSource, /compare-export-grid/);
 assert.doesNotMatch(stylesSource, /\.ai-(?:card|panel|action|summary|scenario)/);
 
 const latestResponse = await worker.fetch(new Request("https://example.test/data/latest.json?v=16"), {}, {});

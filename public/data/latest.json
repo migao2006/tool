@@ -13490,7 +13490,7 @@
   },
   "disclaimer": "候選排序僅供研究，不構成投資建議、買賣邀約或獲利保證。",
   "backtest": {
-    "version": "17.2",
+    "version": "17.3",
     "generatedAt": "2026-07-15T05:47:48.767Z",
     "status": "insufficient_history",
     "readiness": "accumulating",

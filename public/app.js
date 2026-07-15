@@ -171,6 +171,15 @@ async function refreshSession(){
   if(!S.session.refresh_token){storeSession(null);return false}
   try{const s=await sb('/auth/v1/token?grant_type=refresh_token',{method:'POST',body:{refresh_token:S.session.refresh_token},auth:false});s.expires_at=Math.floor(Date.now()/1000)+(s.expires_in||3600);storeSession(s);return true}catch{storeSession(null);return false}
 }
+async function isAdminSession(){
+  if(!await refreshSession())return false;
+  try{return await sb('/rest/v1/rpc/twss_is_admin',{method:'POST',body:{}})===true}catch{return false}
+}
+async function revealAdminAccess(){
+  const slot=q('#adminAccessSlot',modalRoot);if(!slot)return;
+  if(await isAdminSession()&&slot.isConnected)slot.innerHTML='<a class="btn secondary admin-entry" href="/admin">開啟管理員後台日誌</a>';
+  else if(slot.isConnected)slot.remove()
+}
 async function login(email,password){const s=await sb('/auth/v1/token?grant_type=password',{method:'POST',body:{email,password},auth:false});s.expires_at=Math.floor(Date.now()/1000)+(s.expires_in||3600);storeSession(s);await cloudPull()}
 async function signup(email,password){const s=await sb(`/auth/v1/signup?redirect_to=${encodeURIComponent(location.origin)}`,{method:'POST',body:{email,password},auth:false});if(s?.access_token){s.expires_at=Math.floor(Date.now()/1000)+(s.expires_in||3600);storeSession(s);await cloudPull();return true}return false}
 async function cloudPull(){
@@ -629,13 +638,13 @@ function openJournalModal(record=null,stock=null){
 }
 
 function openAccountModal(){
-  if(S.session){modalRoot.innerHTML=`<div class="modal"><div class="sheet"><button class="sheet-close">×</button><h2>雲端帳戶</h2><div class="card"><b>${esc(S.session.user?.email||'已登入')}</b><p class="muted">預測紀錄與投資紀錄會同步至 Supabase。自選清單目前仍保留在此裝置。</p><div class="row"><button id="syncCloud" class="btn grow">立即同步</button><button id="logout" class="btn danger">登出</button></div></div><div class="muted">${esc(S.syncState)}</div></div></div>`;bindModal();q('#syncCloud',modalRoot).onclick=cloudPull;q('#logout',modalRoot).onclick=()=>{storeSession(null);closeModal();render()};return}
-  modalRoot.innerHTML=`<div class="modal"><div class="sheet"><button class="sheet-close">×</button><h2>登入台股智選</h2><p class="muted">登入後可同步預測與投資紀錄。</p><label>電子郵件<input id="authEmail" type="email" autocomplete="email"></label><label>密碼<input id="authPass" type="password" autocomplete="current-password" placeholder="至少 6 個字元"></label><div class="row" style="margin-top:12px"><button id="loginBtn" class="btn grow">登入</button><button id="signupBtn" class="btn secondary">建立帳戶</button></div><div id="authMsg" class="muted" style="margin-top:10px"></div></div></div>`;bindModal();
+  if(S.session){modalRoot.innerHTML=`<div class="modal"><div class="sheet"><button class="sheet-close">×</button><h2>雲端帳戶</h2><div class="card"><b>${esc(S.session.user?.email||'已登入')}</b><p class="muted">預測紀錄與投資紀錄會同步至 Supabase。自選清單目前仍保留在此裝置。</p><div class="row"><button id="syncCloud" class="btn grow">立即同步</button><button id="logout" class="btn danger">登出</button></div><div id="adminAccessSlot" class="admin-access-slot"><div class="muted small" style="margin-top:10px">正在確認管理員權限…</div></div></div><div class="muted">${esc(S.syncState)}</div></div></div>`;bindModal();q('#syncCloud',modalRoot).onclick=cloudPull;q('#logout',modalRoot).onclick=()=>{storeSession(null);closeModal();render()};revealAdminAccess();return}
+  modalRoot.innerHTML=`<div class="modal"><div class="sheet"><button class="sheet-close">×</button><h2>登入台股智選</h2><p class="muted">登入後可同步預測與投資紀錄。</p><label>電子郵件<input id="authEmail" type="email" autocomplete="email"></label><label>密碼<input id="authPass" type="password" autocomplete="current-password" placeholder="至少 6 個字元"></label><div class="row" style="margin-top:12px"><button id="loginBtn" class="btn grow">登入</button><button id="signupBtn" class="btn secondary">建立帳戶</button></div><a class="btn secondary admin-entry" href="/admin">管理員後台日誌</a><div id="authMsg" class="muted" style="margin-top:10px"></div></div></div>`;bindModal();
   const afterAuth=()=>{closeModal();render()};
   const act=async type=>{const email=q('#authEmail',modalRoot).value.trim(),password=q('#authPass',modalRoot).value,msg=q('#authMsg',modalRoot);if(!email||password.length<6){msg.textContent='請輸入有效電子郵件，密碼至少 6 個字元。';return}msg.textContent='處理中…';try{if(type==='login'){await login(email,password);afterAuth()}else{const ok=await signup(email,password);if(ok)afterAuth();else msg.textContent='驗證信已寄出，完成驗證後再登入。'}}catch(e){msg.textContent=e.message}};
   q('#loginBtn',modalRoot).onclick=()=>act('login');q('#signupBtn',modalRoot).onclick=()=>act('signup')
 }
 
 document.querySelector('#accountBtn').onclick=openAccountModal;
-if('serviceWorker'in navigator)navigator.serviceWorker.register('/sw.js?v=17.2',{updateViaCache:'none'}).catch(()=>{});
+if('serviceWorker'in navigator)navigator.serviceWorker.register('/sw.js?v=17.3',{updateViaCache:'none'}).catch(()=>{});
 initSession();render();loadStocks();

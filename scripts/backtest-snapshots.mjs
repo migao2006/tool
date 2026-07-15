@@ -37,7 +37,7 @@ for (const file of files) {
 
 if (snapshots.length < 2) {
   await save({
-    version: "17.2",
+    version: "17.3",
     generatedAt: new Date().toISOString(),
     status: "insufficient_history",
     readiness: "accumulating",
@@ -187,7 +187,7 @@ const publicSamples = observations.slice(-120).map((row) => ({
 }));
 
 await save({
-  version: "17.2",
+  version: "17.3",
   generatedAt: new Date().toISOString(),
   status: hasReadyPeriod ? "ready" : "insufficient_history",
   readiness: allPeriodsReady ? "complete" : hasReadyPeriod ? "partial" : "accumulating",

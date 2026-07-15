@@ -18,7 +18,7 @@ const SUPABASE_HISTORY_EDGE = "https://lfkdkdyaatdlizryiyon.supabase.co/function
 const TWSE_OPEN = "https://openapi.twse.com.tw/v1";
 const TWSE_WEB = "https://www.twse.com.tw";
 const TPEX_OPEN = "https://www.tpex.org.tw/openapi/v1";
-const VERSION = "17.2";
+const VERSION = "17.3";
 
 const FINANCIAL_CATEGORIES = ["ci", "fh", "basi", "bd", "ins", "mim"];
 

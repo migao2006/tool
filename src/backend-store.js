@@ -7,7 +7,7 @@ const SUPABASE_PUBLIC_KEY =
   env.SUPABASE_PUBLISHABLE_KEY || env.SUPABASE_ANON_KEY || DEFAULT_PUBLIC_KEY;
 const EXPECTED_ANALYSIS_VERSION = "16.3-ultimate-data-audit";
 const SCORE_MODEL_VERSION = "16.3";
-const PUBLIC_API_VERSION = "17.2";
+const PUBLIC_API_VERSION = "17.3";
 
 const finite = (value) => value != null && Number.isFinite(Number(value));
 

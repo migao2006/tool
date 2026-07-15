@@ -39,7 +39,7 @@ for (let index = 0; index < 45; index += 1) {
     });
   }
   const payload = {
-    version: "17.2", dataDate: date, snapshotCoverage: { backtestReady: true },
+    version: "17.3", dataDate: date, snapshotCoverage: { backtestReady: true },
     groups: rankingGroups, marketPrices,
   };
   await writeFile(resolve(matureSnapshotDir, `${date}.json`), JSON.stringify(payload));
@@ -162,4 +162,4 @@ assert.match(patchSource, /LEGACY_AI_LOCAL_STORAGE_KEYS/);
 assert.doesNotMatch(patchSource, /Object\.keys\(localStorage\)|localStorage\.clear\(/,
   "legacy cleanup must never scan or clear unrelated user storage");
 
-console.log("Snapshot pipeline tests passed: 25 mature-date gating, 45-day readiness, next-open runtime, final-cycle readiness, official open, and v17.2 cache busting");
+console.log("Snapshot pipeline tests passed: 25 mature-date gating, 45-day readiness, next-open runtime, final-cycle readiness, official open, and v17.3 cache busting");

@@ -1,12 +1,12 @@
-const CACHE='twss-v17.2';
+const CACHE='twss-v17.3';
 const STATIC=[
   '/',
-  '/app.js?v=17.2',
-  '/patch.js?v=17.2',
-  '/smart.js?v=17.2',
-  '/styles.css?v=17.2',
-  '/manifest.webmanifest?v=17.2',
-  '/icon.svg?v=17.2'
+  '/app.js?v=17.3',
+  '/patch.js?v=17.3',
+  '/smart.js?v=17.3',
+  '/styles.css?v=17.3',
+  '/manifest.webmanifest?v=17.3',
+  '/icon.svg?v=17.3'
 ];
 
 self.addEventListener('install',event=>event.waitUntil(
@@ -23,6 +23,10 @@ self.addEventListener('fetch',event=>{
   if(event.request.method!=='GET')return;
   const url=new URL(event.request.url);
   if(url.origin!==location.origin)return;
+  if(url.pathname==='/admin'||url.pathname==='/admin.html'||url.pathname==='/admin.js'){
+    event.respondWith(fetch(event.request,{cache:'no-store'}));
+    return;
+  }
   if(url.pathname.startsWith('/api/')){
     event.respondWith(fetch(event.request));
     return;

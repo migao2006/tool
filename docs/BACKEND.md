@@ -59,6 +59,7 @@
 - `anon` 與 `authenticated` 只有公開市場資料表的 `SELECT` 權限。
 - 所有公開市場資料表（包含 `stock_master`、`stock_snapshots`）都啟用 RLS，只有 public-read policy，沒有公開寫入 policy。
 - `stock_sync_state` 不開放給 `anon`／`authenticated`；`stock_analysis_cache` 僅授權研究結果欄位，原始錯誤、租約、重試與修復狀態保留給管理端。
+- `app_admins` 是唯一管理員名單。一般帳號只能在 RLS 下讀取自己的列，不能新增、修改或自行把 `active` 改為 `true`。
 - 批次函式使用 Supabase 伺服器密鑰寫入；密鑰只存在 Edge Runtime 環境。
 - pg_cron 的 `x-twss-sync-token` 由 Vault 產生與保存，原始碼沒有權杖明文。
 - `twss-sync-batch` 雖設定 `verify_jwt = false`，POST 排程／手動同步仍會先呼叫 service-role-only 的 `twss_verify_sync_token`；缺少或錯誤權杖會回傳 HTTP 401。公開 GET 只開放 `mode=history`、合法股票代號與月份範圍，寫入仍由函式內的 service role 執行，且必須先通過股票主檔與中央配額檢查。
@@ -69,11 +70,15 @@
 
 - `twss_public_data_health()`：僅限 `service_role`，彙整各來源日期、分組覆蓋率、修復數與正式評分日數。
 - `twss_public_missing_data(limit)`：僅限 `service_role`，依每檔 `sourceDiagnostics` 與 `repair_reasons` 判定可重試、上游異常、官方期別落後、來源沒有或不適用。
+- `twss_is_admin()`：登入後只回傳目前帳號是否存在於啟用中的 `app_admins`。
+- `twss_admin_operations_log(limit)`：僅允許已登入且啟用中的管理員讀取，彙整健康、同步、修復、額度、排行榜週期與事件時間軸。
 - `twss_get_stock_context(symbol)`：同市場、同產業百分位與正式排名歷史；同產業少於 5 檔才使用同市場備援。
 - `twss_evaluate_matured_backtests(group, model)`：service-role-only，使用訊號日後第一個交易日開盤價與第 5／10／20 個交易日收盤價，保存至 `opportunity_backtest_outcomes`。
 - `twss_public_ranking_backtest(model)`：只在該市場與期間已有至少 25 個成熟訊號日時公開統計，否則回傳 `insufficient_history`。
 
 同業與回測等公開 RPC 使用 `security invoker` 並沿用資料表 RLS；健康、缺漏、寫入與評估函式只授權 `service_role`。每次受權杖保護的同步工作都會以 `[admin-data-health]` 寫入精簡管理日誌，一般網站不提供健康中心或同步狀態端點。後端驗證不倒填後來公布的財報或營收，也不使用訊號日收盤價假設成交。
+
+`twss_admin_operations_log` 是刻意保留的 `security definer` 邊界：函式使用空白 `search_path`、固定查詢、最多 100 筆，並在讀取任何管理資料前同時檢查 `auth.uid()` 與 `app_admins.active`。函式撤銷 `PUBLIC`／`anon` 權限，只授權 `authenticated` 與 `service_role`；一般登入者即使直接呼叫也會得到 `admin_required`。管理員使用密碼登入時，建議在 Supabase Auth 設定中啟用 Leaked Password Protection（方案支援時）。
 
 ## 從原始碼重新部署
 

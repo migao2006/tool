@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
-const [sync, baseSchema, schema, grants, cron, acceleratedCron, leases, quota, publicHistoryQuota, preserve, repairQueue, clearEtfRepairs, etfDirectionRepair, lateCoverageRepair, clearOldVersionRepairs, trim, config, marketHandler, workflow, exporter, backtest, freeInsights, backtestSchema, hardening, diagnosticPrivacy] = await Promise.all([
+const [sync, baseSchema, schema, grants, cron, acceleratedCron, leases, quota, publicHistoryQuota, preserve, repairQueue, clearEtfRepairs, etfDirectionRepair, lateCoverageRepair, clearOldVersionRepairs, trim, config, marketHandler, workflow, exporter, backtest, freeInsights, backtestSchema, hardening, diagnosticPrivacy, adminDashboard] = await Promise.all([
   readFile(new URL("../supabase/functions/twss-sync-batch/index.ts", import.meta.url), "utf8"),
   readFile(new URL("../supabase/migrations/20260714040000_base_schema.sql", import.meta.url), "utf8"),
   readFile(new URL("../supabase/migrations/20260714090000_add_persistent_stock_backend.sql", import.meta.url), "utf8"),
@@ -27,6 +27,7 @@ const [sync, baseSchema, schema, grants, cron, acceleratedCron, leases, quota, p
   readFile(new URL("../supabase/migrations/20260715172000_free_backtest_and_missing_data_audit.sql", import.meta.url), "utf8"),
   readFile(new URL("../supabase/migrations/20260715173000_harden_free_insights_audit.sql", import.meta.url), "utf8"),
   readFile(new URL("../supabase/migrations/20260715201357_restrict_health_diagnostics_admin_only.sql", import.meta.url), "utf8"),
+  readFile(new URL("../supabase/migrations/20260715205510_add_admin_health_dashboard.sql", import.meta.url), "utf8"),
 ]);
 
 const hardenedBacktest = hardening.match(
@@ -126,6 +127,26 @@ assert.match(restrictedContext, /select\s+a\.symbol,[\s\S]*a\.analysis\s+into ta
   "the public context RPC must select only columns retained in the public allowlist");
 assert.doesNotMatch(restrictedContext, /select \* into target/,
   "the public context RPC must not regain access to the whole analysis-cache row");
+assert.match(adminDashboard, /create table if not exists public\.app_admins[\s\S]*enable row level security/,
+  "administrator membership must be stored in an RLS-protected table");
+assert.match(adminDashboard, /create policy app_admins_read_self[\s\S]*user_id = \(select auth\.uid\(\)\)/,
+  "signed-in users may inspect only their own administrator membership");
+assert.match(adminDashboard, /revoke all on table public\.app_admins from public, anon, authenticated[\s\S]*grant select on table public\.app_admins to authenticated/);
+assert.match(adminDashboard, /create or replace function public\.twss_is_admin\(\)[\s\S]*a\.active/,
+  "administrator discovery must require an active server-managed membership");
+const adminLogFunction = adminDashboard.match(
+  /create or replace function public\.twss_admin_operations_log[\s\S]*?comment on function public\.twss_admin_operations_log/,
+)?.[0] || "";
+assert.match(adminLogFunction, /security definer[\s\S]*set search_path = ''/,
+  "the privileged administrator aggregation must use a fixed empty search path");
+assert.match(adminLogFunction, /auth\.uid\(\)[\s\S]*twss_is_admin\(\)[\s\S]*admin_required/,
+  "the privileged administrator aggregation must reject non-admin callers before reading diagnostics");
+assert.match(adminLogFunction, /greatest\(1, least\(coalesce\(p_limit, 60\), 100\)\)/,
+  "administrator log limits must be bounded");
+assert.match(adminDashboard, /revoke all on function public\.twss_admin_operations_log\(integer\)[\s\S]*from public, anon, authenticated[\s\S]*to authenticated, service_role/,
+  "anonymous callers must not execute the administrator log RPC");
+assert.doesNotMatch(adminDashboard, /insert into public\.app_admins|@[A-Za-z0-9.-]+/,
+  "source migrations must not hard-code an administrator account");
 
 assert.match(cron, /"group":"listed","limit":2/);
 assert.match(cron, /"group":"otc","limit":2/);

@@ -1,4 +1,4 @@
-# 台股智選 v17.2.2
+# 台股智選 v17.3.0
 
 以台灣公開市場資料建立的 1～8 週機會股研究系統。核心不是把所有指標直接相加，而是依序執行：
 
@@ -10,6 +10,14 @@
 6. 點時快照回測
 
 候選分數只是研究排序，不是買進訊號，也不保證未來報酬。
+
+### v17.3.0 管理員後台
+
+- 登入後會由 `twss_is_admin()` 即時查核 `app_admins`；只有啟用中的管理員會看到「管理後台」入口。
+- 管理頁透過 `twss_admin_operations_log()` 顯示資料健康、同步工作、修復佇列、來源缺漏、API 額度與最近事件。
+- 未登入者與一般登入帳號均無法讀取管理 RPC；即使自行修改前端或 Local Storage，後端仍會拒絕。
+- 管理資料只保存在目前頁面的記憶體，登出、撤權或授權失敗會立即清除，不寫入 PWA 快取或靜態 JSON。
+- 登出會先撤銷 Supabase Session，再移除本機 Session；靜態資產與 Service Worker 快取升至 v17.3.0。
 
 ### v17.2.2 管理診斷修復
 
@@ -170,6 +178,19 @@ npm run audit
 `deep` 與 `history` 只讀持久後端，不會因 `refresh=1` 繞過中央 API 配額。其他官方全市場端點加入 `refresh=1` 可略過短期快取；日常使用不應頻繁加入。
 
 資料健康與缺漏診斷不屬於公開 API。管理員請在 Supabase Edge Function 日誌搜尋 `[admin-data-health]`；`twss_public_data_health()` 與 `twss_public_missing_data(limit)` 只允許 `service_role` 執行。
+
+網站管理員登入後可從頁首或帳戶視窗開啟「管理員後台日誌」。全新專案部署 migration 後，請在 Supabase SQL Editor 將既有登入帳號加入管理員名單；不要把特定 Email 或 UUID 寫進公開原始碼：
+
+```sql
+insert into public.app_admins (user_id, username)
+select id, 'owner'
+from auth.users
+where lower(email) = lower('YOUR_ADMIN_EMAIL')
+on conflict (user_id) do update
+set username = excluded.username, active = true;
+```
+
+撤銷管理權限可執行 `update public.app_admins set active = false where user_id = 'USER_UUID';`，下一次管理請求會立即被拒絕。
 
 ## 目前不能假裝已取得的資料
 

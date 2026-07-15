@@ -154,12 +154,12 @@ assert.match(exporterSource, /coherentTradingDate/);
 assert.match(exporterSource, /officialOpens/);
 assert.match(exporterSource, /row\.dataDate/);
 assert.match(updaterSource, /open: stock\.open/);
-assert.match(serviceWorker, /twss-v17\.2\.2/);
-assert.match(indexHtml, /\?v=17\.2\.2/);
-assert.match(appSource, /sw\.js\?v=17\.2\.2/);
-assert.match(smartSource, /backtest\.json\?v=17\.2\.2/);
+assert.match(serviceWorker, /twss-v17\.3\.0/);
+assert.match(indexHtml, /\?v=17\.3\.0/);
+assert.match(appSource, /sw\.js\?v=17\.3\.0/);
+assert.match(smartSource, /backtest\.json\?v=17\.3\.0/);
 assert.match(patchSource, /LEGACY_AI_LOCAL_STORAGE_KEYS/);
 assert.doesNotMatch(patchSource, /Object\.keys\(localStorage\)|localStorage\.clear\(/,
   "legacy cleanup must never scan or clear unrelated user storage");
 
-console.log("Snapshot pipeline tests passed: 25 mature-date gating, 45-day readiness, next-open runtime, final-cycle readiness, official open, and v17.2.2 cache busting");
+console.log("Snapshot pipeline tests passed: 25 mature-date gating, 45-day readiness, next-open runtime, final-cycle readiness, official open, and v17.3.0 cache busting");

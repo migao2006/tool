@@ -319,9 +319,9 @@
     let backendSnapshot = null;
     const backtestPromise = fetch(`/api/market-data?type=ranking-backtest${force ? '&refresh=1' : ''}`, { cache: 'no-store' })
       .then(response => response.ok ? response.json() : null)
-      .then(async payload => payload?.byGroup ? payload : fetch('/data/backtest.json?v=17.2.2', { cache: 'no-store' })
+      .then(async payload => payload?.byGroup ? payload : fetch('/data/backtest.json?v=17.3.0', { cache: 'no-store' })
         .then(response => response.ok ? response.json() : null).catch(() => null))
-      .catch(() => fetch('/data/backtest.json?v=17.2.2', { cache: 'no-store' })
+      .catch(() => fetch('/data/backtest.json?v=17.3.0', { cache: 'no-store' })
         .then(response => response.ok ? response.json() : null).catch(() => null));
     try {
       const response = await fetch(`/api/market-data?type=backend-rankings&limit=40${force ? '&refresh=1' : ''}`, { cache: 'no-store' });
@@ -332,7 +332,7 @@
     } catch {}
     if (!backendSnapshot) {
       try {
-        const response = await fetch('/data/latest.json?v=17.2.2', { cache: 'no-store' });
+        const response = await fetch('/data/latest.json?v=17.3.0', { cache: 'no-store' });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const payload = await response.json();
         if (!payload.generatedAt || !payload.groups) throw new Error(payload.message || '每日快照尚未建立');

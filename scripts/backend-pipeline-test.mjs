@@ -102,6 +102,12 @@ assert.match(dateReconcile, /'10 9,13 \* \* 1-5'/,
   "the durable universe must recheck at 17:10 and 21:10 Asia\/Taipei");
 assert.match(dateReconcile, /x-twss-sync-token[\s\S]*vault\.decrypted_secrets/,
   "the evening reconciliation must keep using the Vault-protected sync token");
+assert.match(dateReconcile, /create or replace function public\.twss_admin_schedule_status\(\)/,
+  "the administrator must be able to distinguish a missing cron from an in-progress sync");
+assert.match(dateReconcile, /where j\.jobname = 'twss-universe-evening-reconcile'/,
+  "scheduler readiness must inspect the active evening reconciliation job");
+assert.match(dateReconcile, /revoke all on function public\.twss_admin_schedule_status\(\)[\s\S]*from public, anon, authenticated/,
+  "scheduler diagnostics must remain restricted to authenticated administrators");
 
 for (const table of [
   "stock_price_history", "stock_monthly_revenues", "stock_quarterly_financials",

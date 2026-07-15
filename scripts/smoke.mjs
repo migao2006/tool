@@ -355,13 +355,13 @@ const pageResponse = await worker.fetch(new Request("https://example.test/"), {}
 const pageSource = await pageResponse.text();
 assert.match(pageSource, /id="adminBtn"[^>]*hidden[^>]*aria-hidden="true"/,
   "the administrator entry must be invisible until the authenticated role check succeeds");
-assert.match(pageSource, /app\.js\?v=17\.3\.2/);
+assert.match(pageSource, /app\.js\?v=17\.3\.3/);
 const adminPageSource = await readFile(new URL("../public/admin.html", import.meta.url), "utf8");
-assert.match(adminPageSource, /icon\.svg\?v=17\.3\.2/);
-assert.match(adminPageSource, /styles\.css\?v=17\.3\.2/);
-assert.match(adminPageSource, /admin\.js\?v=17\.3\.2/);
+assert.match(adminPageSource, /icon\.svg\?v=17\.3\.3/);
+assert.match(adminPageSource, /styles\.css\?v=17\.3\.3/);
+assert.match(adminPageSource, /admin\.js\?v=17\.3\.3/);
 
-const appResponse = await worker.fetch(new Request("https://example.test/app.js?v=17.3.2"), {}, {});
+const appResponse = await worker.fetch(new Request("https://example.test/app.js?v=17.3.3"), {}, {});
 const appSource = await appResponse.text();
 assert.match(appSource, /官方日期已核對/);
 assert.match(appSource, /各資料來源日期/);
@@ -378,7 +378,7 @@ assert.match(appSource, /交易日不足 60 日/, "partial histories must not be
 assert.match(appSource, /120000,0/, "opening one detail must not automatically consume a second repair attempt");
 assert.match(appSource, /aria-label','關閉視窗/);
 assert.match(appSource, /event\.key==='Escape'/);
-assert.match(appSource, /sw\.js\?v=17\.3\.2/);
+assert.match(appSource, /sw\.js\?v=17\.3\.3/);
 assert.match(appSource, /timeZone:TAIPEI_TIME_ZONE/,
   "administrator timestamps and local date defaults must use Asia/Taipei");
 assert.match(appSource, /上市行情日[\s\S]*上櫃行情日[\s\S]*後台全市場日[\s\S]*三組共同分析日/,
@@ -395,6 +395,10 @@ assert.match(appSource, /settleInitialHomeScroll\(\)[\s\S]*loadFundamentals\(\)/
   "the first complete market render must settle at the top before asynchronous enrichment");
 assert.match(appSource, /navigateToTab[\s\S]*resetPageScroll\(\)/,
   "opening a different page must not inherit the previous page scroll offset");
+assert.match(appSource, /twss_admin_schedule_status/,
+  "the administrator console must verify that evening reconciliation is installed");
+assert.match(appSource, /校正排程缺失[\s\S]*晚間日期校正排程未安裝或已停用/,
+  "the administrator must distinguish a missing cron from a normal pending reconciliation");
 assert.match(appSource, /className:\['healthy','ready','success','final'\]\.includes\(status\)\?'ok'/,
   "healthy administrator states must render with the success style");
 assert.match(appSource, /isAdmin:false,adminState:'idle',adminLog:null/,
@@ -417,7 +421,7 @@ assert.doesNotMatch(appSource, /gemini|ai[-_ ]?research|AI 研究|AI 摘要|data
 assert.doesNotMatch(appSource, /廣告|促銷|VIP|贊助|免費試用|立即購買|解鎖/);
 assert.doesNotMatch(appSource, /_\=\$\{Date\.now\(\)\}/);
 
-const patchResponse = await worker.fetch(new Request("https://example.test/patch.js?v=17.3.2"), {}, {});
+const patchResponse = await worker.fetch(new Request("https://example.test/patch.js?v=17.3.3"), {}, {});
 const patchSource = await patchResponse.text();
 assert.match(patchSource, /候選比較/);
 assert.match(patchSource, /同一組最多比較 4 檔/);
@@ -430,7 +434,7 @@ assert.match(patchSource, /正式排名累積中/);
 assert.doesNotMatch(patchSource, /gemini|ai[-_ ]?research|AI 研究|AI 摘要|data-ai/i,
   "paid research UI and endpoints must remain removed from the comparison release");
 
-const smartResponse = await worker.fetch(new Request("https://example.test/smart.js?v=17.3.2"), {}, {});
+const smartResponse = await worker.fetch(new Request("https://example.test/smart.js?v=17.3.3"), {}, {});
 const smartSource = await smartResponse.text();
 assert.match(smartSource, /機會股排行/);
 assert.match(smartSource, /風險排除 → 成長確認 → 籌碼確認 → 價量進場判斷/);
@@ -452,7 +456,7 @@ assert.doesNotMatch(smartSource, /資料健康中心|data-health|statusCard/,
   "the ranking override must not restore the removed health-center entry");
 assert.doesNotMatch(smartSource, /廣告|促銷|VIP|贊助|免費試用|立即購買|解鎖/);
 
-const stylesResponse = await worker.fetch(new Request("https://example.test/styles.css?v=17.3.2"), {}, {});
+const stylesResponse = await worker.fetch(new Request("https://example.test/styles.css?v=17.3.3"), {}, {});
 const stylesSource = await stylesResponse.text();
 assert.match(stylesSource, /min-width:48px/);
 assert.match(stylesSource, /max-height:min\(76dvh,640px\)/);

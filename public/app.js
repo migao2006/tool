@@ -568,8 +568,8 @@ function latestCommonRankingDate(cycles){
   return[...byDate].filter(([,groups])=>groups.size===3).map(([date])=>date).sort().at(-1)||''
 }
 function adminDateSummary(data){
-  const market=marketDateInfo(),backend=data.health?.dataDate||data.summary?.latestDataDate||'',analysis=latestCommonRankingDate(data.rankingCycles)||data.health?.scoreHistory?.latestCommonFinalDate||'',aligned=Boolean(market.aligned&&backend&&market.common===backend);
-  return{market,backend,analysis,aligned,label:aligned?'日期已對齊':'日期待同步',className:aligned?'ok':'warn'}
+  const market=marketDateInfo(),backend=data.health?.dataDate||data.summary?.latestDataDate||'',analysis=latestCommonRankingDate(data.rankingCycles)||data.health?.scoreHistory?.latestCommonFinalDate||'',aligned=Boolean(market.aligned&&backend&&market.common===backend),scheduleMissing=data.schedule?.ready===false&&!data.schedule?.unavailable;
+  return{market,backend,analysis,aligned,scheduleMissing,label:scheduleMissing?'校正排程缺失':(aligned?'日期已對齊':'日期待同步'),className:aligned?'ok':'warn'}
 }
 function adminJobLabel(value){return({universe:'全市場更新',deep_listed:'上市深度驗證',deep_otc:'上櫃深度驗證',deep_etf:'ETF 深度驗證'})[value]||value||'未命名工作'}
 function adminGroupLabel(value){return({listed:'上市',otc:'上櫃',etf:'ETF'})[value]||value||'全市場'}
@@ -598,7 +598,7 @@ function adminPage(){
   const data=S.adminLog||{},summary=data.summary||{},health=data.health||{},jobs=Array.isArray(data.jobs)?data.jobs:[],sources=objectRows(health.sources),groups=objectRows(health.groups),repairs=Array.isArray(data.repairQueue?.items)?data.repairQueue.items:[],missing=Array.isArray(data.missingData?.examples)?data.missingData.examples:[],timeline=Array.isArray(data.timeline)?data.timeline:[],quota=data.apiQuota||{},dates=adminDateSummary(data);
   return`<div class="admin-hero"><div><small>ADMIN ONLY</small><h2>管理員後台日誌</h2><p>資料健康、同步工作、修復佇列與 API 使用狀態。此頁只保存在目前登入階段，不會寫入快取。</p></div><button id="refreshAdminLog" class="btn secondary" ${S.adminState==='loading'?'disabled':''}>${S.adminState==='loading'?'更新中…':'重新整理'}</button></div>
     <div class="admin-session"><span class="tag">管理員 ${esc(data.admin?.username||'已驗證')}</span><span>產生時間 ${adminTime(data.generatedAt)}</span></div>
-    <section class="card admin-date-card ${dates.aligned?'accent':'warn-card'}"><div class="head"><div><h3>日期一致性</h3><div class="muted">市場行情、後台全市場同步與三組分析完成日分開顯示</div></div><span class="status-pill ${dates.className}">${dates.label}</span></div><div class="grid admin-date-grid">${metric('上市行情日',esc(dates.market.listed||'—'))}${metric('上櫃行情日',esc(dates.market.otc||'—'))}${metric('後台全市場日',esc(dates.backend||'—'))}${metric('三組共同分析日',esc(dates.analysis||'尚未完成'))}</div>${dates.aligned?'':'<div class="admin-date-warning">官方行情已換日，但後台持久化週期尚未完成同日校正；晚間校正排程會再次同步。</div>'}</section>
+    <section class="card admin-date-card ${dates.aligned?'accent':'warn-card'}"><div class="head"><div><h3>日期一致性</h3><div class="muted">市場行情、後台全市場同步與三組分析完成日分開顯示</div></div><span class="status-pill ${dates.className}">${dates.label}</span></div><div class="grid admin-date-grid">${metric('上市行情日',esc(dates.market.listed||'—'))}${metric('上櫃行情日',esc(dates.market.otc||'—'))}${metric('後台全市場日',esc(dates.backend||'—'))}${metric('三組共同分析日',esc(dates.analysis||'尚未完成'))}</div>${dates.aligned?'':`<div class="admin-date-warning">${dates.scheduleMissing?'晚間日期校正排程未安裝或已停用，請立即修復排程。':'官方行情已換日，但後台持久化週期尚未完成同日校正；晚間校正排程會再次同步。'}</div>`}</section>
     <div class="stat-strip admin-stats">${metric('待修復',fmt(summary.pendingRepairs??0,0))}${metric('分析錯誤',fmt(summary.analysisErrors??0,0))}${metric('失敗工作',fmt(summary.failedJobs??0,0))}${metric('執行中',fmt(summary.runningJobs??0,0))}${metric('完成分析',fmt(summary.readyAnalyses??0,0))}${metric('後台全市場日',esc(dates.backend||'—'))}</div>
     <section class="card"><div class="head"><div><h3>同步工作</h3><div class="muted">只顯示管理員可讀的工作狀態與遮罩後錯誤摘要</div></div><span class="status-pill ${adminStatus(health.overallStatus).className}">${esc(adminStatus(health.overallStatus).label)}</span></div><div class="admin-jobs">${jobs.length?jobs.map(adminJobHtml).join(''):'<div class="muted">目前沒有同步工作紀錄。</div>'}</div></section>
     <section class="card"><h3>市場分組與資料來源</h3><div class="admin-groups">${groups.length?groups.map(adminGroupHtml).join(''):'<div class="muted">尚無分組統計。</div>'}</div><div class="admin-sources">${sources.length?sources.map(adminSourceHtml).join(''):'<div class="muted">尚無來源統計。</div>'}</div></section>
@@ -612,7 +612,11 @@ async function loadAdminLog(force=false){
   S.adminState='loading';S.adminError='';render();
   try{
     if(!await refreshSession())throw Object.assign(new Error('unauthorized'),{status:401});
-    S.adminLog=await sb('/rest/v1/rpc/twss_admin_operations_log',{method:'POST',body:{p_limit:60}});S.adminState='ready'
+    const [log,schedule]=await Promise.all([
+      sb('/rest/v1/rpc/twss_admin_operations_log',{method:'POST',body:{p_limit:60}}),
+      sb('/rest/v1/rpc/twss_admin_schedule_status',{method:'POST',body:{}}).catch(()=>({ready:false,unavailable:true}))
+    ]);
+    S.adminLog={...log,schedule};S.adminState='ready'
   }catch(error){
     S.adminLog=null;
     if(error.status===401||error.status===403||error.code==='42501'||/admin_required/i.test(error.message||'')){clearAdminState();updateAccountUi()}
@@ -702,5 +706,5 @@ function openAccountModal(){
 
 document.querySelector('#accountBtn').onclick=openAccountModal;
 document.querySelector('#adminBtn').onclick=openAdminPage;
-if('serviceWorker'in navigator)navigator.serviceWorker.register('/sw.js?v=17.3.2',{updateViaCache:'none'}).catch(()=>{});
+if('serviceWorker'in navigator)navigator.serviceWorker.register('/sw.js?v=17.3.3',{updateViaCache:'none'}).catch(()=>{});
 initSession();render();loadStocks();

@@ -97,6 +97,33 @@ assert.deepEqual(deepDataInternals.etfDirectionFlags({
   benchmark: "臺灣50指數單日反向一倍報酬指數",
 }), { leveraged: false, inverse: true });
 
+const taiexSnapshot = deepDataInternals.latestIndexSnapshot([
+  { Date: "1150713", ClosingIndex: "23,000.00" },
+  { Date: "1150714", ClosingIndex: "23,230.00" },
+], { code: "taiex", name: "加權指數", source: "TWSE OpenAPI", closeField: "ClosingIndex" });
+assert.deepEqual(taiexSnapshot, {
+  code: "taiex", name: "加權指數", dataDate: "2026-07-14", value: 23230,
+  change: 230, changePercent: 1, source: "TWSE OpenAPI",
+});
+
+const tpexSnapshot = deepDataInternals.latestIndexSnapshot([
+  { Date: "20260715", Close: "250.00", Change: "5.00" },
+], { code: "tpex", name: "櫃買指數", source: "TPEx OpenAPI", closeField: "Close", changeField: "Change" });
+assert.equal(tpexSnapshot.dataDate, "2026-07-15");
+assert.equal(tpexSnapshot.changePercent, 2.04);
+
+const txSnapshot = deepDataInternals.selectTaifexTx([
+  { Date: "20260714", Contract: "TX", "ContractMonth(Week)": "202607W3", Last: "23010", Change: "10", "%": "0.04%", Volume: "999999", SettlementPrice: "23000", OpenInterest: "1" },
+  { Date: "20260714", Contract: "TX", "ContractMonth(Week)": "202607", Last: "23000", Change: "100", "%": "0.44%", Volume: "1000", SettlementPrice: "22990", OpenInterest: "500" },
+  { Date: "20260714", Contract: "TX", "ContractMonth(Week)": "202608", Last: "23120", Change: "120", "%": "0.52%", Volume: "3000", SettlementPrice: "23100", OpenInterest: "800" },
+  { Date: "20260714", Contract: "TX", "ContractMonth(Week)": "202609", Last: "23200", Change: "130", "%": "0.56%", Volume: "5000", SettlementPrice: "NULL", OpenInterest: "900" },
+]);
+assert.deepEqual(txSnapshot, {
+  code: "tx", name: "台指期", dataDate: "2026-07-14", value: 23120,
+  change: 120, changePercent: 0.52, contractMonth: "202608", session: "regular",
+  volume: 3000, settlementPrice: 23100, openInterest: 800, source: "TAIFEX OpenAPI",
+});
+
 const splitLikeSeries = Array.from({ length: 40 }, (_, index) => ({
   date: new Date(Date.UTC(2026, 0, index + 1)).toISOString().slice(0, 10),
   open: index < 20 ? 100 : 50,

@@ -583,7 +583,7 @@
     if (watchButton) { watchButton.dataset.tab = 'mine'; watchButton.innerHTML = '<span>◎</span>我的'; }
     if (!q('[data-tab="verify"]', nav)) {
       const verifyButton = document.createElement('button');
-      verifyButton.type = 'button'; verifyButton.dataset.tab = 'verify'; verifyButton.innerHTML = '<span>✓</span>預測驗證';
+      verifyButton.type = 'button'; verifyButton.dataset.tab = 'verify'; verifyButton.innerHTML = '<span>✓</span>驗證';
       nav.insertBefore(verifyButton, watchButton);
     }
   }

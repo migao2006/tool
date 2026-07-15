@@ -1,5 +1,6 @@
 const TWSE_OPEN = "https://openapi.twse.com.tw/v1";
 const TPEX_OPEN = "https://www.tpex.org.tw/openapi/v1";
+const TAIFEX_OPEN = "https://openapi.taifex.com.tw/v1";
 const FINMIND = "https://api.finmindtrade.com/api/v4/data";
 const TDCC_HOLDINGS = "https://opendata.tdcc.com.tw/getOD.ashx?id=1-5";
 export const ANALYSIS_VERSION = "16.3-ultimate-data-audit";
@@ -16,6 +17,7 @@ const policies = [
   { match: "api.finmindtrade.com", key: "finmind", gap: 500, concurrency: 2 },
   { match: "openapi.twse.com.tw", key: "twse", gap: 1_250, concurrency: 2 },
   { match: "www.tpex.org.tw", key: "tpex", gap: 1_250, concurrency: 2 },
+  { match: "openapi.taifex.com.tw", key: "taifex", gap: 1_250, concurrency: 1 },
   { match: "opendata.tdcc.com.tw", key: "tdcc", gap: 2_000, concurrency: 1 },
 ];
 const providerCircuits = new Map();
@@ -1157,6 +1159,61 @@ function normalizeBenchmark(rows, fields) {
     .sort((a, b) => a.date.localeCompare(b.date));
 }
 
+function latestIndexSnapshot(rows, { code, name, source, closeField = "close", changeField = "" }) {
+  const normalized = objectRows(rows).map((row) => ({
+    date: isoDate(row.Date ?? row.date),
+    close: number(row[closeField] ?? row.Close ?? row.ClosingIndex ?? row.close),
+    change: changeField ? number(row[changeField]) : null,
+  })).filter((row) => /^\d{4}-\d{2}-\d{2}$/.test(row.date) && finite(row.close))
+    .sort((left, right) => left.date.localeCompare(right.date));
+  const latest = normalized.at(-1);
+  if (!latest) return null;
+  const previous = normalized.at(-2);
+  const change = finite(latest.change)
+    ? Number(latest.change)
+    : previous && finite(previous.close) ? Number(latest.close) - Number(previous.close) : null;
+  const previousClose = finite(change) ? Number(latest.close) - Number(change) : previous?.close;
+  return {
+    code,
+    name,
+    dataDate: latest.date,
+    value: round(latest.close, 2),
+    change: round(change, 2),
+    changePercent: finite(change) && finite(previousClose) && Number(previousClose) !== 0
+      ? round(Number(change) / Number(previousClose) * 100, 2)
+      : null,
+    source,
+  };
+}
+
+function selectTaifexTx(rows) {
+  const normalized = objectRows(rows).filter((row) => {
+    const contractMonth = clean(row["ContractMonth(Week)"]);
+    return clean(row.Contract) === "TX" && /^\d{6}$/.test(contractMonth) &&
+      finite(number(row.Last)) && finite(number(row.Volume)) &&
+      finite(number(row.SettlementPrice)) && finite(number(row.OpenInterest));
+  });
+  if (!normalized.length) return null;
+  const latestDate = normalized.map((row) => isoDate(row.Date)).filter(Boolean).sort().at(-1);
+  const latest = normalized.filter((row) => isoDate(row.Date) === latestDate)
+    .sort((left, right) => (number(right.Volume) || 0) - (number(left.Volume) || 0))[0];
+  if (!latest) return null;
+  return {
+    code: "tx",
+    name: "台指期",
+    dataDate: latestDate,
+    value: round(number(latest.Last), 2),
+    change: round(number(latest.Change), 2),
+    changePercent: round(number(latest["%"]), 2),
+    contractMonth: clean(latest["ContractMonth(Week)"]),
+    session: "regular",
+    volume: number(latest.Volume),
+    settlementPrice: number(latest.SettlementPrice),
+    openInterest: number(latest.OpenInterest),
+    source: "TAIFEX OpenAPI",
+  };
+}
+
 export async function buildBenchmarks(options = {}) {
   const finmindRetries = options.finmindRetries ?? 2;
   const allowFinmind = options.allowFinmind !== false;
@@ -1166,6 +1223,7 @@ export async function buildBenchmarks(options = {}) {
     const settled = await Promise.allSettled([
       request(`${TWSE_OPEN}/indicesReport/MI_5MINS_HIST`, { timeout: officialTimeout, retries: officialRetries }),
       request(`${TPEX_OPEN}/tpex_index`, { timeout: officialTimeout, retries: officialRetries }),
+      request(`${TAIFEX_OPEN}/DailyMarketReportFut`, { timeout: officialTimeout, retries: officialRetries }),
     ]);
     let listed = settled[0].status === "fulfilled"
       ? normalizeBenchmark(objectRows(settled[0].value), { close: "ClosingIndex" })
@@ -1174,6 +1232,15 @@ export async function buildBenchmarks(options = {}) {
       ? normalizeBenchmark(objectRows(settled[1].value), { close: "Close" })
       : [];
     const source = { listed: "TWSE OpenAPI", otc: "TPEx OpenAPI" };
+    const marketIndices = [
+      settled[0].status === "fulfilled" ? latestIndexSnapshot(settled[0].value, {
+        code: "taiex", name: "加權指數", source: "TWSE OpenAPI", closeField: "ClosingIndex",
+      }) : null,
+      settled[1].status === "fulfilled" ? latestIndexSnapshot(settled[1].value, {
+        code: "tpex", name: "櫃買指數", source: "TPEx OpenAPI", closeField: "Close", changeField: "Change",
+      }) : null,
+      settled[2].status === "fulfilled" ? selectTaifexTx(settled[2].value) : null,
+    ].filter(Boolean);
     // The official OpenAPI index feeds may only expose the current month.  Do
     // not pretend 7–10 observations are a 20/60-day benchmark; use FinMind's
     // documented total-return-index history as the bounded fallback.
@@ -1202,8 +1269,15 @@ export async function buildBenchmarks(options = {}) {
     return {
       listed,
       otc,
+      marketIndices,
       source,
-      coverage: { listed: listed.length >= 65, otc: otc.length >= 65 },
+      coverage: {
+        listed: listed.length >= 65,
+        otc: otc.length >= 65,
+        taiex: marketIndices.some((item) => item.code === "taiex"),
+        tpex: marketIndices.some((item) => item.code === "tpex"),
+        tx: marketIndices.some((item) => item.code === "tx"),
+      },
     };
   });
 }
@@ -1517,6 +1591,8 @@ export const deepDataInternals = {
   institutionalSummary,
   marginSummary,
   etfDirectionFlags,
+  latestIndexSnapshot,
+  selectTaifexTx,
   finmindCooldownMs,
   validSymbol: (symbol) => VALID_SYMBOL.test(String(symbol || "")),
   isEtfSymbol: (symbol) => ETF_SYMBOL.test(String(symbol || "")),

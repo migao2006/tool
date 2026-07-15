@@ -355,7 +355,7 @@
   const oldBind = bind;
   bind = function () { oldBind(); bindUltimate(); };
   const button = q('.bottom-nav [data-tab="opportunities"]');
-  if (button) button.innerHTML = '<span>◆</span>機會選股';
+  if (button) button.innerHTML = '<span>◆</span>排行';
 })();
 
 /* v19 progressive UI. The v19 API enriches the existing verified snapshot;
@@ -365,6 +365,7 @@
   const v19 = {
     home: null,
     rankings: null,
+    benchmarks: null,
     rankingNextCursor: null,
     rankingLoading: false,
     rankingGeneration: 0,
@@ -398,7 +399,7 @@
     document.documentElement.dataset.theme = v19.theme;
     document.documentElement.style.colorScheme = v19.theme;
     localStorage.setItem('twss-theme-v19', v19.theme);
-    q('meta[name="theme-color"]')?.setAttribute('content', v19.theme === 'light' ? '#f3f7f8' : '#071018');
+    q('meta[name="theme-color"]')?.setAttribute('content', v19.theme === 'light' ? '#f3f7f8' : '#060d14');
     const button = q('#themeToggle');
     if (button) {
       button.textContent = v19.theme === 'light' ? '☾' : '☀';
@@ -413,6 +414,15 @@
       const response = await fetch(`${api}${path}`, { cache: 'no-store', headers: { accept: 'application/json' } });
       if (!response.ok) return null;
       return unwrap(await response.json());
+    } catch { return null; }
+  }
+
+  async function optionalMarketJson() {
+    try {
+      const response = await fetch('/api/market-data?type=benchmarks', {
+        cache: 'no-store', headers: { accept: 'application/json' }
+      });
+      return response.ok ? await response.json() : null;
     } catch { return null; }
   }
 
@@ -637,6 +647,27 @@
     </article>`;
   }
 
+  function featuredStock(row) {
+    if (!row) return empty('目前沒有足夠資料可產生精選。');
+    const watched = isWatched(row.symbol);
+    return `<article class="card v19-featured">
+      <div class="v19-featured-copy"><span class="v19-eyebrow">TODAY'S PICK</span><h3>${esc(row.name)} <small>${esc(row.symbol)}</small></h3><p>${esc(row.reason)}</p><div class="v19-featured-meta"><span>信心 ${confidenceText(row.confidence)}</span><span class="${riskClass(row.risk.level)}">${esc(row.risk.level)}風險</span><span>${esc(row.market)}</span></div></div>
+      <div class="v19-featured-score"><small>AI SCORE</small><strong>${scoreText(row.score)}</strong><span>/ 100</span></div>
+      <div class="v19-featured-actions"><button class="btn secondary" type="button" data-watch="${esc(row.symbol)}">${watched ? '✓ 已自選' : '＋ 自選'}</button><button class="btn" type="button" data-forecast="${esc(row.symbol)}">查看分析 <span aria-hidden="true">→</span></button></div>
+    </article>`;
+  }
+
+  function compactStockRow(row, rank = 0, mode = 'score') {
+    const value = mode === 'riser' && row.scoreDelta != null
+      ? pct(row.scoreDelta, 1)
+      : mode === 'risk' ? row.risk.level : scoreText(row.score);
+    const label = mode === 'riser' ? '分數變化' : mode === 'risk' ? '風險' : 'AI';
+    const valueClass = mode === 'riser' ? (row.scoreDelta >= 0 ? 'up' : 'down') : mode === 'risk' ? riskClass(row.risk.level) : '';
+    return `<button class="v19-compact-row" type="button" data-forecast="${esc(row.symbol)}" aria-label="查看 ${esc(row.name)} ${esc(row.symbol)} 分析">
+      ${rank ? `<span class="v19-compact-rank">${rank}</span>` : ''}<span class="v19-compact-name"><b>${esc(row.name)}</b><small>${esc(row.symbol)} · ${esc(row.market)}</small></span><span class="v19-compact-value ${valueClass}"><small>${label}</small><strong>${esc(value)}</strong></span><span class="v19-row-arrow" aria-hidden="true">›</span>
+    </button>`;
+  }
+
   function empty(text) { return `<div class="card empty"><p class="muted">${esc(text)}</p></div>`; }
   function section(id, title, subtitle, body) {
     return `<section class="v19-section" data-v19-home-section="${id}" aria-labelledby="v19-${id}"><div class="v19-section-head"><div><h3 id="v19-${id}">${title}</h3>${subtitle ? `<div class="muted">${subtitle}</div>` : ''}</div></div>${body}</section>`;
@@ -671,14 +702,14 @@
     return [...unique.values()];
   }
 
-  function newsHtml(items) {
-    const normalized = items.map(item => typeof item === 'string' ? { title: item } : item).filter(item => item?.title || item?.headline).slice(0, 8);
+  function newsHtml(items, limit = 3) {
+    const normalized = items.map(item => typeof item === 'string' ? { title: item } : item).filter(item => item?.title || item?.headline).slice(0, limit);
     if (!normalized.length) return empty('尚未接獲可驗證的新聞／公告資料。');
     return `<div class="card v19-news-list">${normalized.map(item => {
       const title = first(item.title, item.headline);
       const url = safeUrl(first(item.url, item.link));
       const label = url ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(title)}</a>` : `<b>${esc(title)}</b>`;
-      return `<article>${label}<div class="muted small">${esc(first(item.source, item.publisher, '來源待標示'))}${first(item.publishedAt, item.date) ? ` · ${esc(dateOnly(first(item.publishedAt, item.date)) || first(item.publishedAt, item.date))}` : ''}</div>${item.summary ? `<p>${esc(item.summary)}</p>` : ''}</article>`;
+      return `<article>${label}<div class="muted small">${esc(first(item.source, item.publisher, '來源待標示'))}${first(item.publishedAt, item.date) ? ` · ${esc(dateOnly(first(item.publishedAt, item.date)) || first(item.publishedAt, item.date))}` : ''}</div>${item.summary ? `<p class="line-clamp-2">${esc(item.summary)}</p>` : ''}</article>`;
     }).join('')}</div>`;
   }
 
@@ -692,9 +723,21 @@
       const stored = JSON.parse(localStorage.getItem(twssUserData.storageKey('rule-alerts')) || '[]');
       alerts = Array.isArray(stored) ? stored : array(stored?.events);
     } catch {}
-    const alertRows = alerts.filter(item => watched.has(String(item.symbol))).slice(-5).reverse();
+    const alertRows = alerts.filter(item => watched.has(String(item.symbol))).slice(-3).reverse();
     if (!alertRows.length && !changed.length) return empty('目前沒有已驗證的重要變化；自選提醒會在資料更新後顯示。');
-    return `<div class="card v19-change-list">${alertRows.map(item => `<button type="button" data-forecast="${esc(item.symbol)}"><b>${esc(item.name || item.symbol)} ${esc(item.symbol)}</b><span>${esc(first(item.message, item.title, '自選條件已觸發'))}</span></button>`).join('')}${changed.map(row => `<button type="button" data-forecast="${esc(row.symbol)}"><b>${esc(row.name)} ${esc(row.symbol)}</b><span>AI 分數變化 ${pct(row.scoreDelta, 1)}</span></button>`).join('')}</div>`;
+    const items = [
+      ...alertRows.map(item => ({ symbol: item.symbol, title: `${item.name || item.symbol} ${item.symbol}`, message: first(item.message, item.title, '自選條件已觸發') })),
+      ...changed.map(row => ({ symbol: row.symbol, title: `${row.name} ${row.symbol}`, message: `AI 分數 ${pct(row.scoreDelta, 1)}` })),
+    ].slice(0, 3);
+    return `<div class="card v19-change-list">${items.map(item => `<button type="button" data-forecast="${esc(item.symbol)}"><b>${esc(item.title)}</b><span>${esc(item.message)}</span><i aria-hidden="true">›</i></button>`).join('')}</div>`;
+  }
+
+  function marketIndexCard(item, fallback) {
+    if (!item) return `<div class="v19-index-card pending"><span>${esc(fallback.name)}</span><strong>同步中</strong><small>官方盤後資料</small></div>`;
+    const change = number(first(item.changePercent, item.change_pct));
+    const value = number(first(item.value, item.close));
+    const detail = item.code === 'tx' && item.contractMonth ? `${item.contractMonth} · 日盤` : '官方收盤';
+    return `<div class="v19-index-card"><div class="v19-index-title"><span>${esc(first(item.name, fallback.name))}</span><small>${esc(detail)}</small></div><strong>${value == null ? '—' : fmt(value, 2)}</strong><b class="${cls(change)}">${change == null ? '—' : pct(change, 2)}</b><time>${esc(first(item.dataDate, item.tradeDate, '日期待確認'))}</time></div>`;
   }
 
   function marketSummary(rows) {
@@ -703,7 +746,10 @@
     const down = valid.filter(stock => number(stock.change) < 0).length;
     const turnover = valid.reduce((sum, stock) => sum + (number(stock.value) || 0), 0);
     const dates = marketDateInfo();
-    return `<div class="card v19-market-summary"><div class="grid four">${metric('上漲家數', fmt(up, 0))}${metric('下跌家數', fmt(down, 0))}${metric('平盤／待補', fmt(Math.max(0, valid.length - up - down), 0))}${metric('成交金額', turnover ? `${fmt(turnover / 100000000, 1)} 億` : '待資料')}</div><div class="v19-data-line"><span>上市 ${esc(dates.listed || '待確認')}</span><span>上櫃 ${esc(dates.otc || '待確認')}</span><span>AI ${esc(first(v19.home?.dataDate, v19.rankings?.dataDate, rows[0]?.dataDate, '待確認'))}</span></div></div>`;
+    const indexRows = array(v19.benchmarks?.marketIndices);
+    const indexByCode = new Map(indexRows.map(item => [String(item.code || ''), item]));
+    const expected = [{ code: 'taiex', name: '加權指數' }, { code: 'tpex', name: '櫃買指數' }, { code: 'tx', name: '台指期' }];
+    return `<div class="card v19-market-summary"><div class="v19-index-strip">${expected.map(item => marketIndexCard(indexByCode.get(item.code), item)).join('')}</div><div class="v19-breadth"><span><i class="up">${fmt(up, 0)}</i> 上漲</span><span><i class="down">${fmt(down, 0)}</i> 下跌</span><span><i>${fmt(Math.max(0, valid.length - up - down), 0)}</i> 平盤</span><span class="grow"><i>${turnover ? `${fmt(turnover / 100000000, 0)} 億` : '—'}</i> 成交額</span></div><div class="v19-data-line"><span>上市 ${esc(dates.listed || '待確認')}</span><span>上櫃 ${esc(dates.otc || '待確認')}</span><span>分析 ${esc(first(v19.home?.dataDate, v19.rankings?.dataDate, rows[0]?.dataDate, '待確認'))}</span></div></div>`;
   }
 
   function v19HomePage() {
@@ -714,18 +760,22 @@
     const apiPicks = homeApiList('todayPicks', 'picks', 'aiPicks', 'featured');
     const picks = (apiPicks.length ? apiPicks.map(row => normalize({ ...row, _v19Api: true }, 'v19 API')) : homeRows.filter(row => row.score != null).sort((a, b) => b.score - a.score)).slice(0, 3);
     const apiRisers = homeApiList('fastestRisers', 'risers', 'scoreRisers');
-    const risers = (apiRisers.length ? apiRisers.map(row => normalize({ ...row, _v19Api: true }, 'v19 API')) : homeRows.filter(row => row.scoreDelta != null && row.scoreDelta > 0).sort((a, b) => b.scoreDelta - a.scoreDelta)).slice(0, 5);
+    const risers = (apiRisers.length ? apiRisers.map(row => normalize({ ...row, _v19Api: true }, 'v19 API')) : homeRows.filter(row => row.scoreDelta != null && row.scoreDelta > 0).sort((a, b) => b.scoreDelta - a.scoreDelta)).slice(0, 3);
     const apiRanks = homeApiList('rankings', 'topRankings', 'aiRankings');
     const rankings = (apiRanks.length ? apiRanks.map(row => normalize({ ...row, _v19Api: true }, 'v19 API')) : homeRows.filter(row => row.score != null).sort((a, b) => b.score - a.score)).slice(0, 5);
     const news = homeApiList('news', 'importantNews', 'announcements');
-    return `<div class="v19-hero"><div><small>V19 RESEARCH VIEW</small><h2>今日台股研究摘要</h2><p>行情、固定量化分數與資料日期分開標示；缺少的深度資料不推測補值。</p></div><span class="status-pill ${status.cls}">${esc(status.label)}</span></div>
-      ${section('market', '今日市場摘要', '官方盤後資料，非即時行情', marketSummary(rows))}
-      ${section('picks', '今日 AI 精選', picks.length ? `顯示 ${picks.length} 檔；依可用分數排序` : '', picks.length ? `<div class="list v19-card-grid">${picks.map((row, index) => stockCard(row, index + 1)).join('')}</div>` : empty('目前沒有足夠資料可產生精選。'))}
-      ${section('risers', '分數上升最快', '只顯示有可驗證前後分數的標的', risers.length ? `<div class="list v19-card-grid">${risers.map((row, index) => stockCard(row, index + 1)).join('')}</div>` : empty('目前沒有可驗證的分數上升資料。'))}
-      ${section('ranking', 'AI 排行榜', '前五名摘要；完整清單可至排行榜搜尋與篩選', rankings.length ? `<div class="list v19-card-grid">${rankings.map((row, index) => stockCard(row, index + 1)).join('')}</div><button class="btn secondary load-more" type="button" data-tab-jump="opportunities">查看完整排行榜</button>` : empty('排行榜資料仍在整理。'))}
-      ${section('watch', '自選股重要變化', '僅顯示已驗證分數變化與本機規則提醒', watchChanges(rows))}
-      ${section('news', '今日重要新聞與公告', '新聞與公告不從價格推測', newsHtml(news))}
-      ${disclaimer()}`;
+    return `<div class="v19-dashboard"><div class="v19-hero"><div><small>MARKET INTELLIGENCE</small><h2>今日重點</h2></div><span class="status-pill ${status.cls}">${esc(status.label)}</span></div>
+      ${section('market', '今日市場摘要', '', marketSummary(rows))}
+      ${section('picks', '今日 AI 精選', '', picks.length ? `${featuredStock(picks[0])}${picks.length > 1 ? `<div class="v19-compact-list v19-pick-rest">${picks.slice(1).map((row, index) => compactStockRow(row, index + 2)).join('')}</div>` : ''}` : empty('目前沒有足夠資料可產生精選。'))}
+      <div class="v19-home-grid">
+        ${section('risers', '分數上升最快', '', risers.length ? `<div class="v19-compact-list">${risers.map((row, index) => compactStockRow(row, index + 1, 'riser')).join('')}</div>` : empty('目前沒有可驗證的分數變化。'))}
+        ${section('ranking', 'AI 排行榜', '', rankings.length ? `<div class="v19-compact-list">${rankings.map((row, index) => compactStockRow(row, index + 1)).join('')}</div><button class="v19-text-link" type="button" data-tab-jump="opportunities">完整排行榜 <span aria-hidden="true">→</span></button>` : empty('排行榜資料整理中。'))}
+      </div>
+      <div class="v19-home-grid v19-secondary-grid">
+        ${section('watch', '自選股重要變化', '', watchChanges(rows))}
+        ${section('news', '今日重要新聞與公告', '', newsHtml(news, 3))}
+      </div>
+      ${disclaimer()}</div>`;
   }
 
   function filteredRows() {
@@ -756,7 +806,7 @@
     const rows = filteredRows();
     const visible = rows.slice(0, v19.visible);
     const status = sourceStatus();
-    return `<div class="v19-hero"><div><small>AI RANKING</small><h2>AI 排行榜</h2><p>初始顯示 10 檔，每次增加 20 檔；可依市場、產業與資料欄位排序。</p></div><span class="status-pill ${status.cls}">${esc(status.label)}</span></div>
+    return `<div class="v19-hero v19-page-hero"><div><small>AI RANKING</small><h2>AI 排行榜</h2></div><span class="status-pill ${status.cls}">${esc(status.label)}</span></div>
       <section class="card v19-ranking-filter"><div class="search-row"><label class="sr-only" for="v19RankSearch">搜尋股票</label><input id="v19RankSearch" type="search" value="${esc(v19.query)}" placeholder="輸入代號或名稱"><button id="v19RankSearchBtn" class="btn" type="button">搜尋</button></div><div class="v19-filter-grid"><label>市場<select id="v19RankMarket"><option value="all">全部市場</option><option value="listed" ${v19.market === 'listed' ? 'selected' : ''}>上市</option><option value="otc" ${v19.market === 'otc' ? 'selected' : ''}>上櫃</option><option value="etf" ${v19.market === 'etf' ? 'selected' : ''}>ETF</option></select></label><label>產業<select id="v19RankIndustry"><option value="all">全部產業</option>${industries.map(value => `<option value="${esc(value)}" ${value === v19.industry ? 'selected' : ''}>${esc(value)}</option>`).join('')}</select></label><label>排序<select id="v19RankSort"><option value="score_desc" ${v19.sort === 'score_desc' ? 'selected' : ''}>AI 分數高至低</option><option value="score_asc" ${v19.sort === 'score_asc' ? 'selected' : ''}>AI 分數低至高</option><option value="risk_asc" ${v19.sort === 'risk_asc' ? 'selected' : ''}>風險低至高</option><option value="risk_desc" ${v19.sort === 'risk_desc' ? 'selected' : ''}>風險高至低</option><option value="change_desc" ${v19.sort === 'change_desc' ? 'selected' : ''}>分數升幅</option><option value="confidence_desc" ${v19.sort === 'confidence_desc' ? 'selected' : ''}>AI 信心</option></select></label></div></section>
       <div class="smart-results-head"><div><h3>篩選結果</h3><div class="muted">共 ${rows.length} 檔，現在顯示 ${visible.length} 檔</div></div><b>${esc(first(v19.rankings?.dataDate, visible[0]?.dataDate, S.date, '日期待確認'))}</b></div>
       ${visible.length ? `<div class="list ultimate-results v19-rank-results">${visible.map((row, index) => stockCard(row, index + 1)).join('')}</div>${visible.length < rows.length || v19.rankingNextCursor ? `<button id="v19RankMore" class="btn secondary load-more" type="button" ${v19.rankingLoading ? 'disabled' : ''}>${v19.rankingLoading ? '載入中…' : '再顯示 20 檔'}</button>` : ''}` : empty(v19.rankingLoading ? '正在讀取排行榜…' : '沒有符合搜尋與篩選條件的標的。')}
@@ -873,6 +923,10 @@
   }
 
   async function loadV19() {
+    void optionalMarketJson().then(value => {
+      v19.benchmarks = value;
+      if (!S.loading && S.tab === 'home') render();
+    });
     const [home, rankings] = await Promise.all([optionalJson('/home'), optionalJson(rankingQuery(10))]);
     v19.home = home;
     applyRankingPage(rankings, false);
@@ -929,7 +983,7 @@
   opportunitiesPage = v19RankingPage;
   openDetail = openV19Detail;
   const nav = q('.bottom-nav [data-tab="opportunities"]');
-  if (nav) nav.innerHTML = '<span>◆</span>AI 排行榜';
+  if (nav) nav.innerHTML = '<span>◆</span>排行';
   setTheme(v19.theme);
   loadV19();
 })();

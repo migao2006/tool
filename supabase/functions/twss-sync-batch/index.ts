@@ -36,6 +36,34 @@ const json = (payload: unknown, status = 200) => new Response(JSON.stringify(pay
 const finite = (value: unknown) => value != null && Number.isFinite(Number(value));
 const now = () => new Date().toISOString();
 
+async function logAdminHealth(mode: "universe" | "deep", result: unknown, group: Group | null = null) {
+  const row = result && typeof result === "object" && !Array.isArray(result)
+    ? result as Record<string, any>
+    : {};
+  const failureCount = Array.isArray(row.failures) ? row.failures.length : 0;
+  const [healthResult, missingResult] = await Promise.allSettled([
+    rest("rpc/twss_public_data_health", { method: "POST", body: {} }),
+    rest("rpc/twss_public_missing_data", { method: "POST", body: { p_limit: 20 } }),
+  ]);
+  console.info("[admin-data-health]", {
+    mode,
+    group,
+    status: row.skipped ? "skipped" : failureCount ? "partial" : "success",
+    date: row.date || row.dataDate || null,
+    total: finite(row.total) ? Number(row.total) : null,
+    verified: finite(row.verified) ? Number(row.verified) : null,
+    remaining: finite(row.remaining) ? Number(row.remaining) : null,
+    failures: failureCount,
+    health: healthResult.status === "fulfilled"
+      ? healthResult.value.data
+      : { status: "unavailable" },
+    missingData: missingResult.status === "fulfilled"
+      ? missingResult.value.data
+      : { status: "unavailable" },
+    loggedAt: now(),
+  });
+}
+
 async function rest(path: string, options: {
   method?: string;
   body?: unknown;
@@ -413,6 +441,22 @@ function compactStock(stock: Record<string, any>) {
   return Object.fromEntries(keys.map((key) => [key, stock[key]]).filter(([, value]) => value !== undefined));
 }
 
+function compactSourceDiagnostics(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const allowed = [
+    "label", "status", "statusCode", "rows", "retryable", "reusedFromStatus",
+    "expectedPeriod", "actualPeriod",
+  ];
+  return Object.fromEntries(Object.entries(value as Record<string, any>).map(([key, diagnostic]) => [
+    key,
+    diagnostic && typeof diagnostic === "object" && !Array.isArray(diagnostic)
+      ? Object.fromEntries(allowed
+        .filter((field) => diagnostic[field] !== undefined)
+        .map((field) => [field, diagnostic[field]]))
+      : {},
+  ]));
+}
+
 function compactDeep(deep: Record<string, any>) {
   return {
     analysisVersion: deep.analysisVersion,
@@ -423,7 +467,7 @@ function compactDeep(deep: Record<string, any>) {
     fetchedAt: deep.fetchedAt,
     price: deep.price,
     benchmarkCoverage: deep.benchmarkCoverage,
-    sourceDiagnostics: deep.sourceDiagnostics,
+    sourceDiagnostics: compactSourceDiagnostics(deep.sourceDiagnostics),
     revenue: deep.revenue,
     financial: deep.financial ? { ...deep.financial, history: undefined } : undefined,
     institutional: deep.institutional ? { ...deep.institutional, history: undefined } : undefined,
@@ -1343,14 +1387,31 @@ Deno.serve(async (req: Request) => {
     }
   }
   if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
+  let adminLogContext: { mode: "universe" | "deep"; group: Group | null } = {
+    mode: "deep",
+    group: null,
+  };
   try {
     if (!await verifyRequest(req)) return json({ error: "Unauthorized" }, 401);
     const body = await req.json().catch(() => ({}));
     const mode = body.mode === "universe" ? "universe" : "deep";
-    if (mode === "universe") return json({ ok: true, version: VERSION, mode, result: await syncUniverse() });
+    if (mode === "universe") {
+      adminLogContext = { mode, group: null };
+      const result = await syncUniverse();
+      await logAdminHealth(mode, result);
+      return json({ ok: true, version: VERSION, mode, result });
+    }
     const group = GROUPS.includes(body.group) ? body.group as Group : "otc";
-    return json({ ok: true, version: VERSION, mode, result: await syncDeep(group, body.limit) });
+    adminLogContext = { mode, group };
+    const result = await syncDeep(group, body.limit);
+    await logAdminHealth(mode, result, group);
+    return json({ ok: true, version: VERSION, mode, result });
   } catch (error) {
+    console.error("[admin-data-health] sync failed", {
+      ...adminLogContext,
+      error: error instanceof Error ? error.message : String(error),
+      loggedAt: now(),
+    });
     return json({ ok: false, version: VERSION, error: error instanceof Error ? error.message : String(error) }, 500);
   }
 });

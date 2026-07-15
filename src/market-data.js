@@ -4,12 +4,10 @@ import {
   buildRiskSnapshot,
 } from "./deep-data.js";
 import {
-  readDataHealth,
   readBackendAnalysis,
   readBackendHistory,
   readBackendRankings,
   readRankingBacktest,
-  readBackendStatus,
   readBackendMarketStocks,
 } from "./backend-store.js";
 
@@ -18,7 +16,7 @@ const SUPABASE_HISTORY_EDGE = "https://lfkdkdyaatdlizryiyon.supabase.co/function
 const TWSE_OPEN = "https://openapi.twse.com.tw/v1";
 const TWSE_WEB = "https://www.twse.com.tw";
 const TPEX_OPEN = "https://www.tpex.org.tw/openapi/v1";
-const VERSION = "17.3";
+const VERSION = "17.2";
 
 const FINANCIAL_CATEGORIES = ["ci", "fh", "basi", "bd", "ins", "mim"];
 
@@ -1379,12 +1377,6 @@ export async function handleMarketData(request, url = new URL(request.url)) {
     }
     if (type === "etf-profiles") {
       return jsonResponse(await buildEtfProfiles(), {}, force ? 0 : 21_600);
-    }
-    if (type === "backend-status") {
-      return jsonResponse(await readBackendStatus(), {}, force ? 0 : 60);
-    }
-    if (type === "data-health") {
-      return jsonResponse(await readDataHealth(), {}, force ? 0 : 60);
     }
     if (type === "ranking-backtest") {
       return jsonResponse(await readRankingBacktest(), {}, force ? 0 : 300);

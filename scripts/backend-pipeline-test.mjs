@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
-const [sync, baseSchema, schema, grants, cron, acceleratedCron, leases, quota, publicHistoryQuota, preserve, repairQueue, clearEtfRepairs, etfDirectionRepair, lateCoverageRepair, clearOldVersionRepairs, trim, config, marketHandler, workflow, exporter, backtest, freeInsights, backtestSchema, hardening] = await Promise.all([
+const [sync, baseSchema, schema, grants, cron, acceleratedCron, leases, quota, publicHistoryQuota, preserve, repairQueue, clearEtfRepairs, etfDirectionRepair, lateCoverageRepair, clearOldVersionRepairs, trim, config, marketHandler, workflow, exporter, backtest, freeInsights, backtestSchema, hardening, diagnosticPrivacy] = await Promise.all([
   readFile(new URL("../supabase/functions/twss-sync-batch/index.ts", import.meta.url), "utf8"),
   readFile(new URL("../supabase/migrations/20260714040000_base_schema.sql", import.meta.url), "utf8"),
   readFile(new URL("../supabase/migrations/20260714090000_add_persistent_stock_backend.sql", import.meta.url), "utf8"),
@@ -26,6 +26,7 @@ const [sync, baseSchema, schema, grants, cron, acceleratedCron, leases, quota, p
   readFile(new URL("../supabase/migrations/20260715170000_remove_paid_ai_and_add_free_insights.sql", import.meta.url), "utf8"),
   readFile(new URL("../supabase/migrations/20260715172000_free_backtest_and_missing_data_audit.sql", import.meta.url), "utf8"),
   readFile(new URL("../supabase/migrations/20260715173000_harden_free_insights_audit.sql", import.meta.url), "utf8"),
+  readFile(new URL("../supabase/migrations/20260715201357_restrict_health_diagnostics_admin_only.sql", import.meta.url), "utf8"),
 ]);
 
 const hardenedBacktest = hardening.match(
@@ -36,6 +37,9 @@ const hardenedHealth = hardening.match(
 )?.[0] || "";
 const hardenedMissing = hardening.match(
   /create or replace function public\.twss_public_missing_data[\s\S]*?grant execute on function public\.twss_public_missing_data/,
+)?.[0] || "";
+const restrictedContext = diagnosticPrivacy.match(
+  /create or replace function public\.twss_get_stock_context[\s\S]*?grant execute on function public\.twss_get_stock_context/,
 )?.[0] || "";
 
 assert.match(sync, /FINMIND_AUTHENTICATED \? 22 : 10/, "reused company batches must double throughput inside the same request slice");
@@ -76,9 +80,14 @@ assert.match(sync, /rpc\/twss_finalize_ranking_cycle/, "a completed deep group m
 assert.match(sync, /rpc\/twss_evaluate_matured_backtests/, "completed cycles must evaluate matured results using stored data only");
 assert.match(sync, /p_model_version: VERSION/, "ranking finalization must use the frozen score-model version");
 assert.match(sync, /const VERSION = "16\.3"/, "the score model version must remain frozen at 16.3");
-assert.match(marketHandler, /const VERSION = "17\.3"/, "the public API patch version must match package 17.3");
+assert.match(marketHandler, /const VERSION = "17\.2"/, "the public API patch version must match package 17.2");
 assert.match(sync, /\[ranking-cycle\] finalization failed/, "ranking finalization failures must remain diagnosable without aborting the data sync");
 assert.match(sync, /rankingFinalization/, "the deep job state must retain finalization success or failure diagnostics");
+assert.match(sync, /\[admin-data-health\]/, "every protected synchronization run must emit an administrator health summary");
+assert.match(sync, /rest\("rpc\/twss_public_data_health"[\s\S]*rest\("rpc\/twss_public_missing_data"/,
+  "administrator logs must retain the coverage, repair-queue, and missing-data details removed from the website");
+assert.match(sync, /await logAdminHealth\(mode, result/,
+  "the protected worker must flush its administrator diagnostics before returning");
 assert.doesNotMatch(sync, /sb_secret_[A-Za-z0-9_-]{8,}/, "server secrets must not exist in source");
 
 for (const table of [
@@ -97,6 +106,26 @@ assert.match(schema, /vault\.create_secret/);
 assert.match(schema, /revoke all on function public\.twss_verify_sync_token/);
 assert.match(grants, /revoke all on[\s\S]*from anon, authenticated/);
 assert.match(grants, /grant select on[\s\S]*to anon, authenticated/);
+assert.match(diagnosticPrivacy,
+  /revoke all on function public\.twss_public_data_health\(\)[\s\S]*from public, anon, authenticated[\s\S]*to service_role/,
+  "data-health diagnostics must be callable only by the service role");
+assert.match(diagnosticPrivacy,
+  /revoke all on function public\.twss_public_missing_data\(integer\)[\s\S]*from public, anon, authenticated[\s\S]*to service_role/,
+  "missing-data diagnostics must be callable only by the service role");
+assert.match(diagnosticPrivacy, /revoke all on table public\.stock_sync_state from public, anon, authenticated/,
+  "raw synchronization state must not be readable through the public Data API");
+assert.match(diagnosticPrivacy, /drop policy if exists stock_sync_state_public_read/,
+  "the permissive synchronization-state RLS policy must be removed");
+assert.match(diagnosticPrivacy, /revoke all on table public\.stock_analysis_cache from public, anon, authenticated/);
+assert.match(diagnosticPrivacy, /grant select \([\s\S]*result,[\s\S]*updated_at[\s\S]*\) on table public\.stock_analysis_cache to anon, authenticated/,
+  "public analysis access must use a safe column allowlist");
+assert.doesNotMatch(diagnosticPrivacy.match(/grant select \([\s\S]*?\) on table public\.stock_analysis_cache/)?.[0] || "",
+  /last_error|attempt_count|next_retry_at|error_kind|needs_repair|repair_reasons/,
+  "the public analysis allowlist must exclude internal retry and error diagnostics");
+assert.match(restrictedContext, /select\s+a\.symbol,[\s\S]*a\.analysis\s+into target/,
+  "the public context RPC must select only columns retained in the public allowlist");
+assert.doesNotMatch(restrictedContext, /select \* into target/,
+  "the public context RPC must not regain access to the whole analysis-cache row");
 
 assert.match(cron, /"group":"listed","limit":2/);
 assert.match(cron, /"group":"otc","limit":2/);
@@ -136,9 +165,10 @@ assert.match(clearOldVersionRepairs, /analysis_version <> '16\.3-ultimate-data-a
 assert.match(sync, /repair_reasons.*some[\s\S]*etf-direction-classification/, "one-time migration repairs must not wait six hours");
 assert.match(sync, /financial-source-coverage/, "fresh analyses must persist incomplete financial-source coverage as a repair reason");
 assert.match(marketHandler, /readBackendAnalysis\(symbol\)/);
-assert.match(marketHandler, /type === "data-health"/);
 assert.match(marketHandler, /type === "ranking-backtest"/);
-assert.match(marketHandler, /readDataHealth\(\)/);
+assert.doesNotMatch(marketHandler, /type === "(?:data-health|backend-status)"/,
+  "administrative diagnostics must not have a public market-data route");
+assert.doesNotMatch(marketHandler, /readDataHealth|readBackendStatus/);
 assert.doesNotMatch(marketHandler, /payload \|\|= await buildPriceHistory/);
 assert.match(workflow, /npm run export-data/);
 assert.doesNotMatch(workflow, /npm run update-data/);
@@ -187,9 +217,9 @@ assert.match(hardenedHealth, /'perGroup', v_final_by_group/,
 assert.match(hardenedHealth, /h\.score_date = s\.cycle_date[\s\S]*h\.model_version = '16\.3'[\s\S]*h\.official/,
   "official counts must be scoped to the exact date and score version");
 assert.doesNotMatch(hardenedHealth, /'lastError',/,
-  "public health must not return raw internal synchronization errors");
+  "administrator health summaries must not return raw internal synchronization errors");
 assert.match(hardenedHealth, /'lastErrorCode'/,
-  "public health should expose only stable error codes");
+  "administrator health summaries should expose only stable error codes");
 assert.match(hardenedMissing, /'datasets'.*jsonb_object_agg/s,
   "missing-data diagnostics must provide per-dataset aggregates");
 assert.match(hardenedMissing, /jsonb_strip_nulls[\s\S]*'expectedPeriod'[\s\S]*'actualPeriod'/,

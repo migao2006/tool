@@ -5,12 +5,10 @@ import { fileURLToPath } from "node:url";
 const projectRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const read = (path) => readFile(resolve(projectRoot, path), "utf8");
 
-const [page, adminPage, app, adminScript, patch, smart, styles, manifest, icon, serviceWorker, latestData, backtestData, backendSource, deepDataSource, backendStoreSource] =
+const [page, app, patch, smart, styles, manifest, icon, serviceWorker, latestData, backtestData, backendSource, deepDataSource, backendStoreSource] =
   await Promise.all([
     read("public/index.html"),
-    read("public/admin.html"),
     read("public/app.js"),
-    read("public/admin.js"),
     read("public/patch.js"),
     read("public/smart.js"),
     read("public/styles.css"),
@@ -29,9 +27,7 @@ const literal = (value) => JSON.stringify(value);
 
 const worker = `${[
   `const PAGE=${literal(page)};`,
-  `const ADMIN_PAGE=${literal(adminPage)};`,
   `const APP=${literal(app)};`,
-  `const ADMIN_SCRIPT=${literal(adminScript)};`,
   `const PATCH=${literal(patch)};`,
   `const SMART=${literal(smart)};`,
   `const STYLES=${literal(styles)};`,
@@ -64,13 +60,7 @@ export default {
       ...securityHeaders("text/html; charset=utf-8","no-cache, no-store, must-revalidate"),
       "content-security-policy":"default-src 'self'; connect-src 'self' https://lfkdkdyaatdlizryiyon.supabase.co; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
     }});
-    if(path==="/admin"||path==="/admin.html")return new Response(ADMIN_PAGE,{headers:{
-      ...securityHeaders("text/html; charset=utf-8","no-store, max-age=0, must-revalidate"),
-      "content-security-policy":"default-src 'self'; connect-src 'self' https://lfkdkdyaatdlizryiyon.supabase.co; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
-      "x-robots-tag":"noindex, nofollow, noarchive"
-    }});
     if(path==="/app.js")return new Response(APP,{headers:securityHeaders("text/javascript; charset=utf-8")});
-    if(path==="/admin.js")return new Response(ADMIN_SCRIPT,{headers:{...securityHeaders("text/javascript; charset=utf-8","no-store, max-age=0"),"x-robots-tag":"noindex, nofollow, noarchive"}});
     if(path==="/patch.js")return new Response(PATCH,{headers:securityHeaders("text/javascript; charset=utf-8")});
     if(path==="/smart.js")return new Response(SMART,{headers:securityHeaders("text/javascript; charset=utf-8")});
     if(path==="/styles.css")return new Response(STYLES,{headers:securityHeaders("text/css; charset=utf-8")});

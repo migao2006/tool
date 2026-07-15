@@ -1,4 +1,4 @@
-# v17.3 持久化後端、研究工作台與管理日誌（量化核心仍為 v16.3）
+# v17.2 持久化後端與研究工作台（量化核心仍為 v16.3）
 
 這一版把「一次只深度驗證 10 檔」改成可續跑的資料管線。GitHub 靜態快照仍是前端備援；正式頁面會合併 Supabase 已累積的深度結果，因此完成檔數會隨排程增加，而不是每次從零開始。
 
@@ -58,37 +58,22 @@
 
 - `anon` 與 `authenticated` 只有公開市場資料表的 `SELECT` 權限。
 - 所有公開市場資料表（包含 `stock_master`、`stock_snapshots`）都啟用 RLS，只有 public-read policy，沒有公開寫入 policy。
+- `stock_sync_state` 不開放給 `anon`／`authenticated`；`stock_analysis_cache` 僅授權研究結果欄位，原始錯誤、租約、重試與修復狀態保留給管理端。
 - 批次函式使用 Supabase 伺服器密鑰寫入；密鑰只存在 Edge Runtime 環境。
 - pg_cron 的 `x-twss-sync-token` 由 Vault 產生與保存，原始碼沒有權杖明文。
 - `twss-sync-batch` 雖設定 `verify_jwt = false`，POST 排程／手動同步仍會先呼叫 service-role-only 的 `twss_verify_sync_token`；缺少或錯誤權杖會回傳 HTTP 401。公開 GET 只開放 `mode=history`、合法股票代號與月份範圍，寫入仍由函式內的 service role 執行，且必須先通過股票主檔與中央配額檢查。
-- `app_admins` 只把 Supabase Auth UUID 標記為後台管理員。`twss_is_admin()` 與 `twss_admin_operations_log(limit)` 都使用目前 JWT 的 `auth.uid()` 檢查名單，不接受可由使用者修改的 `user_metadata` 作為授權依據。
-- 管理日誌 RPC 只授權 `authenticated`，且非管理員會收到 `42501 admin_required`。API 額度、尚未 final 的排行榜週期與完整後台彙整不開放 `anon`。
 
 公開的 `sb_publishable_...` key 只用於受 RLS 保護的讀取，可放在前端；`sb_secret_...`、service role key 與 Vault 權杖不可提交到 GitHub。
 
-## 建立或重設管理員
+## v17 管理診斷、同業與長期驗證
 
-先套用 `20260715174500_admin_operations_console.sql`。接著只在可信任的本機終端執行：
-
-```sh
-SUPABASE_URL=https://YOUR_PROJECT.supabase.co \
-SUPABASE_SERVICE_ROLE_KEY=YOUR_SERVICE_ROLE_KEY \
-TWSS_ADMIN_USERNAME=Migao \
-TWSS_ADMIN_PASSWORD='YOUR_PRIVATE_PASSWORD' \
-npm run admin:provision
-```
-
-`TWSS_ADMIN_EMAIL` 預設依帳號轉成 `migao@admin.twss.local`，也可自行覆寫。腳本使用 Supabase Admin API 建立／更新 Auth 使用者，再用 service role upsert `app_admins`；密碼不會出現在 migration 或前端。Supabase Auth 密碼最少 6 個字元，不能設定成五字元的 `Migao`。若要停用管理員，可在 SQL Editor 執行 `update public.app_admins set active=false where username='Migao';`，不必刪除一般雲端帳戶資料。
-
-## v17 資料健康、同業與長期驗證
-
-- `twss_public_data_health()`：各來源日期、分組覆蓋率、修復數與正式評分日數。
-- `twss_public_missing_data(limit)`：依每檔 `sourceDiagnostics` 與 `repair_reasons` 判定可重試、上游異常、官方期別落後、來源沒有或不適用。
+- `twss_public_data_health()`：僅限 `service_role`，彙整各來源日期、分組覆蓋率、修復數與正式評分日數。
+- `twss_public_missing_data(limit)`：僅限 `service_role`，依每檔 `sourceDiagnostics` 與 `repair_reasons` 判定可重試、上游異常、官方期別落後、來源沒有或不適用。
 - `twss_get_stock_context(symbol)`：同市場、同產業百分位與正式排名歷史；同產業少於 5 檔才使用同市場備援。
 - `twss_evaluate_matured_backtests(group, model)`：service-role-only，使用訊號日後第一個交易日開盤價與第 5／10／20 個交易日收盤價，保存至 `opportunity_backtest_outcomes`。
 - `twss_public_ranking_backtest(model)`：只在該市場與期間已有至少 25 個成熟訊號日時公開統計，否則回傳 `insufficient_history`。
 
-公開 RPC 使用 `security invoker` 並沿用資料表 RLS；寫入與評估函式只授權 `service_role`。後端驗證不倒填後來公布的財報或營收，也不使用訊號日收盤價假設成交。
+同業與回測等公開 RPC 使用 `security invoker` 並沿用資料表 RLS；健康、缺漏、寫入與評估函式只授權 `service_role`。每次受權杖保護的同步工作都會以 `[admin-data-health]` 寫入精簡管理日誌，一般網站不提供健康中心或同步狀態端點。後端驗證不倒填後來公布的財報或營收，也不使用訊號日收盤價假設成交。
 
 ## 從原始碼重新部署
 

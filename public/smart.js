@@ -290,7 +290,6 @@
     const verifiedCount = Math.max(deepRows.length, persistentCount);
     const stateClass = snapshotState === 'ready' ? 'ok' : snapshotState === 'error' ? 'bad' : 'warn';
     return `<div class="smart-hero compact"><div><h2>機會股排行</h2><p>上市、上櫃與 ETF 分組評分；資料不足、待觀察與不適用會分開標示。</p></div><span class="status-pill ${stateClass}">${snapshotState === 'ready' ? (persistentCount ? `後端已累積 ${persistentCount} 檔` : '深度快照已載入') : snapshotState === 'error' ? '目前使用快照初篩' : '正在讀取深度快照'}</span></div>
-      ${statusCard()}
       <details class="card ultimate-policy method-summary"><summary><b>評分方法</b><span class="tag info">${esc(ageLabel())}</span></summary><div class="muted">風險排除 → 成長確認 → 籌碼確認 → 價量進場判斷</div><div class="ultimate-pipeline"><span>硬性排除</span><i>→</i><span>成長 30</span><i>→</i><span>籌碼 25</span><i>→</i><span>價量 25</span><i>→</i><span>估值 10</span><i>→</i><span>環境 10</span></div><p class="muted">缺漏項目會移除權重並重正規化；資料信心低於 70% 不進正式榜。風險最高扣 30 分，交易限制與價格未還原直接排除。</p></details>
       <section class="card smart-filter-card"><div class="head"><div><h3>獨立排行榜</h3><div class="muted">${groupNotes[selectedGroup]}</div></div><button id="ultimateRefresh" class="btn secondary">重新讀取</button></div><div class="smart-groups" role="group" aria-label="市場分組">${Object.entries(groupLabels).map(([group, label]) => `<button data-ultimate-group="${group}" class="${selectedGroup === group ? 'active' : ''}" aria-pressed="${selectedGroup === group}">${label}<small>${counts[group] || 0}</small></button>`).join('')}</div><div class="ultimate-controls"><label>榜單<select id="ultimateOfficial"><option value="official" ${officialOnly ? 'selected' : ''}>只看正式候選</option><option value="all" ${!officialOnly ? 'selected' : ''}>含驗證中候選</option></select></label><label>最低分數<input id="ultimateMinScore" type="number" min="0" max="100" value="${minimumScore}"></label>${selectedGroup === 'etf' ? '' : `<label>產業<select id="ultimateIndustry">${industries.map(value => `<option ${value === selectedIndustry ? 'selected' : ''}>${esc(value)}</option>`).join('')}</select></label>`}</div></section>
       <div class="smart-results-head"><div><h3>${groupLabels[selectedGroup]}正式排序</h3><div class="muted">深度驗證 ${verifiedCount} 檔 · 信心達標 ${formalCount} 檔 · 顯示 ${rows.length} 檔${snapshot?.backend?.persistent ? ' · 後端持續累積' : ''}</div></div><b>${snapshot?.groupDates?.[selectedGroup] || snapshot?.dataDate || S.date || '日期核對中'}</b></div>
@@ -320,9 +319,9 @@
     let backendSnapshot = null;
     const backtestPromise = fetch(`/api/market-data?type=ranking-backtest${force ? '&refresh=1' : ''}`, { cache: 'no-store' })
       .then(response => response.ok ? response.json() : null)
-      .then(async payload => payload?.byGroup ? payload : fetch('/data/backtest.json?v=17.3', { cache: 'no-store' })
+      .then(async payload => payload?.byGroup ? payload : fetch('/data/backtest.json?v=17.2.2', { cache: 'no-store' })
         .then(response => response.ok ? response.json() : null).catch(() => null))
-      .catch(() => fetch('/data/backtest.json?v=17.3', { cache: 'no-store' })
+      .catch(() => fetch('/data/backtest.json?v=17.2.2', { cache: 'no-store' })
         .then(response => response.ok ? response.json() : null).catch(() => null));
     try {
       const response = await fetch(`/api/market-data?type=backend-rankings&limit=40${force ? '&refresh=1' : ''}`, { cache: 'no-store' });
@@ -333,7 +332,7 @@
     } catch {}
     if (!backendSnapshot) {
       try {
-        const response = await fetch('/data/latest.json?v=17.3', { cache: 'no-store' });
+        const response = await fetch('/data/latest.json?v=17.2.2', { cache: 'no-store' });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const payload = await response.json();
         if (!payload.generatedAt || !payload.groups) throw new Error(payload.message || '每日快照尚未建立');

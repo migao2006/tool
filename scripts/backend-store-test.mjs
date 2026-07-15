@@ -55,27 +55,6 @@ globalThis.fetch = async (input, options = {}) => {
   assert.equal(options.headers.apikey.startsWith("sb_publishable_"), true);
   assert.equal("authorization" in options.headers, false, "public reads must not expose a service secret");
 
-  if (url.pathname.endsWith("/stock_sync_state")) {
-    return Response.json([
-      {
-        job_key: "deep_otc", status: "success", processed_count: 12,
-        last_error: "FinMind https://api.example.test/private?token=secret HTTP 429 quota exceeded",
-        details: {
-          remaining: 300,
-          benchmarks: { TAIEX: [{ date: "2026-07-13", close: 24000 }] },
-          failures: [{ symbol: "6488", error: "GET https://api.example.test/private HTTP 429 token=secret" }],
-          rankingFinalization: {
-            status: "error",
-            error: "POST https://database.example.test/rpc returned HTTP 502 secret=hidden",
-          },
-        },
-      },
-      {
-        job_key: "universe", status: "success", cycle_date: "2026-07-14",
-        details: { groupDates: { listed: "2026-07-14", otc: "2026-07-14", etf: "2026-07-14" } },
-      },
-    ]);
-  }
   if (url.pathname.endsWith("/stock_price_history")) {
     const rows = Array.from({ length: 65 }, (_, index) => ({
       trade_date: new Date(Date.UTC(2026, 0, index + 1)).toISOString().slice(0, 10),
@@ -83,6 +62,17 @@ globalThis.fetch = async (input, options = {}) => {
       volume: 500_000 + index, trade_value: 50_000_000, transactions: 2_000,
     })).reverse();
     return Response.json(rows);
+  }
+  if (url.pathname.endsWith("/stock_snapshots")) {
+    if (url.searchParams.get("select") === "trade_date") {
+      return Response.json([{ trade_date: "2026-07-14" }]);
+    }
+    return Response.json([{
+      symbol: "6488", trade_date: "2026-07-14", market: "上櫃", industry: "半導體業",
+      instrument_type: "股票", open: 100, high: 103, low: 99, close: 102,
+      change_pct: 2, volume: 5000, trade_value: 510000000, transactions: 3000,
+      raw_data: { name: "環球晶" }, source_dates: { price: "2026-07-14" },
+    }]);
   }
   if (url.pathname.endsWith("/opportunity_ranking_cycles")) {
     const group = ["listed", "otc", "etf"].find((item) => url.searchParams.get("group_name") === `eq.${item}`);
@@ -101,16 +91,6 @@ globalThis.fetch = async (input, options = {}) => {
       trend: { status: "ready", finalDateCount: 2, series: [] },
     });
   }
-  if (url.pathname.endsWith("/rpc/twss_public_data_health")) {
-    return Response.json({ version: "17.0", overallStatus: "healthy", dataDate: "2026-07-14", scoreHistory: { status: "ready" } });
-  }
-  if (url.pathname.endsWith("/rpc/twss_public_missing_data")) {
-    return Response.json({
-      datasets: { revenue: { total: 2, retryable: 2, classifications: { scheduled_repair: 2 } } },
-      summary: [{ dataset: "revenue", classification: "scheduled_repair", count: 2 }],
-      examples: [],
-    });
-  }
   if (url.pathname.endsWith("/rpc/twss_public_ranking_backtest")) {
     return Response.json({ version: "17.0", status: "insufficient_history", snapshotCount: 1, minimumSnapshots: 25, byGroup: {} });
   }
@@ -125,11 +105,11 @@ globalThis.fetch = async (input, options = {}) => {
   return Response.json({ error: "unmocked" }, { status: 404 });
 };
 
-const { readBackendAnalysis, readBackendHistory, readBackendRankings, readBackendStatus, readDataHealth, readRankingBacktest, backendStoreInternals } = await import("../src/backend-store.js");
+const { readBackendAnalysis, readBackendHistory, readBackendMarketStocks, readBackendRankings, readRankingBacktest, backendStoreInternals } = await import("../src/backend-store.js");
 
 const rankings = await readBackendRankings(100);
 assert.equal(rankings.mode, "live");
-assert.equal(rankings.version, "17.3");
+assert.equal(rankings.version, "17.2");
 assert.equal(rankings.scoreModelVersion, "16.3", "the frozen score model must remain identifiable separately from the API version");
 assert.deepEqual(rankings.backend.counts, { listed: 1, otc: 1, etf: 0 });
 assert.equal(rankings.groups.otc[0].stock.symbol, "6488");
@@ -137,15 +117,7 @@ assert.equal(rankings.groups.listed[0].result.score, 82);
 assert.equal(rankings.groups.listed[0].result.categories[0].score, 84);
 assert.equal(rankings.groups.otc[0].isStale, true, "last-good rows must remain visible across trading-date rollover");
 assert.equal("items" in rankings.groups.listed[0].result.categories[0], false, "ranking payload must omit factor-level duplicates");
-assert.equal("benchmarks" in rankings.backend.sync[0].details, false, "ranking payload must omit duplicated benchmark series");
-assert.equal("last_error" in rankings.backend.sync[0], false, "public rankings must omit raw sync errors");
-assert.equal(rankings.backend.sync[0].last_error_code, "rate_limited");
-assert.deepEqual(rankings.backend.sync[0].details.failureSummary, {
-  count: 1, byCode: { rate_limited: 1 },
-});
-assert.equal(rankings.backend.sync[0].details.rankingFinalization.errorCode, "upstream_unavailable");
-assert.doesNotMatch(JSON.stringify(rankings.backend.sync), /https?:|secret|token=/i,
-  "public sync state must not expose upstream URLs, credentials, or raw exception text");
+assert.equal("sync" in rankings.backend, false, "public rankings must not include administrative synchronization state");
 assert.equal(rankings.generatedAt, "2026-07-14T04:05:00Z");
 assert.equal(rankings.groups.listed[0].rank, 1);
 assert.equal(rankings.groups.listed[0].previousRank, 2);
@@ -171,29 +143,21 @@ assert.equal(analysis.stock.name, "台積電");
 assert.equal(analysis.price.lastDate, "2026-07-13");
 assert.equal(analysis.peer.peerCount, 12);
 assert.equal(analysis.trend.status, "ready");
-const dataHealth = await readDataHealth();
-assert.equal(dataHealth.version, "17.3");
-assert.equal(dataHealth.overallStatus, "healthy");
-assert.equal(dataHealth.missingData.summary[0].classification, "scheduled_repair");
-assert.equal(dataHealth.missingData.datasets.revenue.retryable, 2);
+const otcFallback = await readBackendMarketStocks("otc");
+assert.equal(otcFallback.date, "2026-07-14");
+assert.equal(otcFallback.stocks[0].symbol, "6488");
+assert.equal(otcFallback.stocks[0].backendFallback, true);
 const rankingBacktest = await readRankingBacktest();
 assert.equal(rankingBacktest.status, "insufficient_history");
-assert.equal(rankingBacktest.version, "17.3", "public API patch version must override an older stored RPC label");
+assert.equal(rankingBacktest.version, "17.2", "public API patch version must override an older stored RPC label");
 assert.equal(rankingBacktest.scoreModelVersion, "16.3");
-const status = await readBackendStatus();
-assert.equal(status.version, "17.3");
-assert.equal(status.persistent, true);
-assert.equal(status.jobs[0].processed_count, 12);
-assert.equal("benchmarks" in status.jobs[0].details, false, "status payload must omit duplicated benchmark series");
-assert.equal("last_error" in status.jobs[0], false);
-assert.equal(status.jobs[0].last_error_code, "rate_limited");
-assert.doesNotMatch(JSON.stringify(status.jobs), /https?:|secret|token=/i);
 assert.ok(calls.every(({ url }) => url.hostname === "lfkdkdyaatdlizryiyon.supabase.co"));
 assert.equal(calls.filter(({ url }) => url.pathname.endsWith("/stock_analysis_cache"))
   .some(({ url }) => url.searchParams.has("data_date")), false, "rankings must not discard last-good rows on date rollover");
-assert.equal(calls.filter(({ url }) => url.pathname.endsWith("/stock_sync_state"))
-  .every(({ url }) => url.searchParams.get("job_key") === "in.(universe,deep_listed,deep_otc,deep_etf)"), true,
-"rankings and status must exclude per-symbol history lease rows");
+assert.equal(calls.some(({ url }) => url.pathname.endsWith("/stock_sync_state")), false,
+  "public reads must never request administrative synchronization state");
+assert.equal(calls.some(({ url }) => /twss_public_(?:data_health|missing_data)/.test(url.pathname)), false,
+  "public reads must never call administrator-only diagnostic RPCs");
 assert.equal(calls.filter(({ url }) => url.pathname.endsWith("/opportunity_ranking_cycles"))
   .every(({ url }) => url.searchParams.get("status") === "eq.final" && url.searchParams.get("limit") === "2"), true,
 "rank change calculations must read at most two explicitly final dates per group");
@@ -206,4 +170,4 @@ assert.doesNotMatch(backendStoreSource, /gemini|ai[_-]?research|readAiResearch/i
 assert.equal(calls.some(({ url }) => /ai[_-]?stock|ai[_-]?research/i.test(url.pathname)), false,
   "backend tests must never request removed research tables");
 
-console.log("Backend store tests passed: public-only reads, grouped rankings, sync state, and stored history");
+console.log("Backend store tests passed: public-only research reads, grouped rankings, and stored history");

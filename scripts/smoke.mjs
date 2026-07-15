@@ -189,21 +189,9 @@ const fullFetch = async (input) => {
   if (url.includes("mopsfin_t187ap07_O_ci")) {
     return json(otcSymbols.map((SecuritiesCompanyCode) => ({ Date: "1150713", 年度: "115", 季別: "1", SecuritiesCompanyCode, 資產總計: "1000", 負債總計: "300", 權益總計: "700" })));
   }
-  if (url.includes("supabase.co/rest/v1/rpc/twss_public_data_health")) {
-    return json({
-      version: "17.3",
-      overallStatus: "healthy",
-      dataDate: "2026-07-13",
-      sources: { price: { status: "healthy", latest: "2026-07-13" } },
-      scoreHistory: { status: "accumulating", finalDateCount: 1, minimumFinalDates: 2 },
-    });
-  }
-  if (url.includes("supabase.co/rest/v1/rpc/twss_public_missing_data")) {
-    return json({ summary: [{ dataset: "revenue", classification: "scheduled_repair", count: 1 }], examples: [] });
-  }
   if (url.includes("supabase.co/rest/v1/rpc/twss_public_ranking_backtest")) {
     return json({
-      version: "17.3", status: "insufficient_history", snapshotCount: 0, minimumSnapshots: 25,
+      version: "17.2", status: "insufficient_history", snapshotCount: 0, minimumSnapshots: 25,
       noLookAhead: true, byGroup: { listed: {}, otc: {}, etf: {} },
     });
   }
@@ -257,19 +245,22 @@ async function payload(path) {
 }
 
 const health = await payload("/api/health");
-assert.equal(health.version, "17.3");
+assert.equal(health.version, "17.2");
 assert.equal("aiResearch" in health, false);
 assert.deepEqual(health.markets, ["上市股票", "上櫃股票", "ETF"]);
 
-const dataHealth = await payload("/api/market-data?type=data-health&refresh=1");
-assert.equal(dataHealth.version, "17.3");
-assert.equal(dataHealth.overallStatus, "healthy");
-assert.equal(dataHealth.scoreHistory.status, "accumulating");
-assert.equal(dataHealth.missingData.summary[0].classification, "scheduled_repair");
+const dataHealthResponse = await worker.fetch(
+  new Request("https://example.test/api/market-data?type=data-health&refresh=1"), {}, {},
+);
+assert.equal(dataHealthResponse.status, 400, "data-health must not be exposed by the public API");
+const backendStatusResponse = await worker.fetch(
+  new Request("https://example.test/api/market-data?type=backend-status&refresh=1"), {}, {},
+);
+assert.equal(backendStatusResponse.status, 400, "backend-status must not be exposed by the public API");
 
 const rankingBacktest = await payload("/api/market-data?type=ranking-backtest&refresh=1");
 assert.equal(rankingBacktest.status, "insufficient_history");
-assert.equal(rankingBacktest.version, "17.3");
+assert.equal(rankingBacktest.version, "17.2");
 assert.equal(rankingBacktest.scoreModelVersion, "16.3");
 assert.equal(rankingBacktest.noLookAhead, true);
 
@@ -359,7 +350,7 @@ assert.match(onDemandHistory.source, /按需補抓/);
 const removedResearchResponse = await worker.fetch(new Request("https://example.test/api/ai-research"), {}, {});
 assert.equal(removedResearchResponse.status, 404);
 
-const appResponse = await worker.fetch(new Request("https://example.test/app.js?v=17.3"), {}, {});
+const appResponse = await worker.fetch(new Request("https://example.test/app.js?v=17.2.2"), {}, {});
 const appSource = await appResponse.text();
 assert.match(appSource, /官方日期已核對/);
 assert.match(appSource, /各資料來源日期/);
@@ -376,13 +367,15 @@ assert.match(appSource, /交易日不足 60 日/, "partial histories must not be
 assert.match(appSource, /120000,0/, "opening one detail must not automatically consume a second repair attempt");
 assert.match(appSource, /aria-label','關閉視窗/);
 assert.match(appSource, /event\.key==='Escape'/);
-assert.match(appSource, /sw\.js\?v=17\.2/);
+assert.match(appSource, /sw\.js\?v=17\.2\.2/);
+assert.doesNotMatch(appSource, /資料健康中心|data-health|loadDataHealth|openDataHealth|statusCard|refreshDataHealth/,
+  "the public application must not load or render administrator diagnostics");
 assert.doesNotMatch(appSource, /gemini|ai[-_ ]?research|AI 研究|AI 摘要|data-ai/i,
   "paid research UI and endpoints must be fully removed");
 assert.doesNotMatch(appSource, /廣告|促銷|VIP|贊助|免費試用|立即購買|解鎖/);
 assert.doesNotMatch(appSource, /_\=\$\{Date\.now\(\)\}/);
 
-const patchResponse = await worker.fetch(new Request("https://example.test/patch.js?v=17.3"), {}, {});
+const patchResponse = await worker.fetch(new Request("https://example.test/patch.js?v=17.2.2"), {}, {});
 const patchSource = await patchResponse.text();
 assert.match(patchSource, /候選比較/);
 assert.match(patchSource, /同一組最多比較 4 檔/);
@@ -395,7 +388,7 @@ assert.match(patchSource, /正式排名累積中/);
 assert.doesNotMatch(patchSource, /gemini|ai[-_ ]?research|AI 研究|AI 摘要|data-ai/i,
   "paid research UI and endpoints must remain removed from the comparison release");
 
-const smartResponse = await worker.fetch(new Request("https://example.test/smart.js?v=17.3"), {}, {});
+const smartResponse = await worker.fetch(new Request("https://example.test/smart.js?v=17.2.2"), {}, {});
 const smartSource = await smartResponse.text();
 assert.match(smartSource, /機會股排行/);
 assert.match(smartSource, /風險排除 → 成長確認 → 籌碼確認 → 價量進場判斷/);
@@ -413,9 +406,11 @@ assert.match(smartSource, /globalThis\.twssUltimateSnapshot/);
 assert.match(smartSource, /backend-rankings/);
 assert.match(smartSource, /後端持續累積/);
 assert.match(smartSource, /舊模型快照不作為 v16\.3 正式候選/);
+assert.doesNotMatch(smartSource, /資料健康中心|data-health|statusCard/,
+  "the ranking override must not restore the removed health-center entry");
 assert.doesNotMatch(smartSource, /廣告|促銷|VIP|贊助|免費試用|立即購買|解鎖/);
 
-const stylesResponse = await worker.fetch(new Request("https://example.test/styles.css?v=17.3"), {}, {});
+const stylesResponse = await worker.fetch(new Request("https://example.test/styles.css?v=17.2.2"), {}, {});
 const stylesSource = await stylesResponse.text();
 assert.match(stylesSource, /min-width:48px/);
 assert.match(stylesSource, /max-height:min\(76dvh,640px\)/);
@@ -427,6 +422,11 @@ const latestResponse = await worker.fetch(new Request("https://example.test/data
 assert.equal(latestResponse.ok, true);
 const latestSnapshot = await latestResponse.json();
 assert.equal(latestSnapshot.version, "16.3");
+assert.equal("sync" in (latestSnapshot.backend || {}), false,
+  "the public fallback snapshot must not contain administrator synchronization state");
+assert.doesNotMatch(JSON.stringify(latestSnapshot.backend || {}),
+  /last_error|lease_owner|lease_until|finmindBudget|reservationId|repair_reasons/i,
+  "the public fallback snapshot must not retain internal error, lease, quota, or repair fields");
 assert.ok(latestSnapshot.groups.listed.length >= 1);
 assert.ok(latestSnapshot.groups.otc.length >= 1);
 assert.ok(latestSnapshot.groups.etf.length >= 1);

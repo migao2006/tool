@@ -84,7 +84,12 @@ begin
       'failedJobs', (select count(*) from public.stock_sync_state where status = 'error'),
       'runningJobs', (select count(*) from public.stock_sync_state where status = 'running'),
       'readyAnalyses', (select count(*) from public.stock_analysis_cache where status = 'ready'),
-      'latestDataDate', (select max(cycle_date) from public.stock_sync_state)
+      'latestDataDate', (
+        select cycle_date
+        from public.stock_sync_state
+        where job_key = 'universe'
+        limit 1
+      )
     ),
     'health', v_health,
     'missingData', v_missing,

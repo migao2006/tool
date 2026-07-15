@@ -48,6 +48,15 @@ function isoDate(value) {
   return clean(value).slice(0, 10);
 }
 
+function taipeiToday() {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Taipei",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+}
+
 function addDays(value, days) {
   const date = new Date(`${value}T00:00:00Z`);
   if (Number.isNaN(date.getTime())) return value;
@@ -56,7 +65,7 @@ function addDays(value, days) {
 }
 
 function monthsAgo(months) {
-  const date = new Date();
+  const date = new Date(`${taipeiToday()}T00:00:00Z`);
   date.setUTCMonth(date.getUTCMonth() - months);
   return date.toISOString().slice(0, 10);
 }
@@ -957,7 +966,7 @@ function activeDisposition(row) {
     const year = Number(match[1]) < 1911 ? Number(match[1]) + 1911 : Number(match[1]);
     return `${year}-${String(match[2]).padStart(2, "0")}-${String(match[3]).padStart(2, "0")}`;
   });
-  return dates.at(-1) >= new Date().toISOString().slice(0, 10);
+  return dates.at(-1) >= taipeiToday();
 }
 
 function truthyFlag(value) {
@@ -974,7 +983,7 @@ function currentlySuspended(row) {
   // A completed resumption must not remain permanently hard-excluded merely
   // because it is still present in the announcement feed.
   if (!/^\d{4}-\d{2}-\d{2}$/.test(resumed)) return false;
-  return resumed > new Date().toISOString().slice(0, 10);
+  return resumed > taipeiToday();
 }
 
 export async function buildRiskSnapshot() {
@@ -1089,7 +1098,7 @@ export async function buildBenchmarks(options = {}) {
     // not pretend 7–10 observations are a 20/60-day benchmark; use FinMind's
     // documented total-return-index history as the bounded fallback.
     if (allowFinmind && (listed.length < 65 || otc.length < 65)) {
-      const endDate = new Date().toISOString().slice(0, 10);
+      const endDate = taipeiToday();
       const startDate = monthsAgo(8);
       const historical = await Promise.allSettled([
         listed.length < 65 ? finmind("TaiwanStockTotalReturnIndex", "TAIEX", startDate, endDate, { retries: finmindRetries }) : Promise.resolve([]),
@@ -1206,7 +1215,7 @@ export async function buildDeepData(symbol, instrumentType = "股票", market = 
     options.finmindRetries ?? 2,
   ].join(":");
   const factory = async () => {
-    const endDate = new Date().toISOString().slice(0, 10);
+    const endDate = taipeiToday();
     const finmindRetries = options.finmindRetries ?? 2;
     // TaiwanStockPriceAdj is a paid FinMind dataset and returns HTTP 400 for a
     // free-level token.  Using it unconditionally made every scheduled deep
@@ -1397,7 +1406,7 @@ export async function buildPriceHistory(symbol, market = "上市", months = 18, 
   if (!VALID_SYMBOL.test(symbol)) throw new Error("股票代號格式不正確");
   const requestedMonths = clamp(Number(months) || 18, 6, 24);
   return cached(`history:${symbol}:${market}:${requestedMonths}`, 60 * 60 * 1_000, async () => {
-    const endDate = new Date().toISOString().slice(0, 10);
+    const endDate = taipeiToday();
     const history = normalizePrice(
       await finmind("TaiwanStockPrice", symbol, monthsAgo(requestedMonths), endDate, {
         retries: options.finmindRetries ?? 2,

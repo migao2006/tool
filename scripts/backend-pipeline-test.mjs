@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
-const [sync, baseSchema, schema, grants, cron, acceleratedCron, leases, quota, publicHistoryQuota, preserve, repairQueue, clearEtfRepairs, etfDirectionRepair, lateCoverageRepair, clearOldVersionRepairs, trim, config, marketHandler, workflow, exporter, backtest, freeInsights, backtestSchema, hardening, diagnosticPrivacy, adminDashboard] = await Promise.all([
+const [sync, baseSchema, schema, grants, cron, acceleratedCron, leases, quota, publicHistoryQuota, preserve, repairQueue, clearEtfRepairs, etfDirectionRepair, lateCoverageRepair, clearOldVersionRepairs, trim, config, marketHandler, workflow, exporter, backtest, freeInsights, backtestSchema, hardening, diagnosticPrivacy, adminDashboard, dateReconcile] = await Promise.all([
   readFile(new URL("../supabase/functions/twss-sync-batch/index.ts", import.meta.url), "utf8"),
   readFile(new URL("../supabase/migrations/20260714040000_base_schema.sql", import.meta.url), "utf8"),
   readFile(new URL("../supabase/migrations/20260714090000_add_persistent_stock_backend.sql", import.meta.url), "utf8"),
@@ -28,6 +28,7 @@ const [sync, baseSchema, schema, grants, cron, acceleratedCron, leases, quota, p
   readFile(new URL("../supabase/migrations/20260715173000_harden_free_insights_audit.sql", import.meta.url), "utf8"),
   readFile(new URL("../supabase/migrations/20260715201357_restrict_health_diagnostics_admin_only.sql", import.meta.url), "utf8"),
   readFile(new URL("../supabase/migrations/20260715205510_add_admin_health_dashboard.sql", import.meta.url), "utf8"),
+  readFile(new URL("../supabase/migrations/20260715210000_add_evening_market_date_reconciliation.sql", import.meta.url), "utf8"),
 ]);
 
 const hardenedBacktest = hardening.match(
@@ -82,6 +83,12 @@ assert.match(sync, /rpc\/twss_evaluate_matured_backtests/, "completed cycles mus
 assert.match(sync, /p_model_version: VERSION/, "ranking finalization must use the frozen score-model version");
 assert.match(sync, /const VERSION = "16\.3"/, "the score model version must remain frozen at 16.3");
 assert.match(marketHandler, /const VERSION = "17\.2"/, "the public API patch version must match package 17.2");
+assert.match(marketHandler, /persistedOtcDate = dateText\(persisted\.date\)/,
+  "a persisted TPEx fallback must retain its own trading date");
+assert.match(marketHandler, /oldestDate\(effectiveTwsePriceDate, effectiveTpexPriceDate\)/,
+  "the all-market watermark must use the conservative common date");
+assert.match(marketHandler, /bothMarkets && marketDatesAligned \? "live" : "partial"/,
+  "mixed TWSE and TPEx dates must never be labelled as a complete live market");
 assert.match(sync, /\[ranking-cycle\] finalization failed/, "ranking finalization failures must remain diagnosable without aborting the data sync");
 assert.match(sync, /rankingFinalization/, "the deep job state must retain finalization success or failure diagnostics");
 assert.match(sync, /\[admin-data-health\]/, "every protected synchronization run must emit an administrator health summary");
@@ -90,6 +97,11 @@ assert.match(sync, /rest\("rpc\/twss_public_data_health"[\s\S]*rest\("rpc\/twss_
 assert.match(sync, /await logAdminHealth\(mode, result/,
   "the protected worker must flush its administrator diagnostics before returning");
 assert.doesNotMatch(sync, /sb_secret_[A-Za-z0-9_-]{8,}/, "server secrets must not exist in source");
+assert.match(dateReconcile, /twss-universe-evening-reconcile/);
+assert.match(dateReconcile, /'10 9,13 \* \* 1-5'/,
+  "the durable universe must recheck at 17:10 and 21:10 Asia\/Taipei");
+assert.match(dateReconcile, /x-twss-sync-token[\s\S]*vault\.decrypted_secrets/,
+  "the evening reconciliation must keep using the Vault-protected sync token");
 
 for (const table of [
   "stock_price_history", "stock_monthly_revenues", "stock_quarterly_financials",
@@ -143,6 +155,8 @@ assert.match(adminLogFunction, /auth\.uid\(\)[\s\S]*twss_is_admin\(\)[\s\S]*admi
   "the privileged administrator aggregation must reject non-admin callers before reading diagnostics");
 assert.match(adminLogFunction, /greatest\(1, least\(coalesce\(p_limit, 60\), 100\)\)/,
   "administrator log limits must be bounded");
+assert.match(adminLogFunction, /'latestDataDate'[\s\S]*where job_key = 'universe'/,
+  "the administrator data date must come from the authoritative universe job");
 assert.match(adminDashboard, /revoke all on function public\.twss_admin_operations_log\(integer\)[\s\S]*from public, anon, authenticated[\s\S]*to authenticated, service_role/,
   "anonymous callers must not execute the administrator log RPC");
 assert.doesNotMatch(adminDashboard, /insert into public\.app_admins|@[A-Za-z0-9.-]+/,
@@ -233,6 +247,8 @@ assert.match(hardening, /'premium_discount', pg_catalog\.abs/,
   "ETF premium/discount quality must compare absolute deviation from NAV");
 assert.match(hardenedHealth, /coalesce\(min\(final_count\), 0\)/,
   "overall score-history readiness must equal the weakest independent group");
+assert.match(hardenedHealth, /having count\(distinct c\.group_name\) = 3[\s\S]*select max\(score_date\) from common_dates/,
+  "the common final date must exist as a finalized date in all three groups");
 assert.match(hardenedHealth, /'perGroup', v_final_by_group/,
   "data health must disclose final-date counts separately for each market group");
 assert.match(hardenedHealth, /h\.score_date = s\.cycle_date[\s\S]*h\.model_version = '16\.3'[\s\S]*h\.official/,

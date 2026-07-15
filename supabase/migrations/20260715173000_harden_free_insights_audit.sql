@@ -470,6 +470,14 @@ begin
       and c.model_version = '16.3'
       and c.status = 'final'
     group by g.group_name
+  ), common_dates as (
+    select c.score_date
+    from public.opportunity_ranking_cycles c
+    where c.model_version = '16.3'
+      and c.status = 'final'
+      and c.group_name in ('listed', 'otc', 'etf')
+    group by c.score_date
+    having count(distinct c.group_name) = 3
   )
   select
     coalesce(pg_catalog.jsonb_object_agg(group_name, pg_catalog.jsonb_build_object(
@@ -477,7 +485,7 @@ begin
       'latestFinalDate', latest_final_date
     )), '{}'::jsonb),
     coalesce(min(final_count), 0),
-    case when min(final_count) = 0 then null else min(latest_final_date) end
+    (select max(score_date) from common_dates)
   into v_final_by_group, v_final_dates, v_latest_common_final
   from counts;
 

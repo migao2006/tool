@@ -164,7 +164,7 @@
     const rows = comparisonRows();
     if (!rows.length) return;
     const metrics = comparisonMetrics(rows[0].group);
-    downloadCsv(`台股智選-${groupLabel(rows[0].group)}比較-${S.date || new Date().toISOString().slice(0, 10)}.csv`, [
+    downloadCsv(`台股智選-${groupLabel(rows[0].group)}比較-${S.date || today()}.csv`, [
       ['指標', ...rows.map(row => `${row.stock.name} ${row.stock.symbol}`)],
       ...metrics.map(([label, reader]) => [label, ...rows.map(reader)])
     ]);
@@ -177,7 +177,7 @@
       return;
     }
     const metrics = comparisonMetrics(group);
-    downloadCsv(`台股智選-${groupLabel(group)}排行榜-${S.date || new Date().toISOString().slice(0, 10)}.csv`, [
+    downloadCsv(`台股智選-${groupLabel(group)}排行榜-${S.date || today()}.csv`, [
       ['組內順序', '股票代號', '股票名稱', '市場', '產業', ...metrics.map(([label]) => label)],
       ...rows.map((row, index) => [index + 1, row.stock?.symbol, row.stock?.name, groupLabel(group), row.stock?.industry || '', ...metrics.map(([, reader]) => reader(row))])
     ]);
@@ -323,7 +323,7 @@
 
   function recordPrediction(stock, forecast) {
     const logs = getPredictionLogs();
-    const date = S.date || new Date().toISOString().slice(0, 10);
+    const date = S.date || today();
     const exists = logs.some(log => log.symbol === stock.symbol && log.prediction_date === date && log.model_version === PATCH_VERSION);
     if (exists) return;
     logs.unshift({
@@ -509,7 +509,7 @@
     return `<h2>我的</h2><div class="patch-tabs"><button data-patch-mine="watch" class="${patchState.mineTab === 'watch' ? 'active' : ''}">自選清單</button><button data-patch-mine="compare" class="${patchState.mineTab === 'compare' ? 'active' : ''}">候選比較${compareCount ? `<span class="nav-count">${compareCount}</span>` : ''}</button><button data-patch-mine="alerts" class="${patchState.mineTab === 'alerts' ? 'active' : ''}">規則提醒${unread ? `<span class="nav-count">${unread}</span>` : ''}</button><button data-patch-mine="journal" class="${patchState.mineTab === 'journal' ? 'active' : ''}">投資紀錄</button></div>${section}${disclaimer()}`;
   }
   function openJournalModal(record = null, stock = null) {
-    const item = record || { local_id: createId(), symbol: stock?.symbol || '', stock_name: stock?.name || '', entry_date: new Date().toISOString().slice(0, 10), action: 'observe', price: stock?.close ?? null, quantity: null, horizon: 'swing', thesis: '', risk_plan: '', target_plan: '', emotion: '', followed_plan: null, exit_price: null, exit_date: '', return_pct: null, result_note: '' };
+    const item = record || { local_id: createId(), symbol: stock?.symbol || '', stock_name: stock?.name || '', entry_date: today(), action: 'observe', price: stock?.close ?? null, quantity: null, horizon: 'swing', thesis: '', risk_plan: '', target_plan: '', emotion: '', followed_plan: null, exit_price: null, exit_date: '', return_pct: null, result_note: '' };
     modalRoot.innerHTML = `<div class="modal"><div class="sheet"><button class="sheet-close">×</button><h2>${record ? '編輯' : '新增'}投資紀錄</h2><div class="grid"><label class="muted">股票代號<input id="journalSymbol" value="${escapeText(item.symbol)}"></label><label class="muted">股票名稱<input id="journalName" value="${escapeText(item.stock_name || '')}"></label><label class="muted">日期<input id="journalDate" type="date" value="${item.entry_date}"></label><label class="muted">類型<select id="journalAction"><option value="observe">觀察</option><option value="buy">買入紀錄</option><option value="sell">賣出紀錄</option><option value="review">事後檢討</option></select></label><label class="muted">價格<input id="journalPrice" type="number" step="0.01" value="${item.price ?? ''}"></label><label class="muted">數量／張數<input id="journalQuantity" type="number" step="0.001" value="${item.quantity ?? ''}"></label><label class="muted">預計期間<select id="journalHorizon"><option value="short">短線 1–5 日</option><option value="swing">波段 1–4 週</option><option value="medium">中期 1–6 月</option><option value="long">長期 6 月以上</option></select></label><label class="muted">當時情緒<input id="journalEmotion" value="${escapeText(item.emotion || '')}" placeholder="例如：冷靜、害怕錯過"></label></div><label class="muted">決策理由<textarea id="journalThesis">${escapeText(item.thesis || '')}</textarea></label><label class="muted">風險計畫<textarea id="journalRisk">${escapeText(item.risk_plan || '')}</textarea></label><label class="muted">目標計畫<textarea id="journalTarget">${escapeText(item.target_plan || '')}</textarea></label><div class="grid"><label class="muted">出場價格<input id="journalExitPrice" type="number" step="0.01" value="${item.exit_price ?? ''}"></label><label class="muted">出場日期<input id="journalExitDate" type="date" value="${item.exit_date || ''}"></label></div><label class="muted">事後檢討<textarea id="journalResult">${escapeText(item.result_note || '')}</textarea></label><label class="muted"><input id="journalFollowed" type="checkbox" style="width:auto" ${item.followed_plan ? 'checked' : ''}> 有遵守原本計畫</label><button id="journalSave" class="btn" style="width:100%;margin-top:12px">儲存紀錄</button></div></div>`;
     q('#journalAction').value = item.action || 'observe';
     q('#journalHorizon').value = item.horizon || 'swing';
@@ -590,7 +590,7 @@
     q('#patchNewJournal')?.addEventListener('click', () => openJournalModal());
     q('#patchExportJournal')?.addEventListener('click', () => {
       const blob = new Blob([JSON.stringify(getJournal(), null, 2)], { type: 'application/json' });
-      const url = URL.createObjectURL(blob); const anchor = document.createElement('a'); anchor.href = url; anchor.download = `台股智選-投資紀錄-${new Date().toISOString().slice(0, 10)}.json`; anchor.click(); URL.revokeObjectURL(url);
+      const url = URL.createObjectURL(blob); const anchor = document.createElement('a'); anchor.href = url; anchor.download = `台股智選-投資紀錄-${today()}.json`; anchor.click(); URL.revokeObjectURL(url);
     });
     qa('[data-patch-edit]').forEach(button => button.onclick = () => openJournalModal(getJournal().find(item => item.local_id === button.dataset.patchEdit)));
     qa('[data-patch-delete]').forEach(button => button.onclick = () => { if (!confirm('確定刪除這筆紀錄？')) return; setJournal(getJournal().filter(item => item.local_id !== button.dataset.patchDelete)); render(); });
@@ -649,7 +649,7 @@
   fetch('/api/market-data?type=ranking-backtest', { cache: 'no-store' })
     .then(response => response.ok ? response.json() : null)
     .catch(() => null)
-    .then(value => value?.byGroup ? value : fetch('/data/backtest.json?v=17.3.0', { cache: 'no-store' })
+    .then(value => value?.byGroup ? value : fetch('/data/backtest.json?v=17.3.1', { cache: 'no-store' })
       .then(response => response.ok ? response.json() : null).catch(() => null))
     .then(value => { if (value) patchState.rankingBacktest = value; if (S.tab === 'verify') render(); })
     .catch(() => {});

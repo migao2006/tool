@@ -253,6 +253,25 @@ function latestDate(...values) {
   return dates.sort().at(-1) || "";
 }
 
+function oldestDate(...values) {
+  const dates = values
+    .flat(Infinity)
+    .map(dateText)
+    .filter((value) => /^\d{4}-\d{2}-\d{2}$/.test(value));
+  return dates.sort().at(0) || "";
+}
+
+function taipeiDate(value = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Taipei",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(value);
+  const fields = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${fields.year}-${fields.month}-${fields.day}`;
+}
+
 function queryDate(value) {
   return dateText(value).replaceAll("-", "");
 }
@@ -686,9 +705,13 @@ async function buildStocks() {
             stock.instrumentType || instrumentTypeOf(text(stock.symbol)),
         }))
       : [];
+  let persistedOtcDate = "";
   if (tpexPrices.length < 20 && !edgeStocks.some((stock) => stock.market === "上櫃")) {
     const persisted = await readBackendMarketStocks("otc").catch(() => ({ stocks: [] }));
-    if (persisted.stocks.length) edgeStocks = [...edgeStocks, ...persisted.stocks];
+    if (persisted.stocks.length) {
+      persistedOtcDate = dateText(persisted.date);
+      edgeStocks = [...edgeStocks, ...persisted.stocks];
+    }
   }
 
   const openTwsePriceDate = payloadDate(twseOpenPricePayload, twseOpenPrices);
@@ -849,17 +872,28 @@ async function buildStocks() {
   );
   const twseCompanyDate = dateText(pick(twseCompanies[0], "出表日期", "Date"));
   const tpexCompanyDate = dateText(pick(tpexCompanies[0], "Date", "出表日期"));
-  const priceDate =
-    latestDate(twsePriceDate, tpexPriceDate) ||
-    text(edge?.date) ||
-    new Date().toISOString().slice(0, 10);
+  const effectiveTwsePriceDate = twsePriceDate || dateText(edge?.dates?.price?.twse);
+  const effectiveTpexPriceDate = tpexPriceDate || persistedOtcDate || dateText(edge?.dates?.price?.tpex);
   const bothMarkets = listed.length >= 20 && otc.length >= 20;
+  const marketDatesAligned = Boolean(
+    effectiveTwsePriceDate &&
+    effectiveTpexPriceDate &&
+    effectiveTwsePriceDate === effectiveTpexPriceDate,
+  );
+  // `date` is the conservative all-market watermark.  `dates.price.latest`
+  // remains available for callers that explicitly need the newest individual
+  // market date, but a newer TWSE row must never relabel older TPEx rows (or
+  // vice versa) as a completed all-market snapshot.
+  const priceDate =
+    oldestDate(effectiveTwsePriceDate, effectiveTpexPriceDate) ||
+    dateText(edge?.date) ||
+    taipeiDate();
 
   return {
     ...(edge || {}),
     stocks,
     date: priceDate,
-    mode: bothMarkets ? "live" : "partial",
+    mode: bothMarkets && marketDatesAligned ? "live" : "partial",
     markets: {
       listed: listed.length,
       otc: otc.length,
@@ -868,9 +902,11 @@ async function buildStocks() {
     instruments,
     dates: {
       price: {
-        twse: twsePriceDate,
-        tpex: tpexPriceDate,
-        latest: priceDate,
+        twse: effectiveTwsePriceDate,
+        tpex: effectiveTpexPriceDate,
+        latest: latestDate(effectiveTwsePriceDate, effectiveTpexPriceDate),
+        common: priceDate,
+        aligned: marketDatesAligned,
       },
       valuation: {
         twse: twseValuationDate,
@@ -894,7 +930,7 @@ async function buildStocks() {
       },
     },
     sourceStatus: {
-      price: `TWSE ${twsePriceDate || "日期未提供"} · TPEx ${tpexPriceDate || "日期未提供"}`,
+      price: `TWSE ${effectiveTwsePriceDate || "日期未提供"} · TPEx ${effectiveTpexPriceDate || "日期未提供"}`,
       valuation: `TWSE ${twseValuationDate || "日期未提供"} · TPEx ${tpexValuationDate || "日期未提供"}`,
       company: `MOPS 上市 ${twseCompanies.length} 筆 · 上櫃 ${tpexCompanies.length} 筆`,
       institutional: `TWSE ${twseInstitutionalDate || "日期未提供"} · TPEx ${tpexInstitutionalDate || "日期未提供"}`,

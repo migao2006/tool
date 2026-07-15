@@ -35,6 +35,12 @@ const json = (payload: unknown, status = 200) => new Response(JSON.stringify(pay
 });
 const finite = (value: unknown) => value != null && Number.isFinite(Number(value));
 const now = () => new Date().toISOString();
+const taipeiDate = () => new Intl.DateTimeFormat("en-CA", {
+  timeZone: "Asia/Taipei",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+}).format(new Date());
 
 async function logAdminHealth(mode: "universe" | "deep", result: unknown, group: Group | null = null) {
   const row = result && typeof result === "object" && !Array.isArray(result)
@@ -560,7 +566,7 @@ async function syncUniverseUnlocked() {
     const stocks = [...merged.values()];
     if (stocks.length < 100) throw new Error(`Universe coverage too low: ${stocks.length}`);
     const contexts = buildPeerContexts(stocks);
-    const dataDate = stocksPayload.date || new Date().toISOString().slice(0, 10);
+    const dataDate = stocksPayload.date || taipeiDate();
     const groupDates = {
       listed: stocksPayload.dates?.price?.twse || dataDate,
       otc: stocksPayload.dates?.price?.tpex || dataDate,
@@ -938,7 +944,7 @@ async function persistDeep(stock: Record<string, any>, group: Group, deep: Recor
   // data_date is the ranking/universe cycle key.  The actual upstream dates
   // remain in analysis.price/sourceDiagnostics; mixing them here caused a
   // one-day FinMind publication lag to be treated as an unfinished cycle.
-  const dataDate = stock.trade_date || deep.price?.lastDate || new Date().toISOString().slice(0, 10);
+  const dataDate = stock.trade_date || deep.price?.lastDate || taipeiDate();
   const priceRows = (deep.priceHistory || []).slice(-280).map((row: Record<string, any>) => ({
     symbol,
     trade_date: row.date,

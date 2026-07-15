@@ -4,6 +4,7 @@ const EDGE='/api/market-data';
 const SUPABASE_URL='https://lfkdkdyaatdlizryiyon.supabase.co';
 const SUPABASE_KEY='sb_publishable_r3h9eQIYdIqScvmc77avAg_OLgBT6lh';
 const MODEL_VERSION='v16.3-persistent-backend';
+const TAIPEI_TIME_ZONE='Asia/Taipei';
 const DISCLAIMER='未來漲跌預測是依公開資料、技術指標與固定權重計算的機率估計，僅供研究參考，不構成投資建議、買賣邀約或獲利保證。模型可能因突發消息、流動性、資料延遲及市場情緒而失準，投資人應自行判斷並承擔風險。';
 
 const S={
@@ -50,10 +51,39 @@ const safe=v=>v==null||Number.isNaN(Number(v))?null:Number(v);
 const fmt=(v,d=2)=>v==null||Number.isNaN(Number(v))?'—':Number(v).toLocaleString('zh-TW',{maximumFractionDigits:d});
 const pct=(v,d=2)=>v==null||Number.isNaN(Number(v))?'—':`${v>0?'+':''}${fmt(v,d)}%`;
 const cls=v=>v>0?'up':v<0?'down':'neutral';
-const today=()=>new Date().toISOString().slice(0,10);
+function taipeiParts(value=new Date(),includeTime=false){
+  const date=value instanceof Date?value:new Date(value);if(Number.isNaN(date.getTime()))return null;
+  const options={timeZone:TAIPEI_TIME_ZONE,year:'numeric',month:'2-digit',day:'2-digit',...(includeTime?{hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'}:{})};
+  return Object.fromEntries(new Intl.DateTimeFormat('en-CA',options).formatToParts(date).map(part=>[part.type,part.value]))
+}
+const today=()=>{const parts=taipeiParts();return`${parts.year}-${parts.month}-${parts.day}`};
 const uid=()=>crypto.randomUUID?crypto.randomUUID():`${Date.now()}-${Math.random().toString(16).slice(2)}`;
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const reasonDash=reason=>`—（${reason}）`;
+
+function marketDateInfo(){
+  const price=S.sourceDates?.price||{},listed=/^\d{4}-\d{2}-\d{2}$/.test(price.twse||'')?price.twse:'',otc=/^\d{4}-\d{2}-\d{2}$/.test(price.tpex||'')?price.tpex:'';
+  const known=[listed,otc].filter(Boolean).sort(),aligned=Boolean(listed&&otc&&listed===otc&&price.aligned!==false);
+  return{listed,otc,aligned,latest:known.at(-1)||S.date||'',common:price.common||S.date||(aligned?listed:'')}
+}
+function adminBackendDate(){return S.adminLog?.health?.dataDate||S.adminLog?.summary?.latestDataDate||''}
+function updateMarketHeader(){
+  const label=q('#marketDate'),mode=q('#dataMode');if(!label||!mode)return;
+  const dates=marketDateInfo(),backendDate=adminBackendDate(),adminView=S.tab==='admin'&&S.isAdmin;
+  let warning=false;
+  if(adminView&&backendDate){
+    const marketLabel=dates.aligned?dates.common:(dates.listed&&dates.otc?`上市 ${dates.listed}／上櫃 ${dates.otc}`:dates.latest||'—');
+    warning=Boolean(dates.latest&&backendDate!==dates.latest)||!dates.aligned;
+    label.textContent=`市場 ${marketLabel} · 後台 ${backendDate}${warning?'（待同步）':''}`;
+    mode.textContent=warning?'日期待同步':'日期已對齊';
+  }else if(dates.listed&&dates.otc&&!dates.aligned){
+    warning=true;label.textContent=`盤後行情 上市 ${dates.listed}／上櫃 ${dates.otc}（日期待對齊）`;mode.textContent='部分官方資料';
+  }else{
+    label.textContent=dates.common?`最新交易日 ${dates.common} · 盤後資料（非即時）`:'正在核對官方資料日期…';
+    mode.textContent=S.mode==='live'?'官方日期已核對':S.mode==='partial'?'部分官方資料':'資料載入中';
+  }
+  label.classList.toggle('date-warning',warning)
+}
 
 function readLocal(key,fallback=[]){try{return JSON.parse(localStorage.getItem(key)||JSON.stringify(fallback))}catch{return fallback}}
 function writeLocal(key,value){localStorage.setItem(key,JSON.stringify(value))}
@@ -97,8 +127,6 @@ async function loadStocks(){
     const payload=await fetchJson(`${EDGE}?type=stocks`,120000);
     if(!Array.isArray(payload.stocks)||payload.stocks.length<20)throw new Error(payload.error||'盤後資料筆數不足');
     S.stocks=payload.stocks.map(normalizeStock);S.mode=payload.mode||'partial';S.date=payload.date||today();S.dataStatus=payload.sourceStatus||{};S.sourceDates=payload.dates||{};S.loading=false;
-    q('#marketDate').textContent=`最新交易日 ${S.date} · 盤後資料（非即時）`;
-    q('#dataMode').textContent=S.mode==='live'?'官方日期已核對':S.mode==='partial'?'部分官方資料':'資料不足';
     render();loadFundamentals();
   }catch(error){
     S.loading=false;app.innerHTML=`<div class="card error-card"><h3>股票資料載入失敗</h3><p class="muted">${esc(error.message)}</p><button id="retryLoad" class="btn">重新載入</button></div>`;q('#retryLoad').onclick=loadStocks;
@@ -338,7 +366,7 @@ function disclaimer(){return`<div class="disclaimer">${DISCLAIMER}</div>`}
 function metric(label,value,note=''){return`<div class="metric"><small>${label}</small><b>${value}</b>${note?`<em>${note}</em>`:''}</div>`}
 function valueOrReason(v,suffix='',reason='API 未回傳'){return v==null?reasonDash(reason):`${fmt(v)}${suffix}`}
 function sourceDateSummary(){
-  const dates=S.sourceDates||{},price=dates.price?.latest||S.date||'—',institutional=dates.institutional?.latest||'尚未提供',margin=dates.margin?.latest||'尚未提供';
+  const dates=S.sourceDates||{},market=marketDateInfo(),price=market.aligned?(market.common||'—'):(market.listed&&market.otc?`上市 ${market.listed}／上櫃 ${market.otc}`:dates.price?.latest||S.date||'—'),institutional=dates.institutional?.latest||'尚未提供',margin=dates.margin?.latest||'尚未提供';
   return`行情 ${price} · 法人 ${institutional} · 融資券 ${margin}`
 }
 function etfSnapshotScore(stock){const volume=Math.max(0,Math.log10(Math.max(stock.volume||0,1))-2)*13,value=Math.max(0,Math.log10(Math.max(stock.value||0,1))-6)*8,momentum=clamp((stock.change||0)*4+10,0,24),chip=stock.inst!=null&&stock.volume?clamp(stock.inst/stock.volume*25+7,0,18):0,dividend=stock.yield==null?0:clamp(stock.yield*2,0,12);return clamp(Math.round(volume+value+momentum+chip+dividend),0,100)}
@@ -352,9 +380,9 @@ function groupedHomeRows(group){
 function homePage(){
   const env=marketEnvironment(),rank=(title,rows,value)=>`<div class="card"><h3>${title}</h3><div class="rank-list">${rows.slice(0,5).map((item,i)=>{const stock=item.stock||item;return`<div class="rank clickable" data-detail="${stock.symbol}"><b>${i+1}</b><span><b>${stock.name}</b><small class="muted"> ${stock.symbol}</small></span><b class="${cls(stock.change)}">${value(item,stock)}</b></div>`}).join('')||'<div class="muted">目前沒有符合最低流動性與資料條件的標的</div>'}</div></div>`;
   const rev=[...S.stocks].filter(x=>instrumentGroup(x)!=='etf'&&x.rev!=null).sort((a,b)=>b.rev-a.rev),inst=[...S.stocks].filter(x=>x.inst!=null).sort((a,b)=>b.inst-a.inst),listed=groupedHomeRows('listed'),otc=groupedHomeRows('otc'),etf=groupedHomeRows('etf');
-  const counts={listed:S.stocks.filter(x=>instrumentGroup(x)==='listed').length,otc:S.stocks.filter(x=>instrumentGroup(x)==='otc').length,etf:S.stocks.filter(x=>instrumentGroup(x)==='etf').length};
+  const counts={listed:S.stocks.filter(x=>instrumentGroup(x)==='listed').length,otc:S.stocks.filter(x=>instrumentGroup(x)==='otc').length,etf:S.stocks.filter(x=>instrumentGroup(x)==='etf').length},market=marketDateInfo(),dateNote=market.aligned?'上市、上櫃已對齊':market.listed&&market.otc?`上市 ${market.listed}／上櫃 ${market.otc}`:'部分市場日期尚未提供';
   return`<h2>盤後市場儀表板</h2><div class="muted">官方盤後資料整理，不是即時報價。</div>
-  <div class="grid">${metric('最新日期',S.date||'—')}${metric('上市股票',fmt(counts.listed,0))}${metric('上櫃股票',fmt(counts.otc,0))}${metric('ETF',fmt(counts.etf,0))}</div>
+  <div class="grid">${metric('全市場資料日',market.common||S.date||'—',dateNote)}${metric('上市股票',fmt(counts.listed,0))}${metric('上櫃股票',fmt(counts.otc,0))}${metric('ETF',fmt(counts.etf,0))}</div>
   <div class="card accent"><div class="head"><div><small class="muted">大盤環境</small><div class="price">${env.label}</div><div class="muted">上漲 ${env.up} · 下跌 ${env.down} · 平盤 ${env.flat}</div></div><div><small class="muted">多頭家數比</small><div class="score">${fmt(env.breadth,0)}%</div><div class="muted">平均漲跌 ${pct(env.avgChange)}</div></div></div><div class="grid" style="margin-top:10px">${metric('市場成交量',`${fmt(env.totalVolume,0)} 張`)}${metric('外資合計',`${fmt(env.foreign,0)} 張`)}${metric('三大法人合計',`${fmt(env.inst,0)} 張`)}${metric('環境信心',`${env.confidence}%`)}</div></div>
   <div class="card"><h3>產業相對強弱</h3><div class="rank-list">${env.industries.slice(0,6).map((x,i)=>`<div class="rank"><b>${i+1}</b><span><b>${x.industry}</b><small class="muted"> ${x.count} 檔 · 上漲家數 ${fmt(x.breadth,0)}%</small></span><b class="${cls(x.avgChange)}">${pct(x.avgChange)}</b></div>`).join('')}</div></div>
   <div class="notice"><b>分組排名</b><br>上市、上櫃與 ETF 使用各自適用因子，只與同組商品比較，不會混在同一個名次。</div>
@@ -505,11 +533,19 @@ function toggleWatch(symbol){
 }
 
 function adminTime(value){
-  if(!value)return'—';const date=new Date(value);return Number.isNaN(date.getTime())?esc(value):esc(date.toLocaleString('zh-TW',{hour12:false}))
+  if(!value)return'—';const parts=taipeiParts(value,true);return parts?`${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second}`:esc(value)
 }
 function adminStatus(value){
   const status=String(value||'unknown').toLowerCase(),labels={healthy:'正常',ready:'完成',success:'成功',running:'執行中',pending:'等待中',partial:'部分完成',warning:'注意',error:'異常',failed:'失敗',building:'建立中',final:'已封存'};
-  return{label:labels[status]||status,className:['healthy','ready','success','final'].includes(status)?'':(['error','failed'].includes(status)?'bad':'warn')}
+  return{label:labels[status]||status,className:['healthy','ready','success','final'].includes(status)?'ok':(['error','failed'].includes(status)?'bad':'warn')}
+}
+function latestCommonRankingDate(cycles){
+  const byDate=new Map();for(const cycle of Array.isArray(cycles)?cycles:[]){if(cycle.status!=='final'||!['listed','otc','etf'].includes(cycle.group)||!cycle.scoreDate)continue;if(!byDate.has(cycle.scoreDate))byDate.set(cycle.scoreDate,new Set());byDate.get(cycle.scoreDate).add(cycle.group)}
+  return[...byDate].filter(([,groups])=>groups.size===3).map(([date])=>date).sort().at(-1)||''
+}
+function adminDateSummary(data){
+  const market=marketDateInfo(),backend=data.health?.dataDate||data.summary?.latestDataDate||'',analysis=latestCommonRankingDate(data.rankingCycles)||data.health?.scoreHistory?.latestCommonFinalDate||'',aligned=Boolean(market.aligned&&backend&&market.common===backend);
+  return{market,backend,analysis,aligned,label:aligned?'日期已對齊':'日期待同步',className:aligned?'ok':'warn'}
 }
 function adminJobLabel(value){return({universe:'全市場更新',deep_listed:'上市深度驗證',deep_otc:'上櫃深度驗證',deep_etf:'ETF 深度驗證'})[value]||value||'未命名工作'}
 function adminGroupLabel(value){return({listed:'上市',otc:'上櫃',etf:'ETF'})[value]||value||'全市場'}
@@ -525,7 +561,7 @@ function adminGroupHtml(row){
 }
 function adminJobHtml(job){
   const progress=clamp(safe(job.progress)??(job.total?Number(job.processed||0)/Number(job.total)*100:0),0,100),state=adminStatus(job.status),details=job.details&&Object.keys(job.details).length?esc(JSON.stringify(job.details,null,2)):'';
-  return`<article class="admin-job"><div class="head"><div><b>${esc(adminJobLabel(job.jobKey))}</b><div class="muted">${esc(adminGroupLabel(job.group))} · 週期 ${esc(job.cycleDate||'—')} · 游標 ${fmt(job.cursor??0,0)}</div></div><span class="tag ${state.className}">${esc(state.label)}</span></div><div class="health-progress-label"><span>${fmt(job.processed??0,0)}／${fmt(job.total??0,0)}</span><b>${fmt(progress,1)}%</b></div><div class="progress"><span style="width:${progress}%"></span></div><div class="admin-job-times"><span>最後成功 ${adminTime(job.lastSuccessAt)}</span><span>下次執行 ${adminTime(job.nextRunAt)}</span></div>${job.lastErrorPreview?`<div class="admin-error"><b>${esc(job.lastErrorCode||'sync_error')}</b><span>${esc(job.lastErrorPreview)}</span></div>`:''}${details?`<details class="admin-details"><summary>查看工作摘要</summary><pre>${details}</pre></details>`:''}</article>`
+  return`<article class="admin-job"><div class="head"><div><b>${esc(adminJobLabel(job.jobKey))}</b><div class="muted">${esc(adminGroupLabel(job.group))} · 資料週期 ${esc(job.cycleDate||'—')} · 游標 ${fmt(job.cursor??0,0)}</div></div><span class="tag ${state.className}">${esc(state.label)}</span></div><div class="health-progress-label"><span>${fmt(job.processed??0,0)}／${fmt(job.total??0,0)}</span><b>${fmt(progress,1)}%</b></div><div class="progress"><span style="width:${progress}%"></span></div><div class="admin-job-times"><span>本次完成 ${adminTime(job.lastSuccessAt)}</span><span>預計再檢查 ${adminTime(job.nextRunAt)}</span></div>${job.lastErrorPreview?`<div class="admin-error"><b>${esc(job.lastErrorCode||'sync_error')}</b><span>${esc(job.lastErrorPreview)}</span></div>`:''}${details?`<details class="admin-details"><summary>查看工作摘要</summary><pre>${details}</pre></details>`:''}</article>`
 }
 function adminTimelineHtml(event){
   const labels={sync_job:'同步工作',analysis_error:'分析錯誤',repair_pending:'等待修復',api_quota:'API 額度',ranking_cycle:'排行榜週期'},state=adminStatus(event.status);
@@ -535,10 +571,11 @@ function adminPage(){
   if(!S.isAdmin)return'<div class="card error-card"><h2>沒有管理員權限</h2><p class="muted">請使用已授權的管理員帳號登入。</p></div>';
   if(S.adminState==='loading'&&!S.adminLog)return'<div class="card empty"><div class="loading"><span class="spinner"></span>正在讀取管理員日誌…</div></div>';
   if(S.adminState==='error'&&!S.adminLog)return`<div class="card error-card"><h2>管理日誌暫時無法取得</h2><p class="muted">${esc(S.adminError||'請稍後再試。')}</p><button id="refreshAdminLog" class="btn">重新讀取</button></div>`;
-  const data=S.adminLog||{},summary=data.summary||{},health=data.health||{},jobs=Array.isArray(data.jobs)?data.jobs:[],sources=objectRows(health.sources),groups=objectRows(health.groups),repairs=Array.isArray(data.repairQueue?.items)?data.repairQueue.items:[],missing=Array.isArray(data.missingData?.examples)?data.missingData.examples:[],timeline=Array.isArray(data.timeline)?data.timeline:[],quota=data.apiQuota||{};
+  const data=S.adminLog||{},summary=data.summary||{},health=data.health||{},jobs=Array.isArray(data.jobs)?data.jobs:[],sources=objectRows(health.sources),groups=objectRows(health.groups),repairs=Array.isArray(data.repairQueue?.items)?data.repairQueue.items:[],missing=Array.isArray(data.missingData?.examples)?data.missingData.examples:[],timeline=Array.isArray(data.timeline)?data.timeline:[],quota=data.apiQuota||{},dates=adminDateSummary(data);
   return`<div class="admin-hero"><div><small>ADMIN ONLY</small><h2>管理員後台日誌</h2><p>資料健康、同步工作、修復佇列與 API 使用狀態。此頁只保存在目前登入階段，不會寫入快取。</p></div><button id="refreshAdminLog" class="btn secondary" ${S.adminState==='loading'?'disabled':''}>${S.adminState==='loading'?'更新中…':'重新整理'}</button></div>
     <div class="admin-session"><span class="tag">管理員 ${esc(data.admin?.username||'已驗證')}</span><span>產生時間 ${adminTime(data.generatedAt)}</span></div>
-    <div class="stat-strip admin-stats">${metric('待修復',fmt(summary.pendingRepairs??0,0))}${metric('分析錯誤',fmt(summary.analysisErrors??0,0))}${metric('失敗工作',fmt(summary.failedJobs??0,0))}${metric('執行中',fmt(summary.runningJobs??0,0))}${metric('完成分析',fmt(summary.readyAnalyses??0,0))}${metric('最新資料日',esc(summary.latestDataDate||health.dataDate||'—'))}</div>
+    <section class="card admin-date-card ${dates.aligned?'accent':'warn-card'}"><div class="head"><div><h3>日期一致性</h3><div class="muted">市場行情、後台全市場同步與三組分析完成日分開顯示</div></div><span class="status-pill ${dates.className}">${dates.label}</span></div><div class="grid admin-date-grid">${metric('上市行情日',esc(dates.market.listed||'—'))}${metric('上櫃行情日',esc(dates.market.otc||'—'))}${metric('後台全市場日',esc(dates.backend||'—'))}${metric('三組共同分析日',esc(dates.analysis||'尚未完成'))}</div>${dates.aligned?'':'<div class="admin-date-warning">官方行情已換日，但後台持久化週期尚未完成同日校正；晚間校正排程會再次同步。</div>'}</section>
+    <div class="stat-strip admin-stats">${metric('待修復',fmt(summary.pendingRepairs??0,0))}${metric('分析錯誤',fmt(summary.analysisErrors??0,0))}${metric('失敗工作',fmt(summary.failedJobs??0,0))}${metric('執行中',fmt(summary.runningJobs??0,0))}${metric('完成分析',fmt(summary.readyAnalyses??0,0))}${metric('後台全市場日',esc(dates.backend||'—'))}</div>
     <section class="card"><div class="head"><div><h3>同步工作</h3><div class="muted">只顯示管理員可讀的工作狀態與遮罩後錯誤摘要</div></div><span class="status-pill ${adminStatus(health.overallStatus).className}">${esc(adminStatus(health.overallStatus).label)}</span></div><div class="admin-jobs">${jobs.length?jobs.map(adminJobHtml).join(''):'<div class="muted">目前沒有同步工作紀錄。</div>'}</div></section>
     <section class="card"><h3>市場分組與資料來源</h3><div class="admin-groups">${groups.length?groups.map(adminGroupHtml).join(''):'<div class="muted">尚無分組統計。</div>'}</div><div class="admin-sources">${sources.length?sources.map(adminSourceHtml).join(''):'<div class="muted">尚無來源統計。</div>'}</div></section>
     <section class="card"><div class="head"><div><h3>修復佇列</h3><div class="muted">等待退避 ${fmt(data.repairQueue?.waitingBackoff??0,0)} · 錯誤 ${fmt(data.repairQueue?.errors??0,0)}</div></div><span class="tag warn">${fmt(data.repairQueue?.pending??0,0)} 筆</span></div><div class="table-wrap"><table class="admin-table"><thead><tr><th>標的</th><th>市場／狀態</th><th>原因</th><th>下次重試</th></tr></thead><tbody>${repairs.length?repairs.slice(0,60).map(item=>`<tr><td><b>${esc(item.name||item.symbol||'—')}</b><br><small>${esc(item.symbol||'')}</small></td><td>${esc(adminGroupLabel(item.group))}<br><small>${esc(item.status||'—')}</small></td><td>${esc((item.repairReasons||[]).join('、')||item.errorKind||'待判定')}</td><td>${adminTime(item.nextRetryAt)}</td></tr>`).join(''):'<tr><td colspan="4" class="muted">目前沒有等待修復項目。</td></tr>'}</tbody></table></div></section>
@@ -559,18 +596,19 @@ async function loadAdminLog(force=false){
   }
   render()
 }
-function openAdminPage(){if(!S.isAdmin)return;closeModal();S.tab='admin';updateAccountUi();render();loadAdminLog()}
+function navigateToTab(tab){S.tab=tab;render();requestAnimationFrame(()=>window.scrollTo(0,0))}
+function openAdminPage(){if(!S.isAdmin)return;closeModal();navigateToTab('admin');loadAdminLog()}
 
 function render(){
   if(S.tab==='admin'&&!S.isAdmin)S.tab='home';
   qa('.bottom-nav button').forEach(button=>{const active=button.dataset.tab===S.tab;button.classList.toggle('active',active);if(active)button.setAttribute('aria-current','page');else button.removeAttribute('aria-current')});
-  updateAccountUi();
+  updateAccountUi();updateMarketHeader();
   if(S.loading&&!S.stocks.length){app.innerHTML='<div class="card empty"><div class="loading"><span class="spinner"></span>正在載入官方盤後資料…</div></div>';bind();return}
   app.innerHTML=S.tab==='home'?homePage():S.tab==='opportunities'?opportunitiesPage():S.tab==='forecast'?forecastPage():S.tab==='verify'?verifyPage():S.tab==='admin'?adminPage():minePage();bind()
 }
 
 function bind(){
-  qa('.bottom-nav button').forEach(button=>button.onclick=()=>{S.tab=button.dataset.tab;render()});
+  qa('.bottom-nav button').forEach(button=>button.onclick=()=>navigateToTab(button.dataset.tab));
   qa('[data-detail]').forEach(element=>element.onclick=event=>{if(!event.target.closest('button'))openDetail(element.dataset.detail)});
   qa('[data-forecast]').forEach(element=>element.onclick=event=>{event.stopPropagation();openDetail(element.dataset.forecast)});
   qa('[data-watch]').forEach(button=>button.onclick=event=>{event.stopPropagation();toggleWatch(button.dataset.watch)});
@@ -640,5 +678,5 @@ function openAccountModal(){
 
 document.querySelector('#accountBtn').onclick=openAccountModal;
 document.querySelector('#adminBtn').onclick=openAdminPage;
-if('serviceWorker'in navigator)navigator.serviceWorker.register('/sw.js?v=17.3.0',{updateViaCache:'none'}).catch(()=>{});
+if('serviceWorker'in navigator)navigator.serviceWorker.register('/sw.js?v=17.3.1',{updateViaCache:'none'}).catch(()=>{});
 initSession();render();loadStocks();

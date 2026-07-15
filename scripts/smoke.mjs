@@ -354,9 +354,9 @@ const pageResponse = await worker.fetch(new Request("https://example.test/"), {}
 const pageSource = await pageResponse.text();
 assert.match(pageSource, /id="adminBtn"[^>]*hidden[^>]*aria-hidden="true"/,
   "the administrator entry must be invisible until the authenticated role check succeeds");
-assert.match(pageSource, /app\.js\?v=17\.3\.0/);
+assert.match(pageSource, /app\.js\?v=17\.3\.1/);
 
-const appResponse = await worker.fetch(new Request("https://example.test/app.js?v=17.3.0"), {}, {});
+const appResponse = await worker.fetch(new Request("https://example.test/app.js?v=17.3.1"), {}, {});
 const appSource = await appResponse.text();
 assert.match(appSource, /官方日期已核對/);
 assert.match(appSource, /各資料來源日期/);
@@ -373,7 +373,17 @@ assert.match(appSource, /交易日不足 60 日/, "partial histories must not be
 assert.match(appSource, /120000,0/, "opening one detail must not automatically consume a second repair attempt");
 assert.match(appSource, /aria-label','關閉視窗/);
 assert.match(appSource, /event\.key==='Escape'/);
-assert.match(appSource, /sw\.js\?v=17\.3\.0/);
+assert.match(appSource, /sw\.js\?v=17\.3\.1/);
+assert.match(appSource, /timeZone:TAIPEI_TIME_ZONE/,
+  "administrator timestamps and local date defaults must use Asia/Taipei");
+assert.match(appSource, /上市行情日[\s\S]*上櫃行情日[\s\S]*後台全市場日[\s\S]*三組共同分析日/,
+  "the administrator console must compare each date without relabelling one source as another");
+assert.match(appSource, /latestCommonRankingDate[\s\S]*groups\.size===3/,
+  "the shared analysis date must be finalized by all three market groups");
+assert.match(appSource, /navigateToTab[\s\S]*window\.scrollTo\(0,0\)/,
+  "opening a different page must not inherit the previous page scroll offset");
+assert.match(appSource, /className:\['healthy','ready','success','final'\]\.includes\(status\)\?'ok'/,
+  "healthy administrator states must render with the success style");
 assert.match(appSource, /isAdmin:false,adminState:'idle',adminLog:null/,
   "administrator access must fail closed before the authenticated RPC check completes");
 assert.match(appSource, /twss_is_admin[\s\S]*\)\)===true/,
@@ -394,7 +404,7 @@ assert.doesNotMatch(appSource, /gemini|ai[-_ ]?research|AI 研究|AI 摘要|data
 assert.doesNotMatch(appSource, /廣告|促銷|VIP|贊助|免費試用|立即購買|解鎖/);
 assert.doesNotMatch(appSource, /_\=\$\{Date\.now\(\)\}/);
 
-const patchResponse = await worker.fetch(new Request("https://example.test/patch.js?v=17.3.0"), {}, {});
+const patchResponse = await worker.fetch(new Request("https://example.test/patch.js?v=17.3.1"), {}, {});
 const patchSource = await patchResponse.text();
 assert.match(patchSource, /候選比較/);
 assert.match(patchSource, /同一組最多比較 4 檔/);
@@ -407,7 +417,7 @@ assert.match(patchSource, /正式排名累積中/);
 assert.doesNotMatch(patchSource, /gemini|ai[-_ ]?research|AI 研究|AI 摘要|data-ai/i,
   "paid research UI and endpoints must remain removed from the comparison release");
 
-const smartResponse = await worker.fetch(new Request("https://example.test/smart.js?v=17.3.0"), {}, {});
+const smartResponse = await worker.fetch(new Request("https://example.test/smart.js?v=17.3.1"), {}, {});
 const smartSource = await smartResponse.text();
 assert.match(smartSource, /機會股排行/);
 assert.match(smartSource, /風險排除 → 成長確認 → 籌碼確認 → 價量進場判斷/);
@@ -429,7 +439,7 @@ assert.doesNotMatch(smartSource, /資料健康中心|data-health|statusCard/,
   "the ranking override must not restore the removed health-center entry");
 assert.doesNotMatch(smartSource, /廣告|促銷|VIP|贊助|免費試用|立即購買|解鎖/);
 
-const stylesResponse = await worker.fetch(new Request("https://example.test/styles.css?v=17.3.0"), {}, {});
+const stylesResponse = await worker.fetch(new Request("https://example.test/styles.css?v=17.3.1"), {}, {});
 const stylesSource = await stylesResponse.text();
 assert.match(stylesSource, /min-width:48px/);
 assert.match(stylesSource, /max-height:min\(76dvh,640px\)/);

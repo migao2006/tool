@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 
 const appSource = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
 
-assert.match(appSource, /mineSub:'watch',session:null,isAdmin:false,adminRoleChecked:false/,
+assert.match(appSource, /session:null,isAdmin:false,adminRoleChecked:false/,
   "administrator state must fail closed before verification");
 assert.match(appSource, /async function refreshCoreAdminRole\(\)[\s\S]*?\/rest\/v1\/rpc\/twss_is_admin[\s\S]*?===true/,
   "the CORE role must come from the protected administrator RPC");

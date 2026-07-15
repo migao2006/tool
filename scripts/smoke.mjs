@@ -360,18 +360,18 @@ assert.match(contentSecurityPolicy, /https:\/\/lfkdkdyaatdlizryiyon\.supabase\.c
   "the shared policy must continue allowing the standalone MARKET administrator console");
 assert.doesNotMatch(pageSource, /id="adminBtn"/,
   "the CORE-authenticated main application must not embed a MARKET administrator entry");
-assert.match(pageSource, /app\.js\?v=19\.0\.1/);
+assert.match(pageSource, /app\.js\?v=19\.0\.2/);
 const publicPageSource = await readFile(new URL("../public/index.html", import.meta.url), "utf8");
 const publicAppSource = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
 const publicSmartSource = await readFile(new URL("../public/smart.js", import.meta.url), "utf8");
 const publicStylesSource = await readFile(new URL("../public/styles.css", import.meta.url), "utf8");
-assert.match(publicPageSource, /app\.js\?v=19\.0\.1/);
+assert.match(publicPageSource, /app\.js\?v=19\.0\.2/);
 assert.match(publicPageSource, /id="themeToggle"/);
 const adminPageSource = await readFile(new URL("../public/admin.html", import.meta.url), "utf8");
 const adminScriptSource = await readFile(new URL("../public/admin.js", import.meta.url), "utf8");
-assert.match(adminPageSource, /icon\.svg\?v=19\.0\.1/);
-assert.match(adminPageSource, /styles\.css\?v=19\.0\.1/);
-assert.match(adminPageSource, /admin\.js\?v=19\.0\.1/);
+assert.match(adminPageSource, /icon\.svg\?v=19\.0\.2/);
+assert.match(adminPageSource, /styles\.css\?v=19\.0\.2/);
+assert.match(adminPageSource, /admin\.js\?v=19\.0\.2/);
 assert.match(adminScriptSource, /https:\/\/lfkdkdyaatdlizryiyon\.supabase\.co/,
   "the standalone administrator console must remain on MARKET");
 assert.match(adminScriptSource, /twss-market-admin-session-v18/,
@@ -396,7 +396,7 @@ assert.match(appSource, /交易日不足 60 日/, "partial histories must not be
 assert.match(appSource, /120000,0/, "opening one detail must not automatically consume a second repair attempt");
 assert.match(appSource, /aria-label','關閉視窗/);
 assert.match(appSource, /event\.key==='Escape'/);
-assert.match(appSource, /sw\.js\?v=19\.0\.1/);
+assert.match(appSource, /sw\.js\?v=19\.0\.2/);
 assert.match(appSource, /timeZone:TAIPEI_TIME_ZONE/,
   "local date defaults must use Asia/Taipei");
 assert.match(appSource, /history\.scrollRestoration='manual'/,
@@ -419,14 +419,12 @@ assert.match(appSource, /function userDataKey\(kind,userId=sessionUserId\(\)\)/,
   "local user data must be partitioned by the authenticated CORE user id");
 assert.match(appSource, /upsertPredictionCloud\(record,owner=sessionUserId\(\)\)[\s\S]*sessionUserId\(\)!==owner/,
   "an in-flight write must be abandoned if the active account changes");
-assert.match(appSource, /deleteJournalRecord\(localId,owner=sessionUserId\(\)\)[\s\S]*getJournal\(owner\)/,
-  "failed deletes must restore only the original account's local data");
 assert.match(appSource, /cloudPred=\(pred\|\|\[\]\)[\s\S]*setPredictions\(cloudPred,userId\)/,
   "an empty cloud result must clear stale local predictions for that account");
-assert.match(appSource, /cloudJournal=\(journal\|\|\[\]\)[\s\S]*setJournal\(cloudJournal,userId\)/,
-  "an empty cloud result must clear stale local journal data for that account");
 assert.match(appSource, /watchlist_groups[\s\S]*watchlist_items/,
   "the implemented watchlist must sync through CORE");
+assert.doesNotMatch(appSource, /investment_journal|saveJournal|deleteJournal|getJournal|setJournal|openJournalModal|journalSection|data-(?:patch-)?journal|data-journal-stock|投資紀錄|買入紀錄|賣出紀錄/i,
+  "v19 must not expose or synchronize personal investment records");
 assert.match(appSource, /function navigateToTab\(tab\)\{if\(tab==='admin'\)return/,
   "direct navigation must not restore the removed embedded administrator flow");
 assert.match(appSource, /\/auth\/v1\/logout/,
@@ -451,10 +449,10 @@ assert.match(patchSource, /匯出上市 CSV/);
 assert.match(patchSource, /匯出上櫃 CSV/);
 assert.match(patchSource, /匯出 ETF CSV/);
 assert.match(patchSource, /正式排名累積中/);
-assert.match(patchSource, /userData\.saveJournal/,
-  "the patched journal editor must use the CORE-aware save path");
-assert.match(patchSource, /userData\.deleteJournal/,
-  "the patched journal delete action must delete from CORE as well as local storage");
+assert.match(patchSource, /自選清單/);
+assert.match(patchSource, /規則提醒/);
+assert.doesNotMatch(patchSource, /saveJournal|deleteJournal|getJournal|openJournalModal|journalSection|data-(?:patch-)?journal|data-journal-stock|投資紀錄|買入紀錄|賣出紀錄/i,
+  "the active mine-page override must not restore the removed investment journal");
 assert.doesNotMatch(patchSource, /gemini|ai[-_ ]?research|AI 研究|AI 摘要|data-ai/i,
   "paid research UI and endpoints must remain removed from the comparison release");
 
@@ -534,7 +532,7 @@ assert.match(publicSmartSource, /deep_listed: '上市'/,
   "the public status must include per-market progress");
 assert.doesNotMatch(publicSmartSource, /SUPABASE_(?:SERVICE_ROLE|SECRET)_KEY|sb_secret_/);
 assert.doesNotMatch(publicSmartSource, /data-tab="admin"|id="adminBtn"/);
-assert.match(publicAppSource, /sw\.js\?v=19\.0\.1/);
+assert.match(publicAppSource, /sw\.js\?v=19\.0\.2/);
 
 const stylesResponse = await worker.fetch(new Request("https://example.test/styles.css?v=18.0.0"), {}, {});
 const stylesSource = await stylesResponse.text();

@@ -15,7 +15,6 @@
   const localWrite = (key, value) => localStorage.setItem(key, JSON.stringify(value));
   const getPredictionLogs = () => userData.getPredictions();
   const setPredictionLogs = value => userData.setPredictions(value);
-  const getJournal = () => userData.getJournal();
   const getAlertStore = () => localRead(userData.storageKey('rule-alerts'), { events: [], lastSeen: {} });
   const setAlertStore = value => localWrite(userData.storageKey('rule-alerts'), value);
   const getCompareStore = () => {
@@ -441,19 +440,6 @@
     return `<div class="grid">${metric('回測樣本', fmt(result.count, 0))}${metric('方向命中率', result.hitRate == null ? '—' : `${fmt(result.hitRate, 1)}%`)}${metric('樣本平均報酬', pct(result.avgReturn))}${metric('平均獲利／虧損', `${pct(result.avgWin)} / ${pct(result.avgLoss)}`)}</div><div class="table-wrap" style="margin-top:10px"><table><thead><tr><th>日期</th><th>預測</th><th>5 日報酬</th><th>結果</th></tr></thead><tbody>${result.samples.slice(-15).reverse().map(item => `<tr><td>${item.date}</td><td>${directionLabel(item.predicted)}</td><td class="${cls(item.returnPct)}">${pct(item.returnPct)}</td><td>${item.correct ? '✓' : '×'}</td></tr>`).join('')}</tbody></table></div><div class="muted small" style="margin-top:8px">回測不套用目前的營收、財報或法人資料，避免偷看未來；因此結果和當下完整模型不完全相同。</div>`;
   }
 
-  function journalStats() {
-    const all = getJournal();
-    const closed = all.filter(item => item.return_pct != null);
-    const wins = closed.filter(item => item.return_pct > 0);
-    const followed = all.filter(item => item.followed_plan != null);
-    return {
-      all, closed,
-      winRate: closed.length ? wins.length / closed.length * 100 : null,
-      averageReturn: average(closed.map(item => item.return_pct)),
-      followRate: followed.length ? followed.filter(item => item.followed_plan).length / followed.length * 100 : null
-    };
-  }
-
   function alertSection() {
     const store = refreshRuleAlerts();
     const events = Array.isArray(store.events) ? store.events : [];
@@ -469,7 +455,7 @@
     const items = getWatchlist();
     const rows = items.map(item => ({ item, stock: S.stocks.find(stock => stock.symbol === item.symbol) })).filter(row => row.stock);
     if (!rows.length) return '<div class="card empty"><h3>尚未加入自選股票</h3><p class="muted">可在機會股或股票詳細頁加入。</p></div>';
-    return `<div class="list two-col">${rows.map(({ item, stock }) => { const gain = item.addedPrice && stock.close ? (stock.close / item.addedPrice - 1) * 100 : null; const etf = instrumentGroup(stock) === 'etf'; const alert = latestAlert.get(stock.symbol); return `<div class="card clickable" data-detail="${stock.symbol}"><div class="head"><div><b>${stock.name}</b><div class="muted">${stock.symbol} · ${stock.industry}</div></div><button class="icon-btn" aria-label="從自選清單移除 ${escapeText(stock.name)}" data-watch="${stock.symbol}">移除</button></div>${alert ? `<div class="watch-alert ${alert.read ? '' : 'unread'}"><b>${escapeText(alert.title)}</b><span>${escapeText(alert.dataDate)}</span></div>` : ''}<div class="grid">${metric('目前價格', fmt(stock.close))}${metric('加入後漲跌', `<span class="${cls(gain)}">${pct(gain)}</span>`)}${metric(etf ? '商品類型' : '月營收年增', etf ? 'ETF' : pct(stock.rev))}${metric(etf ? '成交量' : '機會分數', etf ? `${fmt(stock.volume, 0)} 張` : opportunityScore(stock))}</div><button class="btn" data-forecast="${stock.symbol}" style="width:100%;margin-top:10px">查看趨勢預測</button></div>`; }).join('')}</div>`;
+    return `<div class="list two-col">${rows.map(({ stock }) => { const etf = instrumentGroup(stock) === 'etf'; const alert = latestAlert.get(stock.symbol); return `<div class="card clickable" data-detail="${stock.symbol}"><div class="head"><div><b>${stock.name}</b><div class="muted">${stock.symbol} · ${stock.industry}</div></div><button class="icon-btn" aria-label="從自選清單移除 ${escapeText(stock.name)}" data-watch="${stock.symbol}">移除</button></div>${alert ? `<div class="watch-alert ${alert.read ? '' : 'unread'}"><b>${escapeText(alert.title)}</b><span>${escapeText(alert.dataDate)}</span></div>` : ''}<div class="grid">${metric('目前價格', fmt(stock.close))}${metric('當日漲跌', `<span class="${cls(stock.change)}">${pct(stock.change)}</span>`)}${metric(etf ? '商品類型' : '月營收年增', etf ? 'ETF' : pct(stock.rev))}${metric(etf ? '成交量' : '機會分數', etf ? `${fmt(stock.volume, 0)} 張` : opportunityScore(stock))}</div><button class="btn" data-forecast="${stock.symbol}" style="width:100%;margin-top:10px">查看趨勢預測</button></div>`; }).join('')}</div>`;
   }
 
   function comparisonSection() {
@@ -489,44 +475,13 @@
       ${exportButtons}`;
   }
 
-  function actionLabel(value) { return ({ observe: '觀察', buy: '買入紀錄', sell: '賣出紀錄', review: '事後檢討' })[value] || value; }
-  function horizonLabel(value) { return ({ short: '短線 1–5 日', swing: '波段 1–4 週', medium: '中期 1–6 月', long: '長期 6 月以上' })[value] || '未設定期間'; }
-  function journalSection() {
-    const stats = journalStats();
-    const header = `<div class="grid">${metric('紀錄筆數', fmt(stats.all.length, 0))}${metric('已完成交易', fmt(stats.closed.length, 0))}${metric('勝率', stats.winRate == null ? '尚無樣本' : `${fmt(stats.winRate, 1)}%`)}${metric('遵守計畫率', stats.followRate == null ? '尚無資料' : `${fmt(stats.followRate, 1)}%`)}</div><div class="row" style="margin-top:10px"><button id="patchNewJournal" class="btn grow">＋新增投資紀錄</button><button id="patchExportJournal" class="btn secondary">匯出</button></div>`;
-    if (!stats.all.length) return `${header}<div class="card empty"><h3>尚未建立投資紀錄</h3><p class="muted">記錄當時理由、風險與結果，之後才能檢查自己是否遵守計畫。</p></div>`;
-    return `${header}<div class="list">${stats.all.map(item => `<div class="card patch-journal"><div class="head"><div><b>${item.stock_name || item.symbol} ${item.symbol}</b><div class="muted">${item.entry_date} · ${actionLabel(item.action)} · ${horizonLabel(item.horizon)}</div></div>${item.return_pct != null ? `<b class="${cls(item.return_pct)}">${pct(item.return_pct)}</b>` : ''}</div>${item.thesis ? `<p>${escapeText(item.thesis)}</p>` : ''}<div class="rules">${item.risk_plan ? `<span>風險：${escapeText(item.risk_plan)}</span>` : ''}${item.target_plan ? `<span>目標：${escapeText(item.target_plan)}</span>` : ''}${item.followed_plan != null ? `<span>遵守計畫：${item.followed_plan ? '是' : '否'}</span>` : ''}</div><div class="row" style="margin-top:10px"><button class="btn secondary" data-patch-edit="${item.local_id}">編輯</button><button class="btn danger" data-patch-delete="${item.local_id}">刪除</button></div></div>`).join('')}</div>`;
-  }
-
   function minePage() {
     const unread = refreshRuleAlerts().events?.filter(event => !event.read).length || 0;
     const compareCount = getCompareStore().symbols.length;
     const section = patchState.mineTab === 'watch' ? watchSection()
       : patchState.mineTab === 'alerts' ? alertSection()
-        : patchState.mineTab === 'compare' ? comparisonSection()
-          : journalSection();
-    return `<h2>我的</h2><div class="patch-tabs"><button data-patch-mine="watch" class="${patchState.mineTab === 'watch' ? 'active' : ''}">自選清單</button><button data-patch-mine="compare" class="${patchState.mineTab === 'compare' ? 'active' : ''}">候選比較${compareCount ? `<span class="nav-count">${compareCount}</span>` : ''}</button><button data-patch-mine="alerts" class="${patchState.mineTab === 'alerts' ? 'active' : ''}">規則提醒${unread ? `<span class="nav-count">${unread}</span>` : ''}</button><button data-patch-mine="journal" class="${patchState.mineTab === 'journal' ? 'active' : ''}">投資紀錄</button></div>${section}${disclaimer()}`;
-  }
-  function openJournalModal(record = null, stock = null) {
-    const item = record || { local_id: createId(), symbol: stock?.symbol || '', stock_name: stock?.name || '', entry_date: today(), action: 'observe', price: stock?.close ?? null, quantity: null, horizon: 'swing', thesis: '', risk_plan: '', target_plan: '', emotion: '', followed_plan: null, exit_price: null, exit_date: '', return_pct: null, result_note: '' };
-    modalRoot.innerHTML = `<div class="modal"><div class="sheet"><button class="sheet-close">×</button><h2>${record ? '編輯' : '新增'}投資紀錄</h2><div class="grid"><label class="muted">股票代號<input id="journalSymbol" value="${escapeText(item.symbol)}"></label><label class="muted">股票名稱<input id="journalName" value="${escapeText(item.stock_name || '')}"></label><label class="muted">日期<input id="journalDate" type="date" value="${item.entry_date}"></label><label class="muted">類型<select id="journalAction"><option value="observe">觀察</option><option value="buy">買入紀錄</option><option value="sell">賣出紀錄</option><option value="review">事後檢討</option></select></label><label class="muted">價格<input id="journalPrice" type="number" step="0.01" value="${item.price ?? ''}"></label><label class="muted">數量／張數<input id="journalQuantity" type="number" step="0.001" value="${item.quantity ?? ''}"></label><label class="muted">預計期間<select id="journalHorizon"><option value="short">短線 1–5 日</option><option value="swing">波段 1–4 週</option><option value="medium">中期 1–6 月</option><option value="long">長期 6 月以上</option></select></label><label class="muted">當時情緒<input id="journalEmotion" value="${escapeText(item.emotion || '')}" placeholder="例如：冷靜、害怕錯過"></label></div><label class="muted">決策理由<textarea id="journalThesis">${escapeText(item.thesis || '')}</textarea></label><label class="muted">風險計畫<textarea id="journalRisk">${escapeText(item.risk_plan || '')}</textarea></label><label class="muted">目標計畫<textarea id="journalTarget">${escapeText(item.target_plan || '')}</textarea></label><div class="grid"><label class="muted">出場價格<input id="journalExitPrice" type="number" step="0.01" value="${item.exit_price ?? ''}"></label><label class="muted">出場日期<input id="journalExitDate" type="date" value="${item.exit_date || ''}"></label></div><label class="muted">事後檢討<textarea id="journalResult">${escapeText(item.result_note || '')}</textarea></label><label class="muted"><input id="journalFollowed" type="checkbox" style="width:auto" ${item.followed_plan ? 'checked' : ''}> 有遵守原本計畫</label><button id="journalSave" class="btn" style="width:100%;margin-top:12px">儲存紀錄</button></div></div>`;
-    q('#journalAction').value = item.action || 'observe';
-    q('#journalHorizon').value = item.horizon || 'swing';
-    q('.sheet-close', modalRoot).onclick = closeModal;
-    q('#journalSave').onclick = () => {
-      const price = Number(q('#journalPrice').value) || null;
-      const exitPrice = Number(q('#journalExitPrice').value) || null;
-      const saved = {
-        ...item,
-        symbol: q('#journalSymbol').value.trim(), stock_name: q('#journalName').value.trim(), entry_date: q('#journalDate').value,
-        action: q('#journalAction').value, price, quantity: Number(q('#journalQuantity').value) || null, horizon: q('#journalHorizon').value,
-        emotion: q('#journalEmotion').value.trim(), thesis: q('#journalThesis').value.trim(), risk_plan: q('#journalRisk').value.trim(), target_plan: q('#journalTarget').value.trim(),
-        exit_price: exitPrice, exit_date: q('#journalExitDate').value || '', result_note: q('#journalResult').value.trim(), followed_plan: q('#journalFollowed').checked,
-        return_pct: price && exitPrice ? +((exitPrice / price - 1) * 100).toFixed(2) : null, updated_at: new Date().toISOString()
-      };
-      if (!saved.symbol) { alert('請輸入股票代號'); return; }
-      userData.saveJournal(saved).catch(() => {}); closeModal(); patchState.mineTab = 'journal'; S.tab = 'mine'; render();
-    };
+        : comparisonSection();
+    return `<h2>我的</h2><div class="patch-tabs"><button data-patch-mine="watch" class="${patchState.mineTab === 'watch' ? 'active' : ''}">自選清單</button><button data-patch-mine="compare" class="${patchState.mineTab === 'compare' ? 'active' : ''}">候選比較${compareCount ? `<span class="nav-count">${compareCount}</span>` : ''}</button><button data-patch-mine="alerts" class="${patchState.mineTab === 'alerts' ? 'active' : ''}">規則提醒${unread ? `<span class="nav-count">${unread}</span>` : ''}</button></div>${section}${disclaimer()}`;
   }
 
   function bindPatch() {
@@ -583,14 +538,6 @@
       setAlertStore(store);
       if (event?.symbol) openDetail(event.symbol);
     });
-    q('#patchNewJournal')?.addEventListener('click', () => openJournalModal());
-    q('#patchExportJournal')?.addEventListener('click', () => {
-      const blob = new Blob([JSON.stringify(getJournal(), null, 2)], { type: 'application/json' });
-      const url = URL.createObjectURL(blob); const anchor = document.createElement('a'); anchor.href = url; anchor.download = `台股智選-投資紀錄-${today()}.json`; anchor.click(); URL.revokeObjectURL(url);
-    });
-    qa('[data-patch-edit]').forEach(button => button.onclick = () => openJournalModal(getJournal().find(item => item.local_id === button.dataset.patchEdit)));
-    qa('[data-patch-delete]').forEach(button => button.onclick = () => { if (!confirm('確定刪除這筆紀錄？')) return; userData.deleteJournal(button.dataset.patchDelete).catch(() => {}); render(); });
-    qa('[data-patch-journal-stock]').forEach(button => button.onclick = () => openJournalModal(null, S.stocks.find(stock => stock.symbol === button.dataset.patchJournalStock)));
     qa('[data-patch-verify-stock]').forEach(button => button.onclick = () => { closeModal(); patchState.verifyQuery = button.dataset.patchVerifyStock; S.tab = 'verify'; render(); });
   }
 
@@ -607,7 +554,7 @@
     } catch {
       recordPrediction(stock, calculateForecast(stock, null));
     }
-    const actions = q('[data-journal-stock]', modalRoot)?.closest('.row');
+    const actions = q('[data-verify-stock]', modalRoot)?.closest('.row');
     if (actions && !q('[data-compare]', actions)) {
       const button = document.createElement('button');
       button.type = 'button';

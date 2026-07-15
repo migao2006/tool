@@ -8,11 +8,12 @@
     }
   },
   "cleanUrls": true,
-  "rewrites": [
-    { "source": "/api/:path*", "destination": "/api/maintenance" },
-    { "source": "/", "destination": "/api/maintenance" },
-    { "source": "/admin", "destination": "/api/maintenance" },
-    { "source": "/admin.html", "destination": "/api/maintenance" }
+  "redirects": [
+    { "source": "/", "destination": "/api/maintenance", "permanent": false },
+    { "source": "/admin", "destination": "/api/maintenance", "permanent": false },
+    { "source": "/admin.html", "destination": "/api/maintenance", "permanent": false },
+    { "source": "/api/market-data", "destination": "/api/maintenance", "permanent": false },
+    { "source": "/api/ai-research", "destination": "/api/maintenance", "permanent": false }
   ],
   "headers": [
     {

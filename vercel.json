@@ -10,9 +10,9 @@
   "cleanUrls": true,
   "rewrites": [
     { "source": "/api/:path*", "destination": "/api/maintenance" },
-    { "source": "/", "destination": "/maintenance.html" },
-    { "source": "/admin", "destination": "/maintenance.html" },
-    { "source": "/admin.html", "destination": "/maintenance.html" }
+    { "source": "/", "destination": "/api/maintenance" },
+    { "source": "/admin", "destination": "/api/maintenance" },
+    { "source": "/admin.html", "destination": "/api/maintenance" }
   ],
   "headers": [
     {

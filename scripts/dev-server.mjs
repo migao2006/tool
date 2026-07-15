@@ -1,7 +1,7 @@
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import { createServer } from "node:http";
-import { extname, resolve } from "node:path";
+import { extname, isAbsolute, relative as relativePath, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { handleMarketData, healthPayload } from "../src/market-data.js";
 
@@ -35,7 +35,8 @@ const server = createServer(async (req, res) => {
   }
   const relative = url.pathname === "/" ? "index.html" : decodeURIComponent(url.pathname).replace(/^\/+/, "");
   const path = resolve(root, relative);
-  if (!path.startsWith(`${root}/`)) {
+  const pathFromRoot = relativePath(root, path);
+  if (pathFromRoot.startsWith("..") || isAbsolute(pathFromRoot)) {
     res.statusCode = 403;
     res.end("Forbidden");
     return;

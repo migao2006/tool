@@ -3,10 +3,11 @@ import { execFile } from "node:child_process";
 import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 const run = promisify(execFile);
-const root = resolve(new URL("..", import.meta.url).pathname);
+const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const fixtureRoot = await mkdtemp(resolve(tmpdir(), "twss-backtest-"));
 const insufficientSnapshotDir = resolve(fixtureRoot, "snapshots-25-days");
 const matureSnapshotDir = resolve(fixtureRoot, "snapshots-45-days");
@@ -154,12 +155,12 @@ assert.match(exporterSource, /coherentTradingDate/);
 assert.match(exporterSource, /officialOpens/);
 assert.match(exporterSource, /row\.dataDate/);
 assert.match(updaterSource, /open: stock\.open/);
-assert.match(serviceWorker, /twss-v17\.3\.1/);
-assert.match(indexHtml, /\?v=17\.3\.1/);
-assert.match(appSource, /sw\.js\?v=17\.3\.1/);
-assert.match(smartSource, /backtest\.json\?v=17\.3\.1/);
+assert.match(serviceWorker, /twss-v17\.3\.2/);
+assert.match(indexHtml, /\?v=17\.3\.2/);
+assert.match(appSource, /sw\.js\?v=17\.3\.2/);
+assert.match(smartSource, /backtest\.json\?v=17\.3\.2/);
 assert.match(patchSource, /LEGACY_AI_LOCAL_STORAGE_KEYS/);
 assert.doesNotMatch(patchSource, /Object\.keys\(localStorage\)|localStorage\.clear\(/,
   "legacy cleanup must never scan or clear unrelated user storage");
 
-console.log("Snapshot pipeline tests passed: 25 mature-date gating, 45-day readiness, next-open runtime, final-cycle readiness, official open, and v17.3.1 cache busting");
+console.log("Snapshot pipeline tests passed: 25 mature-date gating, 45-day readiness, next-open runtime, final-cycle readiness, official open, and v17.3.2 cache busting");

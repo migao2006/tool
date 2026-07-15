@@ -19,6 +19,30 @@ const q=(s,r=document)=>r.querySelector(s);
 const qa=(s,r=document)=>[...r.querySelectorAll(s)];
 let modalReturnFocus=null;
 let modalFocusPrimed=false;
+let scrollResetGeneration=0;
+let initialHomeScrollPending=true;
+
+if('scrollRestoration'in history)history.scrollRestoration='manual';
+function resetPageScroll(){
+  const generation=++scrollResetGeneration;
+  const apply=()=>{
+    if(generation!==scrollResetGeneration)return;
+    window.scrollTo(0,0);
+    document.documentElement.scrollTop=0;
+    document.body.scrollTop=0;
+  };
+  apply();
+  requestAnimationFrame(()=>{apply();requestAnimationFrame(apply)});
+  setTimeout(apply,160)
+}
+function settleInitialHomeScroll(){
+  if(!initialHomeScrollPending)return;
+  initialHomeScrollPending=false;
+  if(S.tab==='home')resetPageScroll()
+}
+window.addEventListener('pageshow',event=>{
+  if(S.tab==='home'&&(event.persisted||initialHomeScrollPending))resetPageScroll()
+});
 
 function modalFocusable(sheet){
   return qa('button:not([disabled]),a[href],input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])',sheet)
@@ -127,7 +151,7 @@ async function loadStocks(){
     const payload=await fetchJson(`${EDGE}?type=stocks`,120000);
     if(!Array.isArray(payload.stocks)||payload.stocks.length<20)throw new Error(payload.error||'盤後資料筆數不足');
     S.stocks=payload.stocks.map(normalizeStock);S.mode=payload.mode||'partial';S.date=payload.date||today();S.dataStatus=payload.sourceStatus||{};S.sourceDates=payload.dates||{};S.loading=false;
-    render();loadFundamentals();
+    render();settleInitialHomeScroll();loadFundamentals();
   }catch(error){
     S.loading=false;app.innerHTML=`<div class="card error-card"><h3>股票資料載入失敗</h3><p class="muted">${esc(error.message)}</p><button id="retryLoad" class="btn">重新載入</button></div>`;q('#retryLoad').onclick=loadStocks;
   }
@@ -596,7 +620,7 @@ async function loadAdminLog(force=false){
   }
   render()
 }
-function navigateToTab(tab){S.tab=tab;render();requestAnimationFrame(()=>window.scrollTo(0,0))}
+function navigateToTab(tab){S.tab=tab;render();resetPageScroll()}
 function openAdminPage(){if(!S.isAdmin)return;closeModal();navigateToTab('admin');loadAdminLog()}
 
 function render(){
@@ -678,5 +702,5 @@ function openAccountModal(){
 
 document.querySelector('#accountBtn').onclick=openAccountModal;
 document.querySelector('#adminBtn').onclick=openAdminPage;
-if('serviceWorker'in navigator)navigator.serviceWorker.register('/sw.js?v=17.3.1',{updateViaCache:'none'}).catch(()=>{});
+if('serviceWorker'in navigator)navigator.serviceWorker.register('/sw.js?v=17.3.2',{updateViaCache:'none'}).catch(()=>{});
 initSession();render();loadStocks();

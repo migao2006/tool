@@ -360,12 +360,18 @@ assert.match(contentSecurityPolicy, /https:\/\/lfkdkdyaatdlizryiyon\.supabase\.c
   "the shared policy must continue allowing the standalone MARKET administrator console");
 assert.doesNotMatch(pageSource, /id="adminBtn"/,
   "the CORE-authenticated main application must not embed a MARKET administrator entry");
-assert.match(pageSource, /app\.js\?v=18\.0\.0/);
+assert.match(pageSource, /app\.js\?v=(?:18|19)\.0\.0/);
+const publicPageSource = await readFile(new URL("../public/index.html", import.meta.url), "utf8");
+const publicAppSource = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+const publicSmartSource = await readFile(new URL("../public/smart.js", import.meta.url), "utf8");
+const publicStylesSource = await readFile(new URL("../public/styles.css", import.meta.url), "utf8");
+assert.match(publicPageSource, /app\.js\?v=19\.0\.0/);
+assert.match(publicPageSource, /id="themeToggle"/);
 const adminPageSource = await readFile(new URL("../public/admin.html", import.meta.url), "utf8");
 const adminScriptSource = await readFile(new URL("../public/admin.js", import.meta.url), "utf8");
-assert.match(adminPageSource, /icon\.svg\?v=18\.0\.0/);
-assert.match(adminPageSource, /styles\.css\?v=18\.0\.0/);
-assert.match(adminPageSource, /admin\.js\?v=18\.0\.0/);
+assert.match(adminPageSource, /icon\.svg\?v=19\.0\.0/);
+assert.match(adminPageSource, /styles\.css\?v=19\.0\.0/);
+assert.match(adminPageSource, /admin\.js\?v=19\.0\.0/);
 assert.match(adminScriptSource, /https:\/\/lfkdkdyaatdlizryiyon\.supabase\.co/,
   "the standalone administrator console must remain on MARKET");
 assert.match(adminScriptSource, /twss-market-admin-session-v18/,
@@ -473,6 +479,56 @@ assert.match(smartSource, /舊模型快照不作為 v16\.3 正式候選/);
 assert.doesNotMatch(smartSource, /資料健康中心|data-health|statusCard/,
   "the ranking override must not restore the removed health-center entry");
 assert.doesNotMatch(smartSource, /廣告|促銷|VIP|贊助|免費試用|立即購買|解鎖/);
+for (const heading of ['今日市場摘要', '今日 AI 精選', '分數上升最快', 'AI 排行榜', '自選股重要變化', '今日重要新聞與公告']) {
+  assert.match(publicSmartSource, new RegExp(heading), `v19 home must include ${heading}`);
+}
+assert.match(publicSmartSource, /\/api\/v19/);
+assert.match(publicSmartSource, /optionalJson\('\/home'\)/);
+assert.match(publicSmartSource, /optionalJson\(rankingQuery\(10\)\)/);
+assert.match(publicSmartSource, /if \(!home && !rankings\) await globalThis\.twssLoadUltimateSnapshot/);
+assert.doesNotMatch(publicSmartSource, /twssLoadUltimateSnapshot = loadSnapshot;[\s\S]{0,300}\n\s*loadSnapshot\(\);/,
+  "the large legacy snapshot must only load after both paged v19 endpoints fail");
+assert.match(publicSmartSource, /rankingQuery\(20, v19\.rankingNextCursor\)/);
+assert.match(publicSmartSource, /payload\.nextCursor/);
+assert.match(publicSmartSource, /params\.set\('cursor', cursor\)/);
+assert.doesNotMatch(publicSmartSource, /rankings\?limit=100/);
+assert.match(publicSmartSource, /sort: v19\.sort/);
+assert.match(publicSmartSource, /if \(v19\.rankings\) return allRows\(\)/,
+  "successful server pagination must not be mixed with unseen local ranking rows");
+assert.match(publicSmartSource, /risk_asc/);
+assert.match(publicSmartSource, /risk_desc/);
+assert.doesNotMatch(publicSmartSource, /value="(?:turnover_desc|name_asc)"/);
+assert.match(publicSmartSource, /optionalJson\(`\/stocks\?symbol=\$\{encodeURIComponent\(symbol\)\}`\)/);
+assert.match(publicSmartSource, /visible: 10/);
+assert.match(publicSmartSource, /v19\.visible \+= 20/);
+assert.match(publicSmartSource, /輸入代號或名稱/);
+assert.match(publicSmartSource, /對立訊號/);
+assert.match(publicSmartSource, /分數歷史/);
+assert.match(publicSmartSource, /const tradeDate = dateOnly\(first\(raw\.tradeDate, raw\.trade_date/);
+assert.match(publicSmartSource, /行情日 \$\{esc\(row\.tradeDate \|\| '待確認'\)\}/);
+assert.match(publicSmartSource, /分析日 \$\{esc\(row\.analysisDataDate \|\| '待確認'\)\}/);
+assert.doesNotMatch(publicSmartSource, /行情日 \$\{esc\(row\.dataDate \|\| S\.date/,
+  "analysis dates must never be presented as quote dates");
+assert.match(publicSmartSource, /同產業參考（非 AI 關聯判定）/);
+assert.match(publicSmartSource, /資料不足，尚無可驗證的推薦原因/);
+assert.match(publicSmartSource, /Array\.isArray\(value\) \? value\.length > 0 : Boolean\(value\)/,
+  "an empty degraded array must not mark the v19 API as degraded");
+assert.match(publicSmartSource, /degraded: hasDegradation\(/,
+  "an empty degraded array must not mark a stock detail as degraded");
+assert.match(publicSmartSource, /watchRows: \[\]/);
+assert.match(publicSmartSource, /watchFingerprint: null/);
+assert.match(publicSmartSource, /fingerprint === v19\.watchFingerprint/);
+assert.match(publicSmartSource, /loadWatchRows\(\);\n\s*\};/,
+  "render binding must refresh watch details only when the watchlist fingerprint changes");
+assert.match(publicSmartSource, /slice\(0, 20\)/);
+assert.match(publicSmartSource, /index \+= 4/);
+assert.match(publicSmartSource, /Promise\.allSettled\(batch\)/);
+assert.match(publicSmartSource, /v19\.watchRows\.forEach/);
+assert.match(publicSmartSource, /function homeGroupRows\(\)/);
+assert.match(publicSmartSource, /v19\.home\?\.groups\?\.\[key\]/);
+assert.doesNotMatch(publicSmartSource, /SUPABASE_(?:SERVICE_ROLE|SECRET)_KEY|sb_secret_/);
+assert.doesNotMatch(publicSmartSource, /data-tab="admin"|id="adminBtn"/);
+assert.match(publicAppSource, /sw\.js\?v=19\.0\.0/);
 
 const stylesResponse = await worker.fetch(new Request("https://example.test/styles.css?v=18.0.0"), {}, {});
 const stylesSource = await stylesResponse.text();
@@ -484,6 +540,8 @@ assert.match(stylesSource, /authenticated administrator operations console/);
 assert.match(stylesSource, /\.app-shell\{overflow-anchor:none\}/,
   "asynchronous home renders must not let Safari move the viewport anchor");
 assert.doesNotMatch(stylesSource, /\.ai-(?:card|panel|action|summary|scenario)/);
+assert.match(publicStylesSource, /html\[data-theme="light"\]/);
+assert.match(publicStylesSource, /\.v19-ranking-filter/);
 
 const latestResponse = await worker.fetch(new Request("https://example.test/data/latest.json?v=16"), {}, {});
 assert.equal(latestResponse.ok, true);

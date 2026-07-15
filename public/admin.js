@@ -42,7 +42,14 @@
     }).format(date);
   };
   const groupLabel = value => ({ listed: '上市', otc: '上櫃', etf: 'ETF' })[value] || value || '全市場';
-  const jobLabel = value => ({ universe: '全市場盤後資料', deep_listed: '上市深度分析', deep_otc: '上櫃深度分析', deep_etf: 'ETF 深度分析' })[value] || value || '未命名工作';
+  const jobLabel = value => ({
+    universe: '全市場盤後資料',
+    deep_listed: '上市深度分析',
+    deep_otc: '上櫃深度分析',
+    deep_etf: 'ETF 深度分析',
+    v19_rankings: 'v19 排行榜快照',
+    v19_news: '新聞與公告同步'
+  })[value] || value || '未命名工作';
   const statusLabel = value => ({
     success: '完成', ready: '完成', final: '完成', healthy: '正常', running: '執行中',
     pending: '等待中', partial: '部分完成', building: '建立中', error: '錯誤', failed: '失敗'

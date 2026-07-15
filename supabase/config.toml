@@ -5,3 +5,9 @@ project_id = "lfkdkdyaatdlizryiyon"
 # rejects every request that cannot pass twss_verify_sync_token().
 verify_jwt = false
 entrypoint = "./functions/twss-sync-batch/index.ts"
+
+[functions.twss-v19-news]
+# The shared Vault token is verified by twss_verify_sync_token(); JWT auth is
+# intentionally disabled because pg_cron is the only caller.
+verify_jwt = false
+entrypoint = "./functions/twss-v19-news/index.ts"

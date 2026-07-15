@@ -645,7 +645,7 @@
   fetch('/api/market-data?type=ranking-backtest', { cache: 'no-store' })
     .then(response => response.ok ? response.json() : null)
     .catch(() => null)
-    .then(value => value?.byGroup ? value : fetch('/data/backtest.json?v=18.0.0', { cache: 'no-store' })
+    .then(value => value?.byGroup ? value : fetch('/data/backtest.json?v=19.0.0', { cache: 'no-store' })
       .then(response => response.ok ? response.json() : null).catch(() => null))
     .then(value => { if (value) patchState.rankingBacktest = value; if (S.tab === 'verify') render(); })
     .catch(() => {});

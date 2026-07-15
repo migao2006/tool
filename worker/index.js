@@ -1420,7 +1420,7 @@ async function handleMarketData(request, url = new URL(request.url)) {
       return jsonResponse(await buildRiskSnapshot(), {}, force ? 0 : 600);
     }
     if (type === "benchmarks") {
-      return jsonResponse(await buildBenchmarks({ allowFinmind: false }), {}, force ? 0 : 21_600);
+      return jsonResponse(await buildBenchmarks({ allowFinmind: false, bypassCache: force }), {}, force ? 0 : 300);
     }
     if (type === "etf-profiles") {
       return jsonResponse(await buildEtfProfiles(), {}, force ? 0 : 21_600);

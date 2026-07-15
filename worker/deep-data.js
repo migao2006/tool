@@ -1,4 +1,5 @@
 const TWSE_OPEN = "https://openapi.twse.com.tw/v1";
+const TWSE_MIS = "https://mis.twse.com.tw/stock/api/getStockInfo.jsp";
 const TPEX_OPEN = "https://www.tpex.org.tw/openapi/v1";
 const TAIFEX_OPEN = "https://openapi.taifex.com.tw/v1";
 const FINMIND = "https://api.finmindtrade.com/api/v4/data";
@@ -16,6 +17,7 @@ const policies = [
   // Edge invocation well inside its wall-clock limit.
   { match: "api.finmindtrade.com", key: "finmind", gap: 500, concurrency: 2 },
   { match: "openapi.twse.com.tw", key: "twse", gap: 1_250, concurrency: 2 },
+  { match: "mis.twse.com.tw", key: "twse-mis", gap: 1_000, concurrency: 1 },
   { match: "www.tpex.org.tw", key: "tpex", gap: 1_250, concurrency: 2 },
   { match: "openapi.taifex.com.tw", key: "taifex", gap: 1_250, concurrency: 1 },
   { match: "opendata.tdcc.com.tw", key: "tdcc", gap: 2_000, concurrency: 1 },
@@ -1186,6 +1188,70 @@ function latestIndexSnapshot(rows, { code, name, source, closeField = "close", c
   };
 }
 
+function selectMisIndex(payload, { exchange, code, name }) {
+  const row = (Array.isArray(payload?.msgArray) ? payload.msgArray : [])
+    .find((item) => clean(item.ex) === exchange && finite(number(item.z)));
+  if (!row) return null;
+  const dataDate = isoDate(row.d ?? row["^"]);
+  const value = number(row.z);
+  const previousClose = number(row.y);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dataDate) || !finite(value)) return null;
+  const change = finite(previousClose) ? Number(value) - Number(previousClose) : null;
+  return {
+    code,
+    name,
+    dataDate,
+    value: round(value, 2),
+    change: round(change, 2),
+    changePercent: finite(change) && finite(previousClose) && Number(previousClose) !== 0
+      ? round(Number(change) / Number(previousClose) * 100, 2)
+      : null,
+    source: "TWSE MIS",
+  };
+}
+
+function selectFinmindTx(rows) {
+  const normalized = objectRows(rows).filter((row) =>
+    clean(row.futures_id) === "TX" &&
+    clean(row.trading_session) === "position" &&
+    /^\d{6}$/.test(clean(row.contract_date)) &&
+    finite(number(row.close)) && finite(number(row.volume))
+  );
+  if (!normalized.length) return null;
+  const latestDate = normalized.map((row) => isoDate(row.date)).filter(Boolean).sort().at(-1);
+  const latest = normalized.filter((row) => isoDate(row.date) === latestDate)
+    .sort((left, right) => (number(right.volume) || 0) - (number(left.volume) || 0))[0];
+  if (!latest) return null;
+  return {
+    code: "tx",
+    name: "台指期",
+    dataDate: latestDate,
+    value: round(number(latest.close), 2),
+    change: round(number(latest.spread), 2),
+    changePercent: round(number(latest.spread_per), 2),
+    contractMonth: clean(latest.contract_date),
+    session: "regular",
+    volume: number(latest.volume),
+    settlementPrice: number(latest.settlement_price),
+    openInterest: number(latest.open_interest),
+    source: "FinMind TaiwanFuturesDaily",
+  };
+}
+
+function freshestSnapshot(...snapshots) {
+  return snapshots.filter(Boolean).reduce((latest, current) =>
+    !latest || current.dataDate > latest.dataDate ? current : latest
+  , null);
+}
+
+function mergeBenchmarkSnapshot(rows, snapshot) {
+  if (!snapshot || !/^\d{4}-\d{2}-\d{2}$/.test(snapshot.dataDate) || !finite(snapshot.value)) return rows;
+  return [...rows.filter((row) => row.date !== snapshot.dataDate), {
+    date: snapshot.dataDate,
+    close: Number(snapshot.value),
+  }].sort((left, right) => left.date.localeCompare(right.date));
+}
+
 function selectTaifexTx(rows) {
   const normalized = objectRows(rows).filter((row) => {
     const contractMonth = clean(row["ContractMonth(Week)"]);
@@ -1219,11 +1285,19 @@ export async function buildBenchmarks(options = {}) {
   const allowFinmind = options.allowFinmind !== false;
   const officialRetries = Math.max(0, Number.isFinite(Number(options.officialRetries)) ? Number(options.officialRetries) : 2);
   const officialTimeout = Math.max(5_000, Number(options.officialTimeout) || 35_000);
-  return cached(`benchmarks:${finmindRetries}:${officialRetries}:${officialTimeout}:${allowFinmind ? "fallback" : "official-only"}`, 6 * 60 * 60 * 1_000, async () => {
+  const cacheKey = `benchmarks:v2:${finmindRetries}:${officialRetries}:${officialTimeout}:${allowFinmind ? "fallback" : "official-only"}`;
+  const factory = async () => {
+    const recentStart = addDays(taipeiToday(), -10);
+    const recentEnd = addDays(taipeiToday(), 1);
     const settled = await Promise.allSettled([
       request(`${TWSE_OPEN}/indicesReport/MI_5MINS_HIST`, { timeout: officialTimeout, retries: officialRetries }),
       request(`${TPEX_OPEN}/tpex_index`, { timeout: officialTimeout, retries: officialRetries }),
       request(`${TAIFEX_OPEN}/DailyMarketReportFut`, { timeout: officialTimeout, retries: officialRetries }),
+      request(`${TWSE_MIS}?ex_ch=tse_t00.tw%7Cotc_o00.tw&json=1&delay=0`, { timeout: officialTimeout, retries: officialRetries }),
+      finmind("TaiwanFuturesDaily", "TX", recentStart, recentEnd, {
+        retries: finmindRetries,
+        finmindToken: options.finmindToken,
+      }),
     ]);
     let listed = settled[0].status === "fulfilled"
       ? normalizeBenchmark(objectRows(settled[0].value), { close: "ClosingIndex" })
@@ -1232,15 +1306,24 @@ export async function buildBenchmarks(options = {}) {
       ? normalizeBenchmark(objectRows(settled[1].value), { close: "Close" })
       : [];
     const source = { listed: "TWSE OpenAPI", otc: "TPEx OpenAPI" };
-    const marketIndices = [
-      settled[0].status === "fulfilled" ? latestIndexSnapshot(settled[0].value, {
+    const openTaiex = settled[0].status === "fulfilled" ? latestIndexSnapshot(settled[0].value, {
         code: "taiex", name: "加權指數", source: "TWSE OpenAPI", closeField: "ClosingIndex",
-      }) : null,
-      settled[1].status === "fulfilled" ? latestIndexSnapshot(settled[1].value, {
+      }) : null;
+    const openTpex = settled[1].status === "fulfilled" ? latestIndexSnapshot(settled[1].value, {
         code: "tpex", name: "櫃買指數", source: "TPEx OpenAPI", closeField: "Close", changeField: "Change",
-      }) : null,
-      settled[2].status === "fulfilled" ? selectTaifexTx(settled[2].value) : null,
-    ].filter(Boolean);
+      }) : null;
+    const openTx = settled[2].status === "fulfilled" ? selectTaifexTx(settled[2].value) : null;
+    const misTaiex = settled[3].status === "fulfilled" ? selectMisIndex(settled[3].value, {
+      exchange: "tse", code: "taiex", name: "加權指數",
+    }) : null;
+    const misTpex = settled[3].status === "fulfilled" ? selectMisIndex(settled[3].value, {
+      exchange: "otc", code: "tpex", name: "櫃買指數",
+    }) : null;
+    const finmindTx = settled[4].status === "fulfilled" ? selectFinmindTx(settled[4].value) : null;
+    const taiexSnapshot = freshestSnapshot(misTaiex, openTaiex);
+    const tpexSnapshot = freshestSnapshot(openTpex, misTpex);
+    const txSnapshot = freshestSnapshot(finmindTx, openTx);
+    const marketIndices = [taiexSnapshot, tpexSnapshot, txSnapshot].filter(Boolean);
     // The official OpenAPI index feeds may only expose the current month.  Do
     // not pretend 7–10 observations are a 20/60-day benchmark; use FinMind's
     // documented total-return-index history as the bounded fallback.
@@ -1266,6 +1349,11 @@ export async function buildBenchmarks(options = {}) {
         source.otc = "FinMind TaiwanStockTotalReturnIndex (TPEx)";
       }
     }
+    listed = mergeBenchmarkSnapshot(listed, taiexSnapshot);
+    otc = mergeBenchmarkSnapshot(otc, tpexSnapshot);
+    if (taiexSnapshot?.source === "TWSE MIS" && source.listed === "TWSE OpenAPI") {
+      source.listed = "TWSE OpenAPI + TWSE MIS";
+    }
     return {
       listed,
       otc,
@@ -1279,7 +1367,8 @@ export async function buildBenchmarks(options = {}) {
         tx: marketIndices.some((item) => item.code === "tx"),
       },
     };
-  });
+  };
+  return options.bypassCache ? factory() : cached(cacheKey, 5 * 60 * 1_000, factory);
 }
 
 export async function buildEtfProfiles() {
@@ -1592,6 +1681,10 @@ export const deepDataInternals = {
   marginSummary,
   etfDirectionFlags,
   latestIndexSnapshot,
+  selectMisIndex,
+  selectFinmindTx,
+  freshestSnapshot,
+  mergeBenchmarkSnapshot,
   selectTaifexTx,
   finmindCooldownMs,
   validSymbol: (symbol) => VALID_SYMBOL.test(String(symbol || "")),

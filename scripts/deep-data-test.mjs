@@ -112,6 +112,35 @@ const tpexSnapshot = deepDataInternals.latestIndexSnapshot([
 assert.equal(tpexSnapshot.dataDate, "2026-07-15");
 assert.equal(tpexSnapshot.changePercent, 2.04);
 
+const misTaiexSnapshot = deepDataInternals.selectMisIndex({ msgArray: [{
+  ex: "tse", d: "20260715", z: "45631.59", y: "44737.95",
+}] }, { exchange: "tse", code: "taiex", name: "加權指數" });
+assert.deepEqual(misTaiexSnapshot, {
+  code: "taiex", name: "加權指數", dataDate: "2026-07-15", value: 45631.59,
+  change: 893.64, changePercent: 2, source: "TWSE MIS",
+});
+assert.equal(
+  deepDataInternals.freshestSnapshot(misTaiexSnapshot, taiexSnapshot),
+  misTaiexSnapshot,
+  "the freshest valid market snapshot must win over a stale OpenAPI snapshot",
+);
+assert.deepEqual(
+  deepDataInternals.mergeBenchmarkSnapshot([{ date: "2026-07-14", close: 44737.95 }], misTaiexSnapshot),
+  [{ date: "2026-07-14", close: 44737.95 }, { date: "2026-07-15", close: 45631.59 }],
+);
+
+const finmindTxSnapshot = deepDataInternals.selectFinmindTx([
+  { date: "2026-07-15", futures_id: "TX", contract_date: "202607", trading_session: "position", close: 45830, spread: 1040, spread_per: 2.32, volume: 30555, settlement_price: 0, open_interest: 10992 },
+  { date: "2026-07-15", futures_id: "TX", contract_date: "202608", trading_session: "position", close: 46050, spread: 905, spread_per: 2, volume: 45252, settlement_price: 46066, open_interest: 101230 },
+  { date: "2026-07-15", futures_id: "TX", contract_date: "202607", trading_session: "after_market", close: 45015, spread: 225, spread_per: 0.5, volume: 35067, settlement_price: 0, open_interest: 0 },
+]);
+assert.deepEqual(finmindTxSnapshot, {
+  code: "tx", name: "台指期", dataDate: "2026-07-15", value: 46050,
+  change: 905, changePercent: 2, contractMonth: "202608", session: "regular",
+  volume: 45252, settlementPrice: 46066, openInterest: 101230,
+  source: "FinMind TaiwanFuturesDaily",
+});
+
 const txSnapshot = deepDataInternals.selectTaifexTx([
   { Date: "20260714", Contract: "TX", "ContractMonth(Week)": "202607W3", Last: "23010", Change: "10", "%": "0.04%", Volume: "999999", SettlementPrice: "23000", OpenInterest: "1" },
   { Date: "20260714", Contract: "TX", "ContractMonth(Week)": "202607", Last: "23000", Change: "100", "%": "0.44%", Volume: "1000", SettlementPrice: "22990", OpenInterest: "500" },

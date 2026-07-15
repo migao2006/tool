@@ -757,5 +757,5 @@ function openAccountModal(){
 }
 
 document.querySelector('#accountBtn').onclick=openAccountModal;
-if('serviceWorker'in navigator)navigator.serviceWorker.register('/sw.js?v=18.0.0',{updateViaCache:'none'}).catch(()=>{});
+if('serviceWorker'in navigator)navigator.serviceWorker.register('/sw.js?v=19.0.0',{updateViaCache:'none'}).catch(()=>{});
 initSession();render();loadStocks();

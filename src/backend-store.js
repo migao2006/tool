@@ -438,6 +438,67 @@ export async function readBackendAnalysis(symbol) {
   };
 }
 
+// When one exchange's public endpoint is temporarily unavailable, keep the
+// market visible with the most recent official snapshot already accumulated in
+// Postgres.  This is a read-only fallback: every row keeps its own trade date
+// and the live response remains `partial`, so stale TPEx data is never
+// presented as same-day live data.
+export async function readBackendMarketStocks(group) {
+  if (!['listed', 'otc', 'etf'].includes(group)) return { date: null, stocks: [] };
+  const { data: states } = await request(
+    'stock_sync_state?select=cycle_date&job_key=eq.universe&limit=1',
+  );
+  const date = Array.isArray(states) ? states[0]?.cycle_date : null;
+  if (!date) return { date: null, stocks: [] };
+  const params = new URLSearchParams({
+    select: 'symbol,trade_date,market,industry,instrument_type,open,high,low,close,change_pct,volume,trade_value,transactions,pe,pb,dividend_yield,revenue_growth,eps,roe,debt_ratio,foreign_buy,trust_buy,dealer_buy,institutional_buy,margin_balance,margin_change,short_balance,short_change,is_disposition,is_full_delivery,raw_data,source_dates',
+    trade_date: `eq.${date}`,
+    order: 'symbol.asc',
+    limit: '1000',
+  });
+  if (group === 'etf') params.set('instrument_type', 'eq.ETF');
+  else {
+    params.set('instrument_type', 'neq.ETF');
+    params.set('market', `eq.${group === 'otc' ? '上櫃' : '上市'}`);
+  }
+  const { data } = await request(`stock_snapshots?${params}`);
+  const stocks = (Array.isArray(data) ? data : []).map(row => ({
+    ...(row.raw_data || {}),
+    symbol: String(row.symbol || ''),
+    market: row.market || (group === 'otc' ? '上櫃' : '上市'),
+    industry: row.industry || row.raw_data?.industry || '未分類',
+    instrumentType: row.instrument_type === 'ETF' ? 'ETF' : '股票',
+    open: finite(row.open) ? Number(row.open) : null,
+    high: finite(row.high) ? Number(row.high) : null,
+    low: finite(row.low) ? Number(row.low) : null,
+    close: finite(row.close) ? Number(row.close) : null,
+    change: finite(row.change_pct) ? Number(row.change_pct) : null,
+    volume: finite(row.volume) ? Number(row.volume) : null,
+    value: finite(row.trade_value) ? Number(row.trade_value) : null,
+    transactions: finite(row.transactions) ? Number(row.transactions) : null,
+    pe: finite(row.pe) ? Number(row.pe) : null,
+    pb: finite(row.pb) ? Number(row.pb) : null,
+    yield: finite(row.dividend_yield) ? Number(row.dividend_yield) : null,
+    rev: finite(row.revenue_growth) ? Number(row.revenue_growth) : null,
+    eps: finite(row.eps) ? Number(row.eps) : null,
+    roe: finite(row.roe) ? Number(row.roe) : null,
+    debt: finite(row.debt_ratio) ? Number(row.debt_ratio) : null,
+    foreign: finite(row.foreign_buy) ? Number(row.foreign_buy) : null,
+    trust: finite(row.trust_buy) ? Number(row.trust_buy) : null,
+    dealer: finite(row.dealer_buy) ? Number(row.dealer_buy) : null,
+    inst: finite(row.institutional_buy) ? Number(row.institutional_buy) : null,
+    marginBalance: finite(row.margin_balance) ? Number(row.margin_balance) : null,
+    marginChange: finite(row.margin_change) ? Number(row.margin_change) : null,
+    shortBalance: finite(row.short_balance) ? Number(row.short_balance) : null,
+    shortChange: finite(row.short_change) ? Number(row.short_change) : null,
+    disp: row.is_disposition === true,
+    full: row.is_full_delivery === true,
+    priceDate: row.trade_date,
+    backendFallback: true,
+  })).filter(stock => stock.symbol && stock.close != null);
+  return { date, stocks };
+}
+
 export async function readDataHealth() {
   const [healthResult, missingResult] = await Promise.all([
     request("rpc/twss_public_data_health"),

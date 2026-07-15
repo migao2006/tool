@@ -10,6 +10,7 @@ import {
   readBackendRankings,
   readRankingBacktest,
   readBackendStatus,
+  readBackendMarketStocks,
 } from "./backend-store.js";
 
 const SUPABASE_EDGE = "https://lfkdkdyaatdlizryiyon.supabase.co/functions/v1/twss-market-data";
@@ -678,7 +679,7 @@ async function buildStocks() {
   if (twseOpenPrices.length < 20 || tpexPrices.length < 20) {
     edge = await fetchEdge("?type=stocks", 20_000).catch(() => null);
   }
-  const edgeStocks =
+  let edgeStocks =
     edge && Array.isArray(edge.stocks)
       ? edge.stocks.map((stock) => ({
           ...stock,
@@ -687,6 +688,10 @@ async function buildStocks() {
             stock.instrumentType || instrumentTypeOf(text(stock.symbol)),
         }))
       : [];
+  if (tpexPrices.length < 20 && !edgeStocks.some((stock) => stock.market === "上櫃")) {
+    const persisted = await readBackendMarketStocks("otc").catch(() => ({ stocks: [] }));
+    if (persisted.stocks.length) edgeStocks = [...edgeStocks, ...persisted.stocks];
+  }
 
   const openTwsePriceDate = payloadDate(twseOpenPricePayload, twseOpenPrices);
   const tpexPriceDate = payloadDate(tpexPricePayload, tpexPrices);

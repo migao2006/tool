@@ -604,8 +604,17 @@
     const active = v19.home || v19.rankings;
     const groupStatuses = active?.groupStatuses && typeof active.groupStatuses === 'object' ? Object.values(active.groupStatuses) : [];
     const partial = (active?.updateStatus && active.updateStatus !== 'complete') || groupStatuses.some(status => status !== 'final');
+    const groupNames = { deep_listed: '上市', deep_otc: '上櫃', deep_etf: 'ETF' };
+    const progress = cleanArray(v19.home?.jobs)
+      .filter(job => groupNames[job?.job])
+      .map(job => `${groupNames[job.job]} ${fmt(number(job.progress) ?? 0, 0)}%`)
+      .join('、');
     if (active) return {
-      label: degraded ? 'v19 API（部分降級）' : partial ? '資料更新中／部分資料，AI 分數可能再次更新' : 'v19 API',
+      label: degraded
+        ? 'v19 API（部分降級）'
+        : partial
+          ? `分析結果已可使用${progress ? `（${progress}；背景持續補齊）` : '（背景持續補齊）'}`
+          : '資料分析已完成',
       cls: degraded || partial ? 'warn' : 'ok'
     };
     if (snap) return { label: '深度快照回退', cls: 'warn' };
@@ -802,7 +811,7 @@
     const opposing = row.opposingSignals.length ? row.opposingSignals : forecast.negative;
     const risks = [...new Set([...row.risk.flags, ...(forecast.riskPenalty > 0 ? forecast.negative : [])])];
     const partial = row.updateStatus && !['complete', 'final'].includes(row.updateStatus);
-    const dataState = detailState.loading ? '載入 v19 詳細資料中' : row.degraded ? 'v19 部分降級' : partial ? '資料更新中（部分資料，AI 分數可能再次更新）' : row.source;
+    const dataState = detailState.loading ? '載入 v19 詳細資料中' : row.degraded ? 'v19 部分降級' : partial ? '目前分析已可使用（背景持續補齊）' : row.source;
     return `<div class="modal"><div class="sheet v19-detail-sheet"><button class="sheet-close" type="button">×</button>
       <div class="v19-detail-hero"><div><span class="tag info">${esc(dataState)}</span><h2>${esc(row.name)} ${esc(row.symbol)}</h2><div class="muted">${esc(row.market)} · ${esc(row.industry)}</div></div><button class="btn secondary small-btn" type="button" data-watch="${esc(row.symbol)}">${isWatched(row.symbol) ? '✓ 已加入自選' : '＋ 加入自選'}</button></div>
       <section aria-labelledby="v19-quote"><h3 id="v19-quote" class="section-title">最新報價與資料日期</h3><div class="card accent"><div class="head"><div><small class="muted">最新收盤</small><div class="price">${fmt(stock.close)} 元</div><b class="${cls(stock.change)}">${pct(stock.change)}</b></div><div class="v19-score"><small>AI 分數</small><strong>${scoreText(row.score)}</strong><span>信心 ${confidenceText(row.confidence)}</span></div></div><div class="grid four v19-quote-grid">${metric('開盤', fmt(stock.open))}${metric('最高', fmt(stock.high))}${metric('最低', fmt(stock.low))}${metric('成交量', stock.volume == null ? '—' : `${fmt(stock.volume, 0)} 張`)}</div><div class="v19-data-line"><span>行情日 ${esc(row.tradeDate || '待確認')}</span><span>分析日 ${esc(row.analysisDataDate || '待確認')}</span><span>${esc(row.source)}</span><span>${esc(row.completeness)}</span></div></div></section>

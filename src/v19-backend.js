@@ -205,6 +205,7 @@ function normalizeSnapshotRow(row = {}) {
     ? Number(row.previous_rank ?? row.previousRank)
     : null;
   const cycleStatus = row.cycle_status || row.cycleStatus || (row.official ? "final" : "provisional");
+  const official = Boolean(row.official ?? result.official);
   const categories = Array.isArray(result.categories) ? result.categories : [];
   const risk = result.risk || row.risk || {};
   const scoreDimensions = row.score_dimensions || row.scoreDimensions ||
@@ -224,7 +225,7 @@ function normalizeSnapshotRow(row = {}) {
     industry,
     instrumentType,
     cycleStatus,
-    updateStatus: cycleStatus === "final" ? "complete" : "partial",
+    updateStatus: cycleStatus === "final" ? "complete" : official ? "available" : "partial",
     dataDate: analysisDataDate,
     analysisDataDate,
     tradeDate,
@@ -240,7 +241,7 @@ function normalizeSnapshotRow(row = {}) {
     scoreDelta: numeric(row.score_delta ?? row.scoreDelta),
     score,
     confidence,
-    official: Boolean(row.official ?? result.official),
+    official,
     tier: row.tier || result.tier || null,
     riskScore: numeric(row.risk_score ?? scoreDimensions?.risk?.severity),
     scoreDimensions,
@@ -263,7 +264,7 @@ function normalizeSnapshotRow(row = {}) {
       group,
       score,
       confidence,
-      official: Boolean(row.official ?? result.official),
+      official,
       tier: row.tier || result.tier || null,
       risk,
       categories,
@@ -276,6 +277,13 @@ function normalizeSnapshotRow(row = {}) {
       row.ai_score_basis,
     ),
   };
+}
+
+function publicUpdateStatus(groupStatuses, items = []) {
+  const statuses = Object.values(groupStatuses || {});
+  if (statuses.length && statuses.every((status) => status === "final")) return "complete";
+  if (items.some((item) => item?.official === true)) return "available";
+  return "partial";
 }
 
 function normalizeLegacyItem(row, group) {
@@ -535,10 +543,7 @@ export async function readV19Rankings(url) {
     groupStatuses: page.groupStatuses,
     generatedAt: page.generatedAt,
     pageUpdatedAt: page.pageUpdatedAt,
-    updateStatus: Object.values(page.groupStatuses).length &&
-      Object.values(page.groupStatuses).every((status) => status === "final")
-      ? "complete"
-      : "partial",
+    updateStatus: publicUpdateStatus(page.groupStatuses, page.items),
     items: page.items,
     nextCursor: page.hasMore
       ? encodeCursor(page.lastRow, query.fingerprint, page.groupDates)
@@ -673,10 +678,7 @@ export async function readV19Home() {
     groupStatuses,
     generatedAt: generated.at(-1) || null,
     pageUpdatedAt: pageUpdated.at(-1) || new Date().toISOString(),
-    updateStatus: Object.values(groupStatuses).length &&
-      Object.values(groupStatuses).every((status) => status === "final")
-      ? "complete"
-      : "partial",
+    updateStatus: publicUpdateStatus(groupStatuses, ranked),
     groups,
     todayPicks: ranked.slice(0, 3),
     fastestRisers: risers.items.filter((item) => finite(item.scoreDelta) && item.scoreDelta > 0),
@@ -846,6 +848,7 @@ export const v19BackendInternals = {
   sortItems,
   filteredItems,
   pageRpcPath,
+  publicUpdateStatus,
   clearCache() {
     memoryCache.clear();
   },

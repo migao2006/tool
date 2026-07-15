@@ -360,18 +360,18 @@ assert.match(contentSecurityPolicy, /https:\/\/lfkdkdyaatdlizryiyon\.supabase\.c
   "the shared policy must continue allowing the standalone MARKET administrator console");
 assert.doesNotMatch(pageSource, /id="adminBtn"/,
   "the CORE-authenticated main application must not embed a MARKET administrator entry");
-assert.match(pageSource, /app\.js\?v=(?:18|19)\.0\.0/);
+assert.match(pageSource, /app\.js\?v=19\.0\.1/);
 const publicPageSource = await readFile(new URL("../public/index.html", import.meta.url), "utf8");
 const publicAppSource = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
 const publicSmartSource = await readFile(new URL("../public/smart.js", import.meta.url), "utf8");
 const publicStylesSource = await readFile(new URL("../public/styles.css", import.meta.url), "utf8");
-assert.match(publicPageSource, /app\.js\?v=19\.0\.0/);
+assert.match(publicPageSource, /app\.js\?v=19\.0\.1/);
 assert.match(publicPageSource, /id="themeToggle"/);
 const adminPageSource = await readFile(new URL("../public/admin.html", import.meta.url), "utf8");
 const adminScriptSource = await readFile(new URL("../public/admin.js", import.meta.url), "utf8");
-assert.match(adminPageSource, /icon\.svg\?v=19\.0\.0/);
-assert.match(adminPageSource, /styles\.css\?v=19\.0\.0/);
-assert.match(adminPageSource, /admin\.js\?v=19\.0\.0/);
+assert.match(adminPageSource, /icon\.svg\?v=19\.0\.1/);
+assert.match(adminPageSource, /styles\.css\?v=19\.0\.1/);
+assert.match(adminPageSource, /admin\.js\?v=19\.0\.1/);
 assert.match(adminScriptSource, /https:\/\/lfkdkdyaatdlizryiyon\.supabase\.co/,
   "the standalone administrator console must remain on MARKET");
 assert.match(adminScriptSource, /twss-market-admin-session-v18/,
@@ -396,7 +396,7 @@ assert.match(appSource, /交易日不足 60 日/, "partial histories must not be
 assert.match(appSource, /120000,0/, "opening one detail must not automatically consume a second repair attempt");
 assert.match(appSource, /aria-label','關閉視窗/);
 assert.match(appSource, /event\.key==='Escape'/);
-assert.match(appSource, /sw\.js\?v=18\.0\.0/);
+assert.match(appSource, /sw\.js\?v=19\.0\.1/);
 assert.match(appSource, /timeZone:TAIPEI_TIME_ZONE/,
   "local date defaults must use Asia/Taipei");
 assert.match(appSource, /history\.scrollRestoration='manual'/,
@@ -518,7 +518,7 @@ assert.match(publicSmartSource, /degraded: hasDegradation\(/,
 assert.match(publicSmartSource, /watchRows: \[\]/);
 assert.match(publicSmartSource, /watchFingerprint: null/);
 assert.match(publicSmartSource, /fingerprint === v19\.watchFingerprint/);
-assert.match(publicSmartSource, /loadWatchRows\(\);\n\s*\};/,
+assert.match(publicSmartSource, /loadWatchRows\(\);\r?\n\s*\};/,
   "render binding must refresh watch details only when the watchlist fingerprint changes");
 assert.match(publicSmartSource, /slice\(0, 20\)/);
 assert.match(publicSmartSource, /index \+= 4/);
@@ -526,9 +526,15 @@ assert.match(publicSmartSource, /Promise\.allSettled\(batch\)/);
 assert.match(publicSmartSource, /v19\.watchRows\.forEach/);
 assert.match(publicSmartSource, /function homeGroupRows\(\)/);
 assert.match(publicSmartSource, /v19\.home\?\.groups\?\.\[key\]/);
+assert.match(publicSmartSource, /分析結果已可使用/,
+  "usable provisional rankings must not look indefinitely blocked");
+assert.match(publicSmartSource, /背景持續補齊/,
+  "partial analysis must clearly state that background work continues");
+assert.match(publicSmartSource, /deep_listed: '上市'/,
+  "the public status must include per-market progress");
 assert.doesNotMatch(publicSmartSource, /SUPABASE_(?:SERVICE_ROLE|SECRET)_KEY|sb_secret_/);
 assert.doesNotMatch(publicSmartSource, /data-tab="admin"|id="adminBtn"/);
-assert.match(publicAppSource, /sw\.js\?v=19\.0\.0/);
+assert.match(publicAppSource, /sw\.js\?v=19\.0\.1/);
 
 const stylesResponse = await worker.fetch(new Request("https://example.test/styles.css?v=18.0.0"), {}, {});
 const stylesSource = await stylesResponse.text();

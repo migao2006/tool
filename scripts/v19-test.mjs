@@ -458,6 +458,33 @@ await check("AI score remains the existing fixed v16.3 composite", async () => {
   }
 });
 
+await check("official provisional snapshots are usable without being mislabeled complete", async () => {
+  const item = backend.v19BackendInternals.normalizeSnapshotRow({
+    symbol: "2330",
+    group_name: "listed",
+    score_date: "2026-07-15",
+    cycle_status: "provisional",
+    official: true,
+    score: 90,
+    confidence: 80,
+    stock_summary: { symbol: "2330", name: "台積電" },
+    result_summary: { symbol: "2330", name: "台積電", official: true },
+  });
+  assert.equal(item.updateStatus, "available");
+  assert.equal(backend.v19BackendInternals.publicUpdateStatus({ listed: "provisional" }, [item]), "available");
+  assert.equal(backend.v19BackendInternals.publicUpdateStatus({ listed: "final" }, [item]), "complete");
+});
+
+await check("ranking snapshot refresh follows deep workers around the clock", async () => {
+  const freshness = await read("supabase/migrations/20260716013932_fix_v19_ranking_freshness.sql");
+  assert.match(freshness, /'twss-v19-ranking-snapshots'[\s\S]*?'\*\/5 \* \* \* \*'/i);
+  assert.match(freshness, /twss_v19_refresh_available_rankings\(\)/i);
+  assert.match(freshness, /zz_twss_v19_touch_score_history_change[\s\S]*?before update on public\.opportunity_score_history/i,
+    "same-day score changes must invalidate the snapshot unchanged guard");
+  assert.match(freshness, /if new is distinct from old then[\s\S]*?new\.created_at := pg_catalog\.clock_timestamp\(\)/i,
+    "no-op upserts must not cause snapshot rewrites");
+});
+
 await check("ranking API preserves distinct trade, analysis, fetch, generation and page dates", async () => {
   clearRuntime();
   const { response, body } = await apiJson(await rankingsRoute.fetch(new Request(

@@ -58,7 +58,7 @@ export default {
     if(path==="/api/health")return Response.json(healthPayload(),{headers:{"cache-control":"no-store, max-age=0"}});
     if(path==="/")return new Response(PAGE,{headers:{
       ...securityHeaders("text/html; charset=utf-8","no-cache, no-store, must-revalidate"),
-      "content-security-policy":"default-src 'self'; connect-src 'self' https://lfkdkdyaatdlizryiyon.supabase.co; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+      "content-security-policy":"default-src 'self'; connect-src 'self' https://gxwrczuwshndnjactrij.supabase.co https://lfkdkdyaatdlizryiyon.supabase.co; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
     }});
     if(path==="/app.js")return new Response(APP,{headers:securityHeaders("text/javascript; charset=utf-8")});
     if(path==="/patch.js")return new Response(PATCH,{headers:securityHeaders("text/javascript; charset=utf-8")});

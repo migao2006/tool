@@ -1,10 +1,7 @@
 (() => {
   'use strict';
   const PATCH_VERSION = 'v17.0';
-  const PREDICTION_KEY = 'twss-predictions-v15';
-  const JOURNAL_KEY = 'twss-journal-v15';
-  const ALERTS_KEY = 'twss-rule-alerts-v17';
-  const COMPARE_KEY = 'twss-compare-v17.2';
+  const userData = globalThis.twssUserData;
   // Audited legacy paid-analysis builds: responses only lived in an in-memory
   // Map and the backend, so no legacy localStorage key is known. Keep the
   // cleanup allowlist explicit and empty rather than deleting guessed user data.
@@ -16,20 +13,19 @@
   };
   const localRead = (key, fallback = []) => { try { return JSON.parse(localStorage.getItem(key) || JSON.stringify(fallback)); } catch { return fallback; } };
   const localWrite = (key, value) => localStorage.setItem(key, JSON.stringify(value));
-  const getPredictionLogs = () => localRead(PREDICTION_KEY, []);
-  const setPredictionLogs = value => localWrite(PREDICTION_KEY, value);
-  const getJournal = () => localRead(JOURNAL_KEY, []);
-  const setJournal = value => localWrite(JOURNAL_KEY, value);
-  const getAlertStore = () => localRead(ALERTS_KEY, { events: [], lastSeen: {} });
-  const setAlertStore = value => localWrite(ALERTS_KEY, value);
+  const getPredictionLogs = () => userData.getPredictions();
+  const setPredictionLogs = value => userData.setPredictions(value);
+  const getJournal = () => userData.getJournal();
+  const getAlertStore = () => localRead(userData.storageKey('rule-alerts'), { events: [], lastSeen: {} });
+  const setAlertStore = value => localWrite(userData.storageKey('rule-alerts'), value);
   const getCompareStore = () => {
-    const stored = localRead(COMPARE_KEY, { group: null, symbols: [] });
+    const stored = localRead(userData.storageKey('compare'), { group: null, symbols: [] });
     return {
       group: ['listed', 'otc', 'etf'].includes(stored?.group) ? stored.group : null,
       symbols: [...new Set(Array.isArray(stored?.symbols) ? stored.symbols.map(String) : [])].slice(0, 4)
     };
   };
-  const setCompareStore = value => localWrite(COMPARE_KEY, value);
+  const setCompareStore = value => localWrite(userData.storageKey('compare'), value);
   const createId = () => crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const escapeText = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
   const average = values => { const valid = values.filter(value => value != null && Number.isFinite(value)); return valid.length ? valid.reduce((sum, value) => sum + value, 0) / valid.length : null; };
@@ -326,16 +322,18 @@
     const date = S.date || today();
     const exists = logs.some(log => log.symbol === stock.symbol && log.prediction_date === date && log.model_version === PATCH_VERSION);
     if (exists) return;
-    logs.unshift({
+    const record = {
       local_id: createId(), symbol: stock.symbol, stock_name: stock.name, prediction_date: date,
       horizon_days: 5, reference_price: stock.close, predicted_direction: directionFromForecast(forecast),
       up_probability: forecast.up, neutral_probability: forecast.neutral, down_probability: forecast.down,
       confidence: forecast.confidence, expected_low: forecast.expectedLow, expected_high: forecast.expectedHigh,
       model_version: PATCH_VERSION, factors: { composite: forecast.composite, technical: forecast.technical, fundamental: forecast.fundamental, chip: forecast.chip, valuation: forecast.valuation },
       evaluated_at: null, actual_price: null, actual_return_pct: null, actual_direction: null, is_correct: null,
-      created_at: new Date().toISOString()
-    });
+      created_at: new Date().toISOString(), _sync_state: S.session ? 'pending' : 'local'
+    };
+    logs.unshift(record);
     setPredictionLogs(logs.slice(0, 500));
+    userData.upsertPrediction(record).catch(() => {});
   }
 
   function evaluatePredictions(symbol, history) {
@@ -348,7 +346,8 @@
       const actual = history[index + 5];
       const returnPct = (actual.close / log.reference_price - 1) * 100;
       const direction = directionFromReturn(returnPct);
-      Object.assign(log, { evaluated_at: new Date().toISOString(), actual_price: actual.close, actual_return_pct: +returnPct.toFixed(2), actual_direction: direction, is_correct: direction === log.predicted_direction });
+      Object.assign(log, { evaluated_at: new Date().toISOString(), actual_price: actual.close, actual_return_pct: +returnPct.toFixed(2), actual_direction: direction, is_correct: direction === log.predicted_direction, _sync_state: S.session ? 'pending' : log._sync_state });
+      userData.upsertPrediction(log).catch(() => {});
       changed = true;
     }
     if (changed) setPredictionLogs(logs);
@@ -526,10 +525,7 @@
         return_pct: price && exitPrice ? +((exitPrice / price - 1) * 100).toFixed(2) : null, updated_at: new Date().toISOString()
       };
       if (!saved.symbol) { alert('請輸入股票代號'); return; }
-      const list = getJournal();
-      const index = list.findIndex(row => row.local_id === saved.local_id);
-      if (index >= 0) list[index] = saved; else list.unshift(saved);
-      setJournal(list); closeModal(); patchState.mineTab = 'journal'; S.tab = 'mine'; render();
+      userData.saveJournal(saved).catch(() => {}); closeModal(); patchState.mineTab = 'journal'; S.tab = 'mine'; render();
     };
   }
 
@@ -593,7 +589,7 @@
       const url = URL.createObjectURL(blob); const anchor = document.createElement('a'); anchor.href = url; anchor.download = `台股智選-投資紀錄-${today()}.json`; anchor.click(); URL.revokeObjectURL(url);
     });
     qa('[data-patch-edit]').forEach(button => button.onclick = () => openJournalModal(getJournal().find(item => item.local_id === button.dataset.patchEdit)));
-    qa('[data-patch-delete]').forEach(button => button.onclick = () => { if (!confirm('確定刪除這筆紀錄？')) return; setJournal(getJournal().filter(item => item.local_id !== button.dataset.patchDelete)); render(); });
+    qa('[data-patch-delete]').forEach(button => button.onclick = () => { if (!confirm('確定刪除這筆紀錄？')) return; userData.deleteJournal(button.dataset.patchDelete).catch(() => {}); render(); });
     qa('[data-patch-journal-stock]').forEach(button => button.onclick = () => openJournalModal(null, S.stocks.find(stock => stock.symbol === button.dataset.patchJournalStock)));
     qa('[data-patch-verify-stock]').forEach(button => button.onclick = () => { closeModal(); patchState.verifyQuery = button.dataset.patchVerifyStock; S.tab = 'verify'; render(); });
   }
@@ -649,7 +645,7 @@
   fetch('/api/market-data?type=ranking-backtest', { cache: 'no-store' })
     .then(response => response.ok ? response.json() : null)
     .catch(() => null)
-    .then(value => value?.byGroup ? value : fetch('/data/backtest.json?v=17.3.3', { cache: 'no-store' })
+    .then(value => value?.byGroup ? value : fetch('/data/backtest.json?v=18.0.0', { cache: 'no-store' })
       .then(response => response.ok ? response.json() : null).catch(() => null))
     .then(value => { if (value) patchState.rankingBacktest = value; if (S.tab === 'verify') render(); })
     .catch(() => {});

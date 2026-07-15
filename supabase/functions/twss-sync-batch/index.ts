@@ -12,13 +12,17 @@ import {
 import { handleMarketData } from "../../../src/market-data.js";
 // @ts-ignore JavaScript modules are shared with the Vercel runtime.
 import { buildPeerContexts, scoreOpportunity } from "../../../src/opportunity-engine.js";
+// @ts-ignore JavaScript modules are shared with the Vercel runtime.
+import { selectFinmindProfile } from "../../../src/finmind-profile.js";
 
 const VERSION = "16.3";
 const PROJECT_URL = Deno.env.get("SUPABASE_URL") || "";
-const FINMIND_AUTHENTICATED = Boolean(Deno.env.get("FINMIND_TOKEN"));
-const FINMIND_HOURLY_LIMIT = FINMIND_AUTHENTICATED ? 600 : 300;
 const GROUPS = ["listed", "otc", "etf"] as const;
 type Group = typeof GROUPS[number];
+type FinmindAccess = {
+  token: string;
+  profile: ReturnType<typeof selectFinmindProfile>;
+};
 
 function adminKey() {
   try {
@@ -34,6 +38,9 @@ const json = (payload: unknown, status = 200) => new Response(JSON.stringify(pay
   headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
 });
 const finite = (value: unknown) => value != null && Number.isFinite(Number(value));
+const finmindProviderPaused = (error: unknown) =>
+  (error as any)?.code === "FINMIND_PROVIDER_COOLDOWN" ||
+  [401, 402, 403, 429].includes(Number((error as any)?.status));
 const now = () => new Date().toISOString();
 const taipeiDate = () => new Intl.DateTimeFormat("en-CA", {
   timeZone: "Asia/Taipei",
@@ -97,6 +104,24 @@ async function rest(path: string, options: {
   if (options.method === "HEAD" || response.status === 204) return { data: null, response };
   const text = await response.text();
   return { data: text ? JSON.parse(text) : null, response };
+}
+
+async function resolveFinmindAccess(): Promise<FinmindAccess> {
+  let token = "";
+  try {
+    token = String(Deno.env.get("FINMIND_TOKEN") || "").trim();
+  } catch {}
+  if (!token) {
+    try {
+      const { data } = await rest("rpc/twss_finmind_token", { method: "POST", body: {} });
+      token = typeof data === "string" ? data.trim() : "";
+    } catch {
+      // Keep the public 300/hour profile available while the optional Vault
+      // fallback is being provisioned.  Never log the RPC result or token.
+      token = "";
+    }
+  }
+  return { token, profile: selectFinmindProfile(token) };
 }
 
 async function verifyRequest(req: Request) {
@@ -211,6 +236,7 @@ async function withLease(jobKey: string, task: () => Promise<unknown>) {
 }
 
 async function reserveFinmindBatch(
+  access: FinmindAccess,
   itemCosts: number[],
   overhead: number,
   claimCap: number,
@@ -222,9 +248,9 @@ async function reserveFinmindBatch(
       p_source: "finmind",
       p_item_costs: itemCosts,
       p_overhead: Math.max(0, Math.round(overhead)),
-      p_hourly_limit: FINMIND_HOURLY_LIMIT,
+      p_hourly_limit: access.profile.hourlyLimit,
       p_claim_cap: Math.max(0, Math.round(claimCap)),
-      p_metadata: { version: VERSION, ...metadata },
+      p_metadata: { version: VERSION, finmindProfile: access.profile.id, ...metadata },
     },
   });
   return data && typeof data === "object" ? data : {
@@ -296,7 +322,7 @@ function historyPayload(symbol: string, history: Record<string, any>[], source: 
   };
 }
 
-async function serveOnDemandHistory(url: URL) {
+async function serveOnDemandHistory(url: URL, access: FinmindAccess) {
   const symbol = String(url.searchParams.get("symbol") || "").trim().toUpperCase();
   if (!/^\d{4,6}[A-Z]?$/i.test(symbol)) return json({ error: "股票代號格式不正確" }, 400);
   const requestedMonths = Math.max(6, Math.min(24, Number(url.searchParams.get("months")) || 18));
@@ -336,7 +362,7 @@ async function serveOnDemandHistory(url: URL) {
     if (existing.length >= 120 || completedHistoryAttempt(state)) {
       return json(historyPayload(symbol, existing, "Supabase 後端歷史資料庫"));
     }
-    const budget = await reserveFinmindBatch([1], 0, 1, {
+    const budget = await reserveFinmindBatch(access, [1], 0, 1, {
       job: "public_history",
       symbol,
       requestedMonths,
@@ -358,6 +384,7 @@ async function serveOnDemandHistory(url: URL) {
       // The shared ledger reserved exactly one request.  A later user action can
       // retry a transient failure without silently exceeding the hourly ceiling.
       finmindRetries: 0,
+      finmindToken: access.token,
     });
     const history = await mergeLatestOfficialSnapshot(symbol, payload.history || []);
     const updatedAt = now();
@@ -502,13 +529,13 @@ function analysisRepairReasons(deep: Record<string, any>, group: Group) {
   return [...new Set(reasons)];
 }
 
-async function syncUniverseUnlocked() {
+async function syncUniverseUnlocked(access: FinmindAccess) {
   await patchState("universe", { status: "running", started_at: now(), last_error: null });
   try {
     // Reserve the two historical-index fallbacks before any FinMind call.  If
     // the rolling-hour budget is full, official TWSE/TPEx index rows still run
     // and the next deep batch can retry the missing historical benchmark.
-    const benchmarkBudget = await reserveFinmindBatch([2], 0, 2, { job: "universe" });
+    const benchmarkBudget = await reserveFinmindBatch(access, [2], 0, 2, { job: "universe" });
     const allowBenchmarkFallback = Number(benchmarkBudget.items) === 1;
     const [stocksPayload, revenuePayload, financialPayload, holdingsPayload, benchmarksPayload, accumulatedRows] = await Promise.all([
       localPayload("stocks"),
@@ -529,6 +556,7 @@ async function syncUniverseUnlocked() {
         officialRetries: 0,
         officialTimeout: 20_000,
         allowFinmind: allowBenchmarkFallback,
+        finmindToken: access.token,
       }).catch((error: unknown) => ({
         listed: [],
         otc: [],
@@ -765,8 +793,8 @@ async function syncUniverseUnlocked() {
   }
 }
 
-async function syncUniverse() {
-  return withLease("universe", syncUniverseUnlocked);
+async function syncUniverse(access: FinmindAccess) {
+  return withLease("universe", () => syncUniverseUnlocked(access));
 }
 
 function filtersFor(group: Group, date: string) {
@@ -1142,7 +1170,7 @@ async function persistFailure(stock: Record<string, any>, group: Group, error: u
   }], "symbol");
 }
 
-async function syncDeepUnlocked(group: Group, requestedLimit: number) {
+async function syncDeepUnlocked(group: Group, requestedLimit: number, access: FinmindAccess) {
   const jobKey = `deep_${group}`;
   let universe = await getState("universe");
   if (universe?.status === "running" ||
@@ -1150,7 +1178,7 @@ async function syncDeepUnlocked(group: Group, requestedLimit: number) {
     return { skipped: true, reason: "universe-refresh-running", group };
   }
   if (!universe?.cycle_date) {
-    await syncUniverse();
+    await syncUniverse(access);
     universe = await getState("universe");
   }
   const persistedBenchmarks = universe?.details?.benchmarks;
@@ -1160,8 +1188,8 @@ async function syncDeepUnlocked(group: Group, requestedLimit: number) {
   // cost only four FinMind calls instead of eight, so the same strict request
   // budget can validate twice as many companies after the first cycle.
   const groupLimit = group === "etf"
-    ? (FINMIND_AUTHENTICATED ? 23 : 19)
-    : (FINMIND_AUTHENTICATED ? 22 : 10);
+    ? access.profile.etfBatchLimit
+    : access.profile.companyBatchLimit;
   const limit = Math.max(1, Math.min(groupLimit, Number(requestedLimit) || groupLimit));
   const date = universe?.details?.groupDates?.[group] || universe?.cycle_date;
   if (!date) throw new Error("Universe date is unavailable");
@@ -1239,22 +1267,23 @@ async function syncDeepUnlocked(group: Group, requestedLimit: number) {
     return 4 + (reusableRevenue ? 0 : 1) + (reusableFinancial ? 0 : 3);
   });
   const claimCap = group === "etf"
-    ? (FINMIND_AUTHENTICATED ? 23 : 19)
+    ? access.profile.etfClaimCap
     // Without a token FinMind allows 300 requests per rolling hour.  A
     // 50-request company slice plus the 19-request ETF slice lets the existing
     // staggered schedule converge on 300 instead of idling around 260; the
     // atomic ledger still trims the final batch so the ceiling is never
     // crossed.  Authenticated projects retain the 88-request fair slice that
     // converges on the documented 600-request ceiling.
-    : (FINMIND_AUTHENTICATED ? 88 : 50);
+    : access.profile.companyClaimCap;
   const finmindBudget = await reserveFinmindBatch(
+    access,
     itemCosts,
     benchmarksReady ? 0 : 2,
     claimCap,
     { job: jobKey, group, requestedItems: rows.length },
   );
   rows = rows.slice(0, Math.max(0, Number(finmindBudget.items) || 0));
-  const revenueBackfillSelected = group === "etf" ? [] : rows
+  let revenueBackfillSelected = group === "etf" ? [] : rows
     .filter((row: Record<string, any>) => !finite(row.raw_data?.revenue))
     .map((row: Record<string, any>) => String(row.symbol));
   if (!rows.length) {
@@ -1279,7 +1308,9 @@ async function syncDeepUnlocked(group: Group, requestedLimit: number) {
   const successes: string[] = [];
   const failures: { symbol: string; error: string }[] = [];
   const persisted = new Set<string>();
+  let attemptedCount = 0;
   for (const row of rows) {
+    attemptedCount += 1;
     const stock = { ...(row.raw_data || {}), symbol: String(row.symbol), trade_date: row.trade_date };
     try {
       const deep = await buildDeepData(
@@ -1294,6 +1325,7 @@ async function syncDeepUnlocked(group: Group, requestedLimit: number) {
           currentQuote: stock,
           bypassCache: true,
           finmindRetries: 0,
+          finmindToken: access.token,
           benchmarks: benchmarksReady ? persistedBenchmarks : undefined,
           holdings: row.peer_context?.holdings,
         },
@@ -1318,9 +1350,17 @@ async function syncDeepUnlocked(group: Group, requestedLimit: number) {
           error: `無法保存失敗狀態：${persistError instanceof Error ? persistError.message : String(persistError)}`,
         });
       }
+      // Authentication and provider quota failures apply to the entire batch.
+      // Stop after the first affected symbol so queued rows do not emit a burst
+      // of identical 4xx requests against FinMind.
+      if (finmindProviderPaused(error)) break;
     }
   }
-  const newlyPersisted = rows.filter((row: Record<string, any>) =>
+  const attemptedRows = rows.slice(0, attemptedCount);
+  revenueBackfillSelected = group === "etf" ? [] : attemptedRows
+    .filter((row: Record<string, any>) => !finite(row.raw_data?.revenue))
+    .map((row: Record<string, any>) => String(row.symbol));
+  const newlyPersisted = attemptedRows.filter((row: Record<string, any>) =>
     persisted.has(String(row.symbol)) && !selection.readySymbols?.has(String(row.symbol))).length;
   const processed = Math.min(total, currentCount + newlyPersisted);
   const completionKey = `${date}:${ANALYSIS_VERSION}`;
@@ -1333,7 +1373,7 @@ async function syncDeepUnlocked(group: Group, requestedLimit: number) {
     cursor_offset: processed,
     processed_count: processed,
     cycle_number: cycleNumber + (completedNow ? 1 : 0),
-    last_symbol: rows.at(-1)?.symbol || null,
+    last_symbol: attemptedRows.at(-1)?.symbol || null,
     last_error: failures.length ? failures.map((item) => `${item.symbol}: ${item.error}`).join(" | ").slice(0, 2000) : null,
     last_success_at: successes.length ? now() : state?.last_success_at || null,
     next_run_at: new Date(Date.now() + 20 * 60 * 1_000).toISOString(),
@@ -1343,9 +1383,10 @@ async function syncDeepUnlocked(group: Group, requestedLimit: number) {
       ...(completedNow ? { rankingFinalization } : {}),
       successes,
       failures,
-      batchSize: rows.length,
+      batchSize: attemptedRows.length,
       batchLimit: limit,
-      finmindQuota: FINMIND_HOURLY_LIMIT,
+      finmindQuota: access.profile.hourlyLimit,
+      finmindProfile: access.profile.id,
       finmindBudget,
       verified: processed,
       remaining: Math.max(0, total - processed),
@@ -1360,7 +1401,7 @@ async function syncDeepUnlocked(group: Group, requestedLimit: number) {
     group,
     date,
     total,
-    processed: rows.length,
+    processed: attemptedRows.length,
     verified: processed,
     remaining: Math.max(0, total - processed),
     refreshCycle: cycleComplete,
@@ -1372,15 +1413,16 @@ async function syncDeepUnlocked(group: Group, requestedLimit: number) {
   };
 }
 
-async function syncDeep(group: Group, requestedLimit: number) {
-  return withLease(`deep_${group}`, () => syncDeepUnlocked(group, requestedLimit));
+async function syncDeep(group: Group, requestedLimit: number, access: FinmindAccess) {
+  return withLease(`deep_${group}`, () => syncDeepUnlocked(group, requestedLimit, access));
 }
 
 Deno.serve(async (req: Request) => {
   const url = new URL(req.url);
   if (req.method === "GET" && url.searchParams.get("mode") === "history") {
     try {
-      return await serveOnDemandHistory(url);
+      const finmindAccess = await resolveFinmindAccess();
+      return await serveOnDemandHistory(url, finmindAccess);
     } catch (error) {
       console.error("[public-history] failed", {
         symbol: url.searchParams.get("symbol") || null,
@@ -1400,16 +1442,19 @@ Deno.serve(async (req: Request) => {
   try {
     if (!await verifyRequest(req)) return json({ error: "Unauthorized" }, 401);
     const body = await req.json().catch(() => ({}));
+    // Resolve once per invocation.  The token is passed only in memory to the
+    // provider client and is never included in logs, state, or responses.
+    const finmindAccess = await resolveFinmindAccess();
     const mode = body.mode === "universe" ? "universe" : "deep";
     if (mode === "universe") {
       adminLogContext = { mode, group: null };
-      const result = await syncUniverse();
+      const result = await syncUniverse(finmindAccess);
       await logAdminHealth(mode, result);
       return json({ ok: true, version: VERSION, mode, result });
     }
     const group = GROUPS.includes(body.group) ? body.group as Group : "otc";
     adminLogContext = { mode, group };
-    const result = await syncDeep(group, body.limit);
+    const result = await syncDeep(group, body.limit, finmindAccess);
     await logAdminHealth(mode, result, group);
     return json({ ok: true, version: VERSION, mode, result });
   } catch (error) {

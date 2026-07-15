@@ -3,7 +3,7 @@
 
   const SUPABASE_URL = 'https://lfkdkdyaatdlizryiyon.supabase.co';
   const SUPABASE_KEY = 'sb_publishable_r3h9eQIYdIqScvmc77avAg_OLgBT6lh';
-  const SESSION_KEY = 'twss-supabase-session-v15';
+  const SESSION_KEY = 'twss-market-admin-session-v18';
   const ADMIN_EMAIL_DOMAIN = 'admin.twss.local';
   const app = document.querySelector('#adminApp');
   const statusNode = document.querySelector('#adminStatus');
@@ -306,7 +306,7 @@
     const repairs = rows(payload.repairQueue?.items).filter(matchesFilters);
     const jobs = rows(payload.jobs);
     return [
-      '台股智選 v17.3 管理後台修復報告',
+      '台股智選 v18.0.0 管理後台修復報告',
       `產生時間：${timestamp(payload.generatedAt)}`,
       `資料日期：${summary.latestDataDate || payload.health?.dataDate || '—'}`,
       '',

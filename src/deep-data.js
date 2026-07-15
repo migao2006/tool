@@ -18,6 +18,8 @@ const policies = [
   { match: "www.tpex.org.tw", key: "tpex", gap: 1_250, concurrency: 2 },
   { match: "opendata.tdcc.com.tw", key: "tdcc", gap: 2_000, concurrency: 1 },
 ];
+const providerCircuits = new Map();
+const FINMIND_CIRCUIT_CODE = "FINMIND_PROVIDER_COOLDOWN";
 
 const finite = (value) => value != null && Number.isFinite(Number(value));
 const number = (value) => {
@@ -36,6 +38,76 @@ const sum = (values) => values.filter(finite).reduce((total, value) => total + N
 const round = (value, digits = 4) =>
   finite(value) ? Number(Number(value).toFixed(digits)) : null;
 const clamp = (value, low, high) => Math.max(low, Math.min(high, value));
+
+function configuredFinmindToken(explicitToken = "") {
+  try {
+    const direct = String(explicitToken || "").trim();
+    if (direct) return direct;
+    return String(
+      globalThis.process?.env?.FINMIND_TOKEN ||
+      globalThis.Deno?.env?.get?.("FINMIND_TOKEN") ||
+      "",
+    ).trim();
+  } catch {
+    return "";
+  }
+}
+
+function finmindCooldownMs(error) {
+  const status = Number(error?.status) || 0;
+  const message = String(error?.message || "");
+  const invalidCredential = status === 401 || status === 403 || (
+    status === 400 && (
+      /(?:invalid|expired|missing|unauthorized).{0,40}(?:token|authorization)/i.test(message) ||
+      /(?:token|authorization).{0,40}(?:invalid|expired|missing|unauthorized)/i.test(message)
+    )
+  );
+  if (invalidCredential || status === 402) return 60 * 60 * 1_000;
+  if (status === 429) {
+    const retryAfterMs = Number(error?.retryAfter) > 0
+      ? Number(error.retryAfter) * 1_000
+      : 5 * 60 * 1_000;
+    return Math.min(60 * 60 * 1_000, Math.max(60 * 1_000, retryAfterMs));
+  }
+  return 0;
+}
+
+function tripProviderCircuit(url, error) {
+  const policy = policyFor(url);
+  if (policy.key !== "finmind") return false;
+  const cooldownMs = finmindCooldownMs(error);
+  if (!cooldownMs) return false;
+  const blockedUntil = Date.now() + cooldownMs;
+  const existing = providerCircuits.get(policy.key);
+  if (!existing || blockedUntil > existing.blockedUntil) {
+    providerCircuits.set(policy.key, {
+      blockedUntil,
+      providerStatus: Number(error?.status) || null,
+    });
+  }
+  try {
+    error.code = FINMIND_CIRCUIT_CODE;
+  } catch {}
+  return true;
+}
+
+function assertProviderAvailable(url) {
+  const policy = policyFor(url);
+  const circuit = providerCircuits.get(policy.key);
+  if (!circuit) return;
+  if (circuit.blockedUntil <= Date.now()) {
+    providerCircuits.delete(policy.key);
+    return;
+  }
+  const error = new Error("FinMind requests are paused after an authentication or rate-limit response");
+  error.code = FINMIND_CIRCUIT_CODE;
+  // Treat a local open circuit as rate-limited so persistent workers use their
+  // existing long backoff instead of immediately trying every queued symbol.
+  error.status = 429;
+  error.providerStatus = circuit.providerStatus;
+  error.retryAfter = Math.max(1, Math.ceil((circuit.blockedUntil - Date.now()) / 1_000));
+  throw error;
+}
 
 function isoDate(value) {
   const raw = clean(value).replaceAll("/", "").replaceAll("-", "");
@@ -124,10 +196,16 @@ function scheduled(url, task) {
   });
 }
 
-async function request(url, { format = "json", timeout = 35_000, retries = 2 } = {}) {
+async function request(url, {
+  format = "json",
+  timeout = 35_000,
+  retries = 2,
+  finmindToken = "",
+} = {}) {
   return scheduled(url, async () => {
     let lastError;
     for (let attempt = 0; attempt <= retries; attempt += 1) {
+      assertProviderAvailable(url);
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeout);
       try {
@@ -135,8 +213,7 @@ async function request(url, { format = "json", timeout = 35_000, retries = 2 } =
           accept: format === "json" ? "application/json" : "text/csv,text/plain,*/*",
           "user-agent": "TaiwanStockSmartPicker/16.3",
         };
-        const token = globalThis.process?.env?.FINMIND_TOKEN ||
-          globalThis.Deno?.env?.get?.("FINMIND_TOKEN");
+        const token = configuredFinmindToken(finmindToken);
         if (token && url.includes("api.finmindtrade.com")) {
           headers.authorization = `Bearer ${token}`;
         }
@@ -150,6 +227,7 @@ async function request(url, { format = "json", timeout = 35_000, retries = 2 } =
         return format === "json" ? await response.json() : await response.text();
       } catch (error) {
         lastError = error;
+        tripProviderCircuit(url, error);
         const retryable =
           error?.name === "AbortError" ||
           error?.status === 408 ||
@@ -199,10 +277,12 @@ async function finmind(dataset, symbol, startDate, endDate, options = {}) {
     // is retried by a later batch, which keeps the hourly request ceiling exact
     // instead of allowing one transient 5xx to silently exceed it.
     retries: options.retries ?? 2,
+    finmindToken: options.finmindToken,
   });
   if (Number(payload?.status) !== 200 || !Array.isArray(payload?.data)) {
     const error = new Error(payload?.msg || `${dataset} 無資料`);
     error.status = Number(payload?.status) || 502;
+    tripProviderCircuit(FINMIND, error);
     throw error;
   }
   return payload.data;
@@ -1101,8 +1181,8 @@ export async function buildBenchmarks(options = {}) {
       const endDate = taipeiToday();
       const startDate = monthsAgo(8);
       const historical = await Promise.allSettled([
-        listed.length < 65 ? finmind("TaiwanStockTotalReturnIndex", "TAIEX", startDate, endDate, { retries: finmindRetries }) : Promise.resolve([]),
-        otc.length < 65 ? finmind("TaiwanStockTotalReturnIndex", "TPEx", startDate, endDate, { retries: finmindRetries }) : Promise.resolve([]),
+        listed.length < 65 ? finmind("TaiwanStockTotalReturnIndex", "TAIEX", startDate, endDate, { retries: finmindRetries, finmindToken: options.finmindToken }) : Promise.resolve([]),
+        otc.length < 65 ? finmind("TaiwanStockTotalReturnIndex", "TPEx", startDate, endDate, { retries: finmindRetries, finmindToken: options.finmindToken }) : Promise.resolve([]),
       ]);
       const listedHistory = historical[0].status === "fulfilled"
         ? normalizeBenchmark(historical[0].value, { close: "price" })
@@ -1223,10 +1303,11 @@ export async function buildDeepData(symbol, instrumentType = "股票", market = 
     // daily feed is available at the documented free level; corporate-action
     // discontinuities remain guarded by `jumpAnomaly`, which disables the
     // technical score instead of treating the artificial jump as momentum.
-    const pricePromise = finmind("TaiwanStockPrice", symbol, monthsAgo(18), endDate, { retries: finmindRetries });
+    const finmindOptions = { retries: finmindRetries, finmindToken: options.finmindToken };
+    const pricePromise = finmind("TaiwanStockPrice", symbol, monthsAgo(18), endDate, finmindOptions);
     const benchmarksPromise = options.benchmarks
       ? Promise.resolve(options.benchmarks)
-      : buildBenchmarks({ finmindRetries });
+      : buildBenchmarks({ finmindRetries, finmindToken: options.finmindToken });
     const profilePromise = isEtf ? buildEtfProfiles() : Promise.resolve({ bySymbol: {} });
     const tdccPromise = isEtf
       ? Promise.resolve({ bySymbol: {}, date: "" })
@@ -1254,13 +1335,13 @@ export async function buildDeepData(symbol, instrumentType = "股票", market = 
       ? options.reuse.financial
       : null;
     const companyPromises = isEtf ? [] : [
-      reuseRevenue ? Promise.resolve([]) : finmind("TaiwanStockMonthRevenue", symbol, monthsAgo(48), endDate, { retries: finmindRetries }),
-      reuseFinancial ? Promise.resolve([]) : finmind("TaiwanStockFinancialStatements", symbol, monthsAgo(52), endDate, { retries: finmindRetries }),
-      reuseFinancial ? Promise.resolve([]) : finmind("TaiwanStockBalanceSheet", symbol, monthsAgo(52), endDate, { retries: finmindRetries }),
-      reuseFinancial ? Promise.resolve([]) : finmind("TaiwanStockCashFlowsStatement", symbol, monthsAgo(52), endDate, { retries: finmindRetries }),
-      finmind("TaiwanStockInstitutionalInvestorsBuySell", symbol, monthsAgo(3), endDate, { retries: finmindRetries }),
-      finmind("TaiwanStockMarginPurchaseShortSale", symbol, monthsAgo(3), endDate, { retries: finmindRetries }),
-      finmind("TaiwanStockSecuritiesLending", symbol, monthsAgo(3), endDate, { retries: finmindRetries }),
+      reuseRevenue ? Promise.resolve([]) : finmind("TaiwanStockMonthRevenue", symbol, monthsAgo(48), endDate, finmindOptions),
+      reuseFinancial ? Promise.resolve([]) : finmind("TaiwanStockFinancialStatements", symbol, monthsAgo(52), endDate, finmindOptions),
+      reuseFinancial ? Promise.resolve([]) : finmind("TaiwanStockBalanceSheet", symbol, monthsAgo(52), endDate, finmindOptions),
+      reuseFinancial ? Promise.resolve([]) : finmind("TaiwanStockCashFlowsStatement", symbol, monthsAgo(52), endDate, finmindOptions),
+      finmind("TaiwanStockInstitutionalInvestorsBuySell", symbol, monthsAgo(3), endDate, finmindOptions),
+      finmind("TaiwanStockMarginPurchaseShortSale", symbol, monthsAgo(3), endDate, finmindOptions),
+      finmind("TaiwanStockSecuritiesLending", symbol, monthsAgo(3), endDate, finmindOptions),
     ];
     const settled = await Promise.allSettled([
       pricePromise,
@@ -1410,6 +1491,7 @@ export async function buildPriceHistory(symbol, market = "上市", months = 18, 
     const history = normalizePrice(
       await finmind("TaiwanStockPrice", symbol, monthsAgo(requestedMonths), endDate, {
         retries: options.finmindRetries ?? 2,
+        finmindToken: options.finmindToken,
       }),
     ).slice(-280);
     if (history.length < 20) throw new Error(`${market} ${symbol} 歷史日線不足`);
@@ -1435,6 +1517,7 @@ export const deepDataInternals = {
   institutionalSummary,
   marginSummary,
   etfDirectionFlags,
+  finmindCooldownMs,
   validSymbol: (symbol) => VALID_SYMBOL.test(String(symbol || "")),
   isEtfSymbol: (symbol) => ETF_SYMBOL.test(String(symbol || "")),
 };

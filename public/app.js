@@ -1,8 +1,8 @@
 'use strict';
 
 const EDGE='/api/market-data';
-const SUPABASE_URL='https://lfkdkdyaatdlizryiyon.supabase.co';
-const SUPABASE_KEY='sb_publishable_r3h9eQIYdIqScvmc77avAg_OLgBT6lh';
+const CORE_SUPABASE_URL='https://gxwrczuwshndnjactrij.supabase.co';
+const CORE_SUPABASE_KEY='sb_publishable_M8sNxTHUuH06DwQQprIaoA_A2z4Tg7G';
 const MODEL_VERSION='v16.3-persistent-backend';
 const TAIPEI_TIME_ZONE='Asia/Taipei';
 const DISCLAIMER='未來漲跌預測是依公開資料、技術指標與固定權重計算的機率估計，僅供研究參考，不構成投資建議、買賣邀約或獲利保證。模型可能因突發消息、流動性、資料延遲及市場情緒而失準，投資人應自行判斷並承擔風險。';
@@ -10,7 +10,7 @@ const DISCLAIMER='未來漲跌預測是依公開資料、技術指標與固定�
 const S={
   tab:'home',stocks:[],mode:'loading',date:'',fundStatus:'loading',fundPeriod:'',loading:true,
   historyCache:new Map(),historySignals:new Map(),backtestCache:new Map(),deepCache:new Map(),detailSymbol:null,forecastQuery:'',verifyQuery:'',verifySymbol:'',
-  mineSub:'watch',session:null,isAdmin:false,adminState:'idle',adminLog:null,adminError:'',dataStatus:{},sourceDates:{},fundDates:{},syncState:'本機模式'
+  mineSub:'watch',session:null,watchlistGroupId:null,dataStatus:{},sourceDates:{},fundDates:{},syncState:'本機模式'
 };
 
 const app=document.querySelector('#app');
@@ -90,17 +90,11 @@ function marketDateInfo(){
   const known=[listed,otc].filter(Boolean).sort(),aligned=Boolean(listed&&otc&&listed===otc&&price.aligned!==false);
   return{listed,otc,aligned,latest:known.at(-1)||S.date||'',common:price.common||S.date||(aligned?listed:'')}
 }
-function adminBackendDate(){return S.adminLog?.health?.dataDate||S.adminLog?.summary?.latestDataDate||''}
 function updateMarketHeader(){
   const label=q('#marketDate'),mode=q('#dataMode');if(!label||!mode)return;
-  const dates=marketDateInfo(),backendDate=adminBackendDate(),adminView=S.tab==='admin'&&S.isAdmin;
+  const dates=marketDateInfo();
   let warning=false;
-  if(adminView&&backendDate){
-    const marketLabel=dates.aligned?dates.common:(dates.listed&&dates.otc?`上市 ${dates.listed}／上櫃 ${dates.otc}`:dates.latest||'—');
-    warning=Boolean(dates.latest&&backendDate!==dates.latest)||!dates.aligned;
-    label.textContent=`市場 ${marketLabel} · 後台 ${backendDate}${warning?'（待同步）':''}`;
-    mode.textContent=warning?'日期待同步':'日期已對齊';
-  }else if(dates.listed&&dates.otc&&!dates.aligned){
+  if(dates.listed&&dates.otc&&!dates.aligned){
     warning=true;label.textContent=`盤後行情 上市 ${dates.listed}／上櫃 ${dates.otc}（日期待對齊）`;mode.textContent='部分官方資料';
   }else{
     label.textContent=dates.common?`最新交易日 ${dates.common} · 盤後資料（非即時）`:'正在核對官方資料日期…';
@@ -111,12 +105,24 @@ function updateMarketHeader(){
 
 function readLocal(key,fallback=[]){try{return JSON.parse(localStorage.getItem(key)||JSON.stringify(fallback))}catch{return fallback}}
 function writeLocal(key,value){localStorage.setItem(key,JSON.stringify(value))}
-function getWatchlist(){return readLocal('twss-watchlist-v15',[])}
-function setWatchlist(v){writeLocal('twss-watchlist-v15',v)}
-function getPredictions(){return readLocal('twss-predictions-v15',[])}
-function setPredictions(v){writeLocal('twss-predictions-v15',v)}
-function getJournal(){return readLocal('twss-journal-v15',[])}
-function setJournal(v){writeLocal('twss-journal-v15',v)}
+const USER_DATA_VERSION='v18';
+const LEGACY_USER_DATA_KEYS=Object.freeze({watchlist:'twss-watchlist-v15',predictions:'twss-predictions-v15',journal:'twss-journal-v15'});
+function userDataKey(kind,userId=sessionUserId()){return`twss-${kind}-${USER_DATA_VERSION}:${userId||'guest'}`}
+function quarantineLegacyUserData(){
+  if(localStorage.getItem('twss-user-data-migrated-v18')==='1')return;
+  for(const [kind,legacyKey] of Object.entries(LEGACY_USER_DATA_KEYS)){
+    const quarantineKey=`twss-legacy-${kind}-v15-backup`,legacy=localStorage.getItem(legacyKey);
+    if(localStorage.getItem(quarantineKey)==null&&legacy!=null)localStorage.setItem(quarantineKey,legacy);
+    localStorage.removeItem(legacyKey)
+  }
+  localStorage.setItem('twss-user-data-migrated-v18','1')
+}
+function getWatchlist(userId=sessionUserId()){return readLocal(userDataKey('watchlist',userId),[])}
+function setWatchlist(v,userId=sessionUserId()){writeLocal(userDataKey('watchlist',userId),v)}
+function getPredictions(userId=sessionUserId()){return readLocal(userDataKey('predictions',userId),[])}
+function setPredictions(v,userId=sessionUserId()){writeLocal(userDataKey('predictions',userId),v)}
+function getJournal(userId=sessionUserId()){return readLocal(userDataKey('journal',userId),[])}
+function setJournal(v,userId=sessionUserId()){writeLocal(userDataKey('journal',userId),v)}
 function isWatched(symbol){return getWatchlist().some(x=>x.symbol===symbol)}
 
 const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
@@ -198,47 +204,86 @@ async function getDeepAnalysis(symbol){
 }
 
 /* Supabase auth and optional cloud sync */
-const SESSION_KEY='twss-supabase-session-v15';
+const CORE_SESSION_KEY='twss-core-session-v18';
+const LEGACY_SHARED_SESSION_KEY='twss-supabase-session-v15';
 function sessionUserId(session=S.session){return session?.user?.id||decodeJwtSub(session?.access_token)||null}
-function clearAdminState(){S.isAdmin=false;S.adminState='idle';S.adminLog=null;S.adminError='';if(S.tab==='admin')S.tab='home'}
-function updateAccountUi(){const account=q('#accountBtn'),admin=q('#adminBtn');if(account)account.textContent=S.session?'帳戶':'登入';if(admin){admin.hidden=!S.isAdmin;admin.setAttribute('aria-hidden',String(!S.isAdmin));admin.classList.toggle('active',S.tab==='admin')}}
-function storeSession(session){const previousId=sessionUserId(),nextId=sessionUserId(session);if(!session||previousId!==nextId)clearAdminState();S.session=session;if(session)localStorage.setItem(SESSION_KEY,JSON.stringify(session));else localStorage.removeItem(SESSION_KEY);updateAccountUi()}
-async function sb(path,options={}){
-  const headers={apikey:SUPABASE_KEY,'Content-Type':'application/json',...(options.headers||{})};
+function updateAccountUi(){const account=q('#accountBtn');if(account)account.textContent=S.session?'帳戶':'登入'}
+function storeSession(session){
+  const previousId=sessionUserId(),nextId=sessionUserId(session);
+  if(previousId!==nextId)S.watchlistGroupId=null;
+  S.session=session;
+  if(session)localStorage.setItem(CORE_SESSION_KEY,JSON.stringify(session));else localStorage.removeItem(CORE_SESSION_KEY);
+  updateAccountUi()
+}
+async function coreSb(path,options={}){
+  const headers={apikey:CORE_SUPABASE_KEY,'Content-Type':'application/json',...(options.headers||{})};
   if(options.auth!==false&&S.session?.access_token)headers.Authorization=`Bearer ${S.session.access_token}`;
-  const r=await fetch(SUPABASE_URL+path,{method:options.method||'GET',headers,body:options.body===undefined?undefined:JSON.stringify(options.body),cache:'no-store'});
+  const r=await fetch(CORE_SUPABASE_URL+path,{method:options.method||'GET',headers,body:options.body===undefined?undefined:JSON.stringify(options.body),cache:'no-store'});
   let data=null;try{data=await r.json()}catch{}if(!r.ok){const error=new Error(data?.message||data?.error_description||data?.error||`HTTP ${r.status}`);error.status=r.status;error.code=data?.code||null;throw error}return data;
 }
 async function refreshSession(){
   if(!S.session)return false;if((S.session.expires_at||0)>Date.now()/1000+90)return true;
   if(!S.session.refresh_token){storeSession(null);return false}
-  try{const s=await sb('/auth/v1/token?grant_type=refresh_token',{method:'POST',body:{refresh_token:S.session.refresh_token},auth:false});s.expires_at=Math.floor(Date.now()/1000)+(s.expires_in||3600);storeSession(s);return true}catch{storeSession(null);return false}
+  try{const s=await coreSb('/auth/v1/token?grant_type=refresh_token',{method:'POST',body:{refresh_token:S.session.refresh_token},auth:false});s.expires_at=Math.floor(Date.now()/1000)+(s.expires_in||3600);storeSession(s);return true}catch{storeSession(null);return false}
 }
-async function refreshAdminAccess(){
-  if(!S.session||!await refreshSession()){clearAdminState();updateAccountUi();return false}
-  try{S.isAdmin=(await sb('/rest/v1/rpc/twss_is_admin',{method:'POST',body:{}}))===true}catch{S.isAdmin=false}
-  if(!S.isAdmin){S.adminState='idle';S.adminLog=null;S.adminError='';if(S.tab==='admin')S.tab='home'}
-  updateAccountUi();return S.isAdmin
-}
-async function login(email,password){const s=await sb('/auth/v1/token?grant_type=password',{method:'POST',body:{email,password},auth:false});s.expires_at=Math.floor(Date.now()/1000)+(s.expires_in||3600);storeSession(s);await refreshAdminAccess();await cloudPull()}
-async function signup(email,password){const s=await sb(`/auth/v1/signup?redirect_to=${encodeURIComponent(location.origin)}`,{method:'POST',body:{email,password},auth:false});if(s?.access_token){s.expires_at=Math.floor(Date.now()/1000)+(s.expires_in||3600);storeSession(s);await refreshAdminAccess();await cloudPull();return true}return false}
+async function login(email,password){const s=await coreSb('/auth/v1/token?grant_type=password',{method:'POST',body:{email,password},auth:false});s.expires_at=Math.floor(Date.now()/1000)+(s.expires_in||3600);storeSession(s);await cloudPull()}
+async function signup(email,password){const s=await coreSb(`/auth/v1/signup?redirect_to=${encodeURIComponent(location.origin)}`,{method:'POST',body:{email,password},auth:false});if(s?.access_token){s.expires_at=Math.floor(Date.now()/1000)+(s.expires_in||3600);storeSession(s);await cloudPull();return true}return false}
+const predictionKey=record=>`${record.symbol}-${record.prediction_date}-${record.horizon_days}-${record.model_version}`;
 async function cloudPull(){
-  if(!await refreshSession())return;S.syncState='同步中…';
+  if(!await refreshSession())return;const userId=sessionUserId(),pendingPred=getPredictions().filter(x=>x._sync_state==='pending'),pendingJournal=getJournal().filter(x=>x._sync_state==='pending'),pendingWatch=getWatchlist().filter(x=>x._sync_state==='pending');S.syncState='同步中…';
   try{
-    const [pred,journal]=await Promise.all([
-      sb('/rest/v1/prediction_logs?select=*&order=prediction_date.desc'),
-      sb('/rest/v1/investment_journal?select=*&order=entry_date.desc')
+    const [pred,journal,groups,watchlist]=await Promise.all([
+      coreSb('/rest/v1/prediction_logs?select=*&order=prediction_date.desc'),
+      coreSb('/rest/v1/investment_journal?select=*&order=entry_date.desc'),
+      coreSb('/rest/v1/watchlist_groups?select=id,name,sort_order&order=sort_order.asc,id.asc'),
+      coreSb('/rest/v1/watchlist_items?select=id,group_id,symbol,added_price,added_at,note&order=added_at.desc')
     ]);
-    if(pred?.length)setPredictions(pred.map(x=>({...x,local_id:x.id})));
-    if(journal?.length)setJournal(journal.map(x=>({...x,local_id:x.id})));
+    if(sessionUserId()!==userId)return;
+    S.watchlistGroupId=groups?.[0]?.id||null;
+    const cloudPred=(pred||[]).map(x=>({...x,key:predictionKey(x),local_id:x.id,_sync_state:'synced'})),cloudJournal=(journal||[]).map(x=>({...x,local_id:x.id,_sync_state:'synced'})),cloudWatch=(watchlist||[]).map(x=>({id:x.id,local_id:x.id,groupId:x.group_id,symbol:String(x.symbol),addedPrice:x.added_price,addedAt:x.added_at,note:x.note||'',_sync_state:'synced'}));
+    for(const item of pendingPred)if(!cloudPred.some(row=>predictionKey(row)===predictionKey(item)))cloudPred.unshift(item);
+    for(const item of pendingJournal)if(!cloudJournal.some(row=>String(row.id)===String(item.id)))cloudJournal.unshift(item);
+    for(const item of pendingWatch)if(!cloudWatch.some(row=>row.symbol===item.symbol))cloudWatch.unshift(item);
+    setPredictions(cloudPred,userId);setJournal(cloudJournal,userId);setWatchlist(cloudWatch,userId);
+    Promise.allSettled([...pendingPred.map(item=>upsertPredictionCloud(item,userId)),...pendingJournal.map(item=>saveJournalRecord(item,userId)),...pendingWatch.map(item=>upsertWatchlistCloud(item,userId))]).catch(()=>{});
     S.syncState='雲端已同步';render();
-  }catch(e){S.syncState=`同步失敗：${e.message}`}
+  }catch(e){if(sessionUserId()===userId)S.syncState=`同步失敗：${e.message}`}
 }
-async function upsertPredictionCloud(record){if(!await refreshSession())return;const body={user_id:S.session.user?.id||decodeJwtSub(S.session.access_token),symbol:record.symbol,stock_name:record.stock_name,prediction_date:record.prediction_date,horizon_days:record.horizon_days,reference_price:record.reference_price,predicted_direction:record.predicted_direction,up_probability:record.up_probability,neutral_probability:record.neutral_probability,down_probability:record.down_probability,confidence:record.confidence,expected_low:record.expected_low,expected_high:record.expected_high,model_version:record.model_version,factors:record.factors,evaluated_at:record.evaluated_at||null,actual_price:record.actual_price??null,actual_return_pct:record.actual_return_pct??null,actual_direction:record.actual_direction||null,is_correct:record.is_correct??null};await sb('/rest/v1/prediction_logs?on_conflict=user_id,symbol,prediction_date,horizon_days,model_version',{method:'POST',headers:{Prefer:'resolution=merge-duplicates,return=minimal'},body})}
-async function upsertJournalCloud(record){if(!await refreshSession())return;const userId=S.session.user?.id||decodeJwtSub(S.session.access_token);const body={user_id:userId,symbol:record.symbol,stock_name:record.stock_name,entry_date:record.entry_date,action:record.action,price:record.price??null,quantity:record.quantity??null,horizon:record.horizon||null,thesis:record.thesis||null,risk_plan:record.risk_plan||null,target_plan:record.target_plan||null,emotion:record.emotion||null,followed_plan:record.followed_plan??null,exit_price:record.exit_price??null,exit_date:record.exit_date||null,return_pct:record.return_pct??null,result_note:record.result_note||null,tags:record.tags||[]};if(record.id&&String(record.id).includes('-'))await sb(`/rest/v1/investment_journal?id=eq.${record.id}`,{method:'PATCH',headers:{Prefer:'return=minimal'},body});else await sb('/rest/v1/investment_journal',{method:'POST',headers:{Prefer:'return=minimal'},body})}
+async function upsertPredictionCloud(record,owner=sessionUserId()){
+  if(!owner||sessionUserId()!==owner||!await refreshSession()||sessionUserId()!==owner)return null;const body={user_id:owner,symbol:record.symbol,stock_name:record.stock_name,prediction_date:record.prediction_date,horizon_days:record.horizon_days,reference_price:record.reference_price,predicted_direction:record.predicted_direction,up_probability:record.up_probability,neutral_probability:record.neutral_probability,down_probability:record.down_probability,confidence:record.confidence,expected_low:record.expected_low,expected_high:record.expected_high,model_version:record.model_version,factors:record.factors||{},evaluated_at:record.evaluated_at||null,actual_price:record.actual_price??null,actual_return_pct:record.actual_return_pct??null,actual_direction:record.actual_direction||null,is_correct:record.is_correct??null};
+  const rows=await coreSb('/rest/v1/prediction_logs?on_conflict=user_id,symbol,prediction_date,horizon_days,model_version',{method:'POST',headers:{Prefer:'resolution=merge-duplicates,return=representation'},body});
+  if(sessionUserId()!==owner)return null;const saved=rows?.[0];if(saved){const list=getPredictions(owner),key=predictionKey(record),index=list.findIndex(x=>predictionKey(x)===key);if(index>=0){list[index]={...record,...saved,key,local_id:saved.id,_sync_state:'synced'};setPredictions(list,owner)}}return saved||null
+}
+async function saveJournalRecord(record,owner=sessionUserId()){
+  const localId=record.local_id||record.id||uid(),id=record.id||localId,cloudEligible=Boolean(owner&&S.session&&sessionUserId()===owner),pending={...record,id,local_id:localId,_sync_state:cloudEligible?'pending':'local'};
+  const local=getJournal(owner),localIndex=local.findIndex(x=>String(x.local_id||x.id)===String(localId));if(localIndex>=0)local[localIndex]=pending;else local.unshift(pending);setJournal(local,owner);
+  if(!cloudEligible)return pending;
+  try{
+    if(!await refreshSession()||sessionUserId()!==owner)return pending;const body={id,user_id:owner,symbol:record.symbol,stock_name:record.stock_name,entry_date:record.entry_date,action:record.action,price:record.price??null,quantity:record.quantity??null,horizon:record.horizon||null,thesis:record.thesis||null,risk_plan:record.risk_plan||null,target_plan:record.target_plan||null,emotion:record.emotion||null,followed_plan:record.followed_plan??null,exit_price:record.exit_price??null,exit_date:record.exit_date||null,return_pct:record.return_pct??null,result_note:record.result_note||null,tags:record.tags||[]};
+    const rows=await coreSb('/rest/v1/investment_journal?on_conflict=id',{method:'POST',headers:{Prefer:'resolution=merge-duplicates,return=representation'},body});
+    if(sessionUserId()!==owner)return pending;const saved={...(rows?.[0]||body),local_id:localId,_sync_state:'synced'},latest=getJournal(owner),index=latest.findIndex(x=>String(x.local_id||x.id)===String(localId));if(index>=0){latest[index]=saved;setJournal(latest,owner)}S.syncState='雲端已同步';return saved
+  }catch(error){if(sessionUserId()===owner)S.syncState=`同步失敗：${error.message}`;throw error}
+}
+async function deleteJournalRecord(localId,owner=sessionUserId()){
+  const list=getJournal(owner),index=list.findIndex(x=>String(x.local_id||x.id)===String(localId));if(index<0)return;const [record]=list.splice(index,1);setJournal(list,owner);
+  if(!owner||!S.session||sessionUserId()!==owner)return;
+  try{if(!await refreshSession()||sessionUserId()!==owner)throw new Error('登入已過期，刪除尚未同步');await coreSb(`/rest/v1/investment_journal?id=eq.${encodeURIComponent(record.id||record.local_id)}`,{method:'DELETE',headers:{Prefer:'return=minimal'}});S.syncState='雲端已同步'}catch(error){const restored=getJournal(owner);restored.splice(Math.min(index,restored.length),0,record);setJournal(restored,owner);if(sessionUserId()===owner){S.syncState=`刪除同步失敗：${error.message}`;render()}throw error}
+}
+async function ensureWatchlistGroup(owner=sessionUserId()){
+  if(!owner||sessionUserId()!==owner)return null;if(S.watchlistGroupId)return S.watchlistGroupId;if(!await refreshSession()||sessionUserId()!==owner)return null;
+  let groups=await coreSb('/rest/v1/watchlist_groups?select=id&order=sort_order.asc,id.asc&limit=1');
+  if(sessionUserId()!==owner)return null;
+  if(!groups?.length)groups=await coreSb('/rest/v1/watchlist_groups',{method:'POST',headers:{Prefer:'return=representation'},body:{user_id:owner,name:'我的自選',sort_order:0}});
+  if(sessionUserId()===owner)S.watchlistGroupId=groups?.[0]?.id||null;return S.watchlistGroupId
+}
+async function upsertWatchlistCloud(record,owner=sessionUserId()){
+  if(!owner||!S.session||sessionUserId()!==owner)return null;const groupId=await ensureWatchlistGroup(owner);if(!groupId||sessionUserId()!==owner)return null;const id=record.id||record.local_id||uid(),body={id,user_id:owner,group_id:groupId,symbol:record.symbol,added_price:record.addedPrice??null,added_at:record.addedAt||new Date().toISOString(),note:record.note||''};
+  const rows=await coreSb('/rest/v1/watchlist_items?on_conflict=group_id,symbol',{method:'POST',headers:{Prefer:'resolution=merge-duplicates,return=representation'},body});const saved=rows?.[0];if(saved&&sessionUserId()===owner){const list=getWatchlist(owner),index=list.findIndex(x=>x.symbol===record.symbol);if(index>=0){list[index]={...record,id:saved.id,local_id:saved.id,groupId:saved.group_id,_sync_state:'synced'};setWatchlist(list,owner)}}return saved||null
+}
 function decodeJwtSub(token){try{return JSON.parse(atob(token.split('.')[1].replace(/-/g,'+').replace(/_/g,'/'))).sub}catch{return null}}
-async function logoutAccount(){try{if(S.session?.access_token)await sb('/auth/v1/logout',{method:'POST'})}catch{}finally{storeSession(null);S.syncState='本機模式';closeModal();render()}}
-async function initSession(){let saved=null;try{saved=JSON.parse(localStorage.getItem(SESSION_KEY)||'null')}catch{}storeSession(saved);if(S.session&&await refreshSession()){try{S.session.user=await sb('/auth/v1/user');storeSession(S.session)}catch{}await refreshAdminAccess();cloudPull()}else{clearAdminState();updateAccountUi()}}
+async function logoutAccount(){try{if(S.session?.access_token)await coreSb('/auth/v1/logout',{method:'POST'})}catch{}finally{storeSession(null);S.syncState='本機模式';closeModal();render()}}
+async function initSession(){quarantineLegacyUserData();localStorage.removeItem(LEGACY_SHARED_SESSION_KEY);let saved=null;try{saved=JSON.parse(localStorage.getItem(CORE_SESSION_KEY)||'null')}catch{}storeSession(saved);if(S.session&&await refreshSession()){try{S.session.user=await coreSb('/auth/v1/user');storeSession(S.session)}catch{}cloudPull()}else updateAccountUi()}
+globalThis.twssUserData=Object.freeze({storageKey:userDataKey,getPredictions,setPredictions,getJournal,setJournal,saveJournal:saveJournalRecord,deleteJournal:deleteJournalRecord,upsertPrediction:upsertPredictionCloud});
 
 function mean(values){const v=values.filter(x=>x!=null&&Number.isFinite(x));return v.length?v.reduce((a,b)=>a+b,0)/v.length:null}
 function sma(values,period){return values.length>=period?mean(values.slice(-period)):null}
@@ -363,13 +408,13 @@ function directionFromReturn(ret){return ret>1.5?'up':ret<-1.5?'down':'neutral'}
 function directionFromForecast(f){return f.up>=f.down+12?'up':f.down>=f.up+12?'down':'neutral'}
 function recordPrediction(stock,forecast){
   const list=getPredictions(),key=`${stock.symbol}-${today()}-5-${MODEL_VERSION}`;if(list.some(x=>x.key===key))return;
-  const rec={key,local_id:uid(),symbol:stock.symbol,stock_name:stock.name,prediction_date:today(),horizon_days:5,reference_price:stock.close,predicted_direction:directionFromForecast(forecast),up_probability:forecast.up,neutral_probability:forecast.neutral,down_probability:forecast.down,confidence:forecast.confidence,expected_low:forecast.expectedLow,expected_high:forecast.expectedHigh,model_version:MODEL_VERSION,factors:{technical:forecast.technical,fundamental:forecast.fundamental,chip:forecast.chip,valuation:forecast.valuation,completeness:forecast.completeness},created_at:new Date().toISOString()};
+  const rec={key,local_id:uid(),symbol:stock.symbol,stock_name:stock.name,prediction_date:today(),horizon_days:5,reference_price:stock.close,predicted_direction:directionFromForecast(forecast),up_probability:forecast.up,neutral_probability:forecast.neutral,down_probability:forecast.down,confidence:forecast.confidence,expected_low:forecast.expectedLow,expected_high:forecast.expectedHigh,model_version:MODEL_VERSION,factors:{technical:forecast.technical,fundamental:forecast.fundamental,chip:forecast.chip,valuation:forecast.valuation,completeness:forecast.completeness},created_at:new Date().toISOString(),_sync_state:S.session?'pending':'local'};
   list.unshift(rec);setPredictions(list);upsertPredictionCloud(rec).catch(()=>{});
 }
 function evaluatePredictionsForSymbol(symbol,history){
   const list=getPredictions();let changed=false;
   list.forEach(rec=>{
-    if(rec.symbol!==symbol||rec.evaluated_at)return;const startIndex=history.findIndex(r=>r.date>=rec.prediction_date);if(startIndex<0||history.length<=startIndex+5)return;const actual=history[startIndex+5],ret=(actual.close/rec.reference_price-1)*100,dir=directionFromReturn(ret);Object.assign(rec,{evaluated_at:new Date().toISOString(),actual_price:actual.close,actual_return_pct:+ret.toFixed(2),actual_direction:dir,is_correct:dir===rec.predicted_direction});changed=true;upsertPredictionCloud(rec).catch(()=>{})
+    if(rec.symbol!==symbol||rec.evaluated_at)return;const startIndex=history.findIndex(r=>r.date>=rec.prediction_date);if(startIndex<0||history.length<=startIndex+5)return;const actual=history[startIndex+5],ret=(actual.close/rec.reference_price-1)*100,dir=directionFromReturn(ret);Object.assign(rec,{evaluated_at:new Date().toISOString(),actual_price:actual.close,actual_return_pct:+ret.toFixed(2),actual_direction:dir,is_correct:dir===rec.predicted_direction,_sync_state:S.session?'pending':rec._sync_state});changed=true;upsertPredictionCloud(rec).catch(()=>{})
   });if(changed)setPredictions(list)
 }
 
@@ -550,12 +595,20 @@ function closeModal(){
   if(returnFocus?.isConnected)requestAnimationFrame(()=>returnFocus.focus({preventScroll:true}));
 }
 
-function toggleWatch(symbol){
-  const list=getWatchlist(),index=list.findIndex(x=>x.symbol===symbol);
-  if(index>=0)list.splice(index,1);else{const stock=S.stocks.find(x=>x.symbol===symbol);list.push({symbol,addedPrice:stock?.close??null,addedAt:new Date().toISOString(),note:''})}
-  setWatchlist(list);render();if(S.detailSymbol)openDetail(S.detailSymbol,false)
+async function toggleWatch(symbol){
+  const owner=sessionUserId(),list=getWatchlist(owner),index=list.findIndex(x=>x.symbol===symbol);
+  if(index>=0){
+    const [removed]=list.splice(index,1);setWatchlist(list,owner);render();if(S.detailSymbol)openDetail(S.detailSymbol,false);
+    if(owner&&S.session){try{if(!await refreshSession()||sessionUserId()!==owner)throw new Error('登入已過期，自選刪除尚未同步');await coreSb(`/rest/v1/watchlist_items?id=eq.${encodeURIComponent(removed.id||removed.local_id)}`,{method:'DELETE',headers:{Prefer:'return=minimal'}})}catch(error){const restored=getWatchlist(owner);restored.splice(Math.min(index,restored.length),0,removed);setWatchlist(restored,owner);if(sessionUserId()===owner){S.syncState=`自選同步失敗：${error.message}`;render()}}}
+    return
+  }
+  const stock=S.stocks.find(x=>x.symbol===symbol),id=uid(),item={id,local_id:id,symbol,addedPrice:stock?.close??null,addedAt:new Date().toISOString(),note:'',_sync_state:owner&&S.session?'pending':'local'};list.push(item);setWatchlist(list,owner);render();if(S.detailSymbol)openDetail(S.detailSymbol,false);
+  if(owner&&S.session)upsertWatchlistCloud(item,owner).catch(error=>{if(sessionUserId()===owner)S.syncState=`自選同步失敗：${error.message}`})
 }
 
+/* v18: the embedded administrator implementation is intentionally disabled.
+   MARKET administration is available only from the standalone /admin page,
+   whose session storage is isolated from this CORE-authenticated app.
 function adminTime(value){
   if(!value)return'—';const parts=taipeiParts(value,true);return parts?`${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second}`:esc(value)
 }
@@ -624,15 +677,15 @@ async function loadAdminLog(force=false){
   }
   render()
 }
-function navigateToTab(tab){S.tab=tab;render();resetPageScroll()}
-function openAdminPage(){if(!S.isAdmin)return;closeModal();navigateToTab('admin');loadAdminLog()}
+*/
+function navigateToTab(tab){if(tab==='admin')return;S.tab=tab;render();resetPageScroll()}
 
 function render(){
-  if(S.tab==='admin'&&!S.isAdmin)S.tab='home';
+  if(S.tab==='admin')S.tab='home';
   qa('.bottom-nav button').forEach(button=>{const active=button.dataset.tab===S.tab;button.classList.toggle('active',active);if(active)button.setAttribute('aria-current','page');else button.removeAttribute('aria-current')});
   updateAccountUi();updateMarketHeader();
   if(S.loading&&!S.stocks.length){app.innerHTML='<div class="card empty"><div class="loading"><span class="spinner"></span>正在載入官方盤後資料…</div></div>';bind();return}
-  app.innerHTML=S.tab==='home'?homePage():S.tab==='opportunities'?opportunitiesPage():S.tab==='forecast'?forecastPage():S.tab==='verify'?verifyPage():S.tab==='admin'?adminPage():minePage();bind()
+  app.innerHTML=S.tab==='home'?homePage():S.tab==='opportunities'?opportunitiesPage():S.tab==='forecast'?forecastPage():S.tab==='verify'?verifyPage():minePage();bind()
 }
 
 function bind(){
@@ -644,7 +697,6 @@ function bind(){
   q('#forecastSearchBtn')?.addEventListener('click',()=>{S.forecastQuery=q('#forecastSearch')?.value||'';render()});
   const verifySearch=q('#verifySearch');if(verifySearch){verifySearch.oninput=e=>S.verifyQuery=e.target.value;verifySearch.onkeydown=e=>{if(e.key==='Enter'){S.verifyQuery=e.target.value;render()}}}
   q('#verifySearchBtn')?.addEventListener('click',()=>{S.verifyQuery=q('#verifySearch')?.value||'';render()});
-  q('#refreshAdminLog')?.addEventListener('click',()=>loadAdminLog(true));
   qa('[data-verify]').forEach(button=>button.onclick=()=>{S.verifySymbol=button.dataset.verify;S.verifyQuery='';render()});
   q('#runBacktest')?.addEventListener('click',async e=>{
     const symbol=e.currentTarget.dataset.symbol,stock=S.stocks.find(x=>x.symbol===symbol);e.currentTarget.disabled=true;e.currentTarget.textContent='回測中…';
@@ -667,7 +719,7 @@ function bindModal(){
 function exportJournal(){
   const blob=new Blob([JSON.stringify({exported_at:new Date().toISOString(),journal:getJournal()},null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=`台股智選-投資紀錄-${today()}.json`;a.click();URL.revokeObjectURL(url)
 }
-function deleteJournal(id){if(!confirm('確定刪除這筆紀錄？'))return;const list=getJournal().filter(x=>String(x.local_id||x.id)!==String(id));setJournal(list);render()}
+function deleteJournal(id){if(!confirm('確定刪除這筆紀錄？'))return;deleteJournalRecord(id).catch(()=>{});render()}
 
 function openJournalModal(record=null,stock=null){
   const r=record||{},selected=stock||S.stocks.find(x=>x.symbol===r.symbol),symbol=selected?.symbol||r.symbol||'',name=selected?.name||r.stock_name||'';
@@ -692,12 +744,12 @@ function openJournalModal(record=null,stock=null){
   q('#saveJournal',modalRoot).onclick=async()=>{
     const symbolValue=q('#jSymbol',modalRoot).value.trim(),price=safe(q('#jPrice',modalRoot).value),exitPrice=safe(q('#jExitPrice',modalRoot).value);if(!/^\d{4}$/.test(symbolValue)){alert('請輸入四碼股票代號');return}
     const item={...r,local_id:r.local_id||r.id||uid(),symbol:symbolValue,stock_name:q('#jName',modalRoot).value.trim(),entry_date:q('#jDate',modalRoot).value||today(),action:q('#jAction',modalRoot).value,price,quantity:safe(q('#jQty',modalRoot).value),horizon:q('#jHorizon',modalRoot).value||null,emotion:q('#jEmotion',modalRoot).value.trim(),thesis:q('#jThesis',modalRoot).value.trim(),risk_plan:q('#jRisk',modalRoot).value.trim(),target_plan:q('#jTarget',modalRoot).value.trim(),exit_price:exitPrice,exit_date:q('#jExitDate',modalRoot).value||null,result_note:q('#jResult',modalRoot).value.trim(),followed_plan:q('#jFollow',modalRoot).value===''?null:q('#jFollow',modalRoot).value==='true'};
-    item.return_pct=price&&exitPrice?+((exitPrice/price-1)*100).toFixed(2):r.return_pct??null;const list=getJournal(),index=list.findIndex(x=>String(x.local_id||x.id)===String(item.local_id));if(index>=0)list[index]=item;else list.unshift(item);setJournal(list);upsertJournalCloud(item).catch(()=>{});closeModal();S.tab='mine';S.mineSub='journal';render()
+    item.return_pct=price&&exitPrice?+((exitPrice/price-1)*100).toFixed(2):r.return_pct??null;saveJournalRecord(item).catch(()=>{});closeModal();S.tab='mine';S.mineSub='journal';render()
   }
 }
 
 function openAccountModal(){
-  if(S.session){modalRoot.innerHTML=`<div class="modal"><div class="sheet"><button class="sheet-close">×</button><h2>雲端帳戶</h2><div class="card"><div class="head"><div><b>${esc(S.session.user?.email||'已登入')}</b><div class="muted">${S.isAdmin?'已驗證為管理員':'一般使用者'}</div></div>${S.isAdmin?'<span class="tag">管理員</span>':''}</div><p class="muted">預測紀錄與投資紀錄會同步至 Supabase。自選清單目前仍保留在此裝置。</p>${S.isAdmin?'<button id="openAdminPage" class="btn admin-open">開啟管理員後台日誌</button>':''}<div class="row"><button id="syncCloud" class="btn secondary grow">立即同步</button><button id="logout" class="btn danger">登出</button></div></div><div class="muted">${esc(S.syncState)}</div></div></div>`;bindModal();q('#openAdminPage',modalRoot)?.addEventListener('click',openAdminPage);q('#syncCloud',modalRoot).onclick=cloudPull;q('#logout',modalRoot).onclick=logoutAccount;return}
+  if(S.session){modalRoot.innerHTML=`<div class="modal"><div class="sheet"><button class="sheet-close">×</button><h2>雲端帳戶</h2><div class="card"><div class="head"><div><b>${esc(S.session.user?.email||'已登入')}</b><div class="muted">一般使用者</div></div></div><p class="muted">預測紀錄、投資紀錄與自選清單會同步至 CORE 資料庫。</p><div class="row"><button id="syncCloud" class="btn secondary grow">立即同步</button><button id="logout" class="btn danger">登出</button></div></div><div class="muted">${esc(S.syncState)}</div></div></div>`;bindModal();q('#syncCloud',modalRoot).onclick=cloudPull;q('#logout',modalRoot).onclick=logoutAccount;return}
   modalRoot.innerHTML=`<div class="modal"><div class="sheet"><button class="sheet-close">×</button><h2>登入台股智選</h2><p class="muted">登入後可同步預測與投資紀錄。</p><label>電子郵件<input id="authEmail" type="email" autocomplete="email"></label><label>密碼<input id="authPass" type="password" autocomplete="current-password" placeholder="至少 6 個字元"></label><div class="row" style="margin-top:12px"><button id="loginBtn" class="btn grow">登入</button><button id="signupBtn" class="btn secondary">建立帳戶</button></div><div id="authMsg" class="muted" style="margin-top:10px"></div></div></div>`;bindModal();
   const afterAuth=()=>{closeModal();render()};
   const act=async type=>{const email=q('#authEmail',modalRoot).value.trim(),password=q('#authPass',modalRoot).value,msg=q('#authMsg',modalRoot);if(!email||password.length<6){msg.textContent='請輸入有效電子郵件，密碼至少 6 個字元。';return}msg.textContent='處理中…';try{if(type==='login'){await login(email,password);afterAuth()}else{const ok=await signup(email,password);if(ok)afterAuth();else msg.textContent='驗證信已寄出，完成驗證後再登入。'}}catch(e){msg.textContent=e.message}};
@@ -705,6 +757,5 @@ function openAccountModal(){
 }
 
 document.querySelector('#accountBtn').onclick=openAccountModal;
-document.querySelector('#adminBtn').onclick=openAdminPage;
-if('serviceWorker'in navigator)navigator.serviceWorker.register('/sw.js?v=17.3.3',{updateViaCache:'none'}).catch(()=>{});
+if('serviceWorker'in navigator)navigator.serviceWorker.register('/sw.js?v=18.0.0',{updateViaCache:'none'}).catch(()=>{});
 initSession();render();loadStocks();

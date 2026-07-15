@@ -353,15 +353,27 @@ assert.equal(removedResearchResponse.status, 404);
 
 const pageResponse = await worker.fetch(new Request("https://example.test/"), {}, {});
 const pageSource = await pageResponse.text();
-assert.match(pageSource, /id="adminBtn"[^>]*hidden[^>]*aria-hidden="true"/,
-  "the administrator entry must be invisible until the authenticated role check succeeds");
-assert.match(pageSource, /app\.js\?v=17\.3\.3/);
+const contentSecurityPolicy = pageResponse.headers.get("content-security-policy") || "";
+assert.match(contentSecurityPolicy, /https:\/\/gxwrczuwshndnjactrij\.supabase\.co/,
+  "the browser policy must allow the CORE project");
+assert.match(contentSecurityPolicy, /https:\/\/lfkdkdyaatdlizryiyon\.supabase\.co/,
+  "the shared policy must continue allowing the standalone MARKET administrator console");
+assert.doesNotMatch(pageSource, /id="adminBtn"/,
+  "the CORE-authenticated main application must not embed a MARKET administrator entry");
+assert.match(pageSource, /app\.js\?v=18\.0\.0/);
 const adminPageSource = await readFile(new URL("../public/admin.html", import.meta.url), "utf8");
-assert.match(adminPageSource, /icon\.svg\?v=17\.3\.3/);
-assert.match(adminPageSource, /styles\.css\?v=17\.3\.3/);
-assert.match(adminPageSource, /admin\.js\?v=17\.3\.3/);
+const adminScriptSource = await readFile(new URL("../public/admin.js", import.meta.url), "utf8");
+assert.match(adminPageSource, /icon\.svg\?v=18\.0\.0/);
+assert.match(adminPageSource, /styles\.css\?v=18\.0\.0/);
+assert.match(adminPageSource, /admin\.js\?v=18\.0\.0/);
+assert.match(adminScriptSource, /https:\/\/lfkdkdyaatdlizryiyon\.supabase\.co/,
+  "the standalone administrator console must remain on MARKET");
+assert.match(adminScriptSource, /twss-market-admin-session-v18/,
+  "the MARKET administrator must use an isolated session key");
+assert.doesNotMatch(adminScriptSource, /gxwrczuwshndnjactrij|twss-core-session/,
+  "the standalone MARKET console must never load the CORE session");
 
-const appResponse = await worker.fetch(new Request("https://example.test/app.js?v=17.3.3"), {}, {});
+const appResponse = await worker.fetch(new Request("https://example.test/app.js?v=18.0.0"), {}, {});
 const appSource = await appResponse.text();
 assert.match(appSource, /官方日期已核對/);
 assert.match(appSource, /各資料來源日期/);
@@ -378,13 +390,9 @@ assert.match(appSource, /交易日不足 60 日/, "partial histories must not be
 assert.match(appSource, /120000,0/, "opening one detail must not automatically consume a second repair attempt");
 assert.match(appSource, /aria-label','關閉視窗/);
 assert.match(appSource, /event\.key==='Escape'/);
-assert.match(appSource, /sw\.js\?v=17\.3\.3/);
+assert.match(appSource, /sw\.js\?v=18\.0\.0/);
 assert.match(appSource, /timeZone:TAIPEI_TIME_ZONE/,
-  "administrator timestamps and local date defaults must use Asia/Taipei");
-assert.match(appSource, /上市行情日[\s\S]*上櫃行情日[\s\S]*後台全市場日[\s\S]*三組共同分析日/,
-  "the administrator console must compare each date without relabelling one source as another");
-assert.match(appSource, /latestCommonRankingDate[\s\S]*groups\.size===3/,
-  "the shared analysis date must be finalized by all three market groups");
+  "local date defaults must use Asia/Taipei");
 assert.match(appSource, /history\.scrollRestoration='manual'/,
   "Safari and installed PWAs must not restore an obsolete home-page scroll offset");
 assert.match(appSource, /S\.tab==='home'&&\(event\.persisted\|\|initialHomeScrollPending\)/,
@@ -395,23 +403,29 @@ assert.match(appSource, /settleInitialHomeScroll\(\)[\s\S]*loadFundamentals\(\)/
   "the first complete market render must settle at the top before asynchronous enrichment");
 assert.match(appSource, /navigateToTab[\s\S]*resetPageScroll\(\)/,
   "opening a different page must not inherit the previous page scroll offset");
-assert.match(appSource, /twss_admin_schedule_status/,
-  "the administrator console must verify that evening reconciliation is installed");
-assert.match(appSource, /校正排程缺失[\s\S]*晚間日期校正排程未安裝或已停用/,
-  "the administrator must distinguish a missing cron from a normal pending reconciliation");
-assert.match(appSource, /className:\['healthy','ready','success','final'\]\.includes\(status\)\?'ok'/,
-  "healthy administrator states must render with the success style");
-assert.match(appSource, /isAdmin:false,adminState:'idle',adminLog:null/,
-  "administrator access must fail closed before the authenticated RPC check completes");
-assert.match(appSource, /twss_is_admin[\s\S]*\)\)===true/,
-  "the administrator entry must require a strict true response from the protected RPC");
-assert.match(appSource, /S\.tab==='admin'&&!S\.isAdmin\)S\.tab='home'/,
-  "direct navigation to the administrator page must be guarded independently of the hidden button");
-assert.match(appSource, /twss_admin_operations_log/);
+assert.match(appSource, /CORE_SUPABASE_URL='https:\/\/gxwrczuwshndnjactrij\.supabase\.co'/,
+  "the main application must use CORE for Auth and per-user data");
+assert.match(appSource, /CORE_SESSION_KEY='twss-core-session-v18'/,
+  "the main application must isolate its CORE session");
+assert.doesNotMatch(appSource, /https:\/\/lfkdkdyaatdlizryiyon\.supabase\.co/,
+  "the main application must not have a direct MARKET destination for its CORE JWT");
+assert.match(appSource, /function userDataKey\(kind,userId=sessionUserId\(\)\)/,
+  "local user data must be partitioned by the authenticated CORE user id");
+assert.match(appSource, /upsertPredictionCloud\(record,owner=sessionUserId\(\)\)[\s\S]*sessionUserId\(\)!==owner/,
+  "an in-flight write must be abandoned if the active account changes");
+assert.match(appSource, /deleteJournalRecord\(localId,owner=sessionUserId\(\)\)[\s\S]*getJournal\(owner\)/,
+  "failed deletes must restore only the original account's local data");
+assert.match(appSource, /cloudPred=\(pred\|\|\[\]\)[\s\S]*setPredictions\(cloudPred,userId\)/,
+  "an empty cloud result must clear stale local predictions for that account");
+assert.match(appSource, /cloudJournal=\(journal\|\|\[\]\)[\s\S]*setJournal\(cloudJournal,userId\)/,
+  "an empty cloud result must clear stale local journal data for that account");
+assert.match(appSource, /watchlist_groups[\s\S]*watchlist_items/,
+  "the implemented watchlist must sync through CORE");
+assert.match(appSource, /function navigateToTab\(tab\)\{if\(tab==='admin'\)return/,
+  "direct navigation must not restore the removed embedded administrator flow");
 assert.match(appSource, /\/auth\/v1\/logout/,
-  "logout must revoke the Supabase session before local administrator data is cleared");
-assert.match(appSource, /clearAdminState\(\)[\s\S]*S\.adminLog=null/,
-  "logout or authorization loss must remove administrator data from memory");
+  "logout must revoke the CORE Supabase session before clearing it locally");
+assert.match(adminScriptSource, /twss_admin_operations_log/);
 assert.doesNotMatch(appSource, /SUPABASE_(?:SERVICE_ROLE|SECRET)_KEY|sb_secret_/,
   "administrator UI source must never contain a server secret");
 assert.doesNotMatch(appSource, /資料健康中心|data-health|loadDataHealth|openDataHealth|statusCard|refreshDataHealth/,
@@ -421,7 +435,7 @@ assert.doesNotMatch(appSource, /gemini|ai[-_ ]?research|AI 研究|AI 摘要|data
 assert.doesNotMatch(appSource, /廣告|促銷|VIP|贊助|免費試用|立即購買|解鎖/);
 assert.doesNotMatch(appSource, /_\=\$\{Date\.now\(\)\}/);
 
-const patchResponse = await worker.fetch(new Request("https://example.test/patch.js?v=17.3.3"), {}, {});
+const patchResponse = await worker.fetch(new Request("https://example.test/patch.js?v=18.0.0"), {}, {});
 const patchSource = await patchResponse.text();
 assert.match(patchSource, /候選比較/);
 assert.match(patchSource, /同一組最多比較 4 檔/);
@@ -431,10 +445,14 @@ assert.match(patchSource, /匯出上市 CSV/);
 assert.match(patchSource, /匯出上櫃 CSV/);
 assert.match(patchSource, /匯出 ETF CSV/);
 assert.match(patchSource, /正式排名累積中/);
+assert.match(patchSource, /userData\.saveJournal/,
+  "the patched journal editor must use the CORE-aware save path");
+assert.match(patchSource, /userData\.deleteJournal/,
+  "the patched journal delete action must delete from CORE as well as local storage");
 assert.doesNotMatch(patchSource, /gemini|ai[-_ ]?research|AI 研究|AI 摘要|data-ai/i,
   "paid research UI and endpoints must remain removed from the comparison release");
 
-const smartResponse = await worker.fetch(new Request("https://example.test/smart.js?v=17.3.3"), {}, {});
+const smartResponse = await worker.fetch(new Request("https://example.test/smart.js?v=18.0.0"), {}, {});
 const smartSource = await smartResponse.text();
 assert.match(smartSource, /機會股排行/);
 assert.match(smartSource, /風險排除 → 成長確認 → 籌碼確認 → 價量進場判斷/);
@@ -456,7 +474,7 @@ assert.doesNotMatch(smartSource, /資料健康中心|data-health|statusCard/,
   "the ranking override must not restore the removed health-center entry");
 assert.doesNotMatch(smartSource, /廣告|促銷|VIP|贊助|免費試用|立即購買|解鎖/);
 
-const stylesResponse = await worker.fetch(new Request("https://example.test/styles.css?v=17.3.3"), {}, {});
+const stylesResponse = await worker.fetch(new Request("https://example.test/styles.css?v=18.0.0"), {}, {});
 const stylesSource = await stylesResponse.text();
 assert.match(stylesSource, /min-width:48px/);
 assert.match(stylesSource, /max-height:min\(76dvh,640px\)/);

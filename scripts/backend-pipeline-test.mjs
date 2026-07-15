@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import { FINMIND_PROFILES, selectFinmindProfile } from "../src/finmind-profile.js";
 
-const [sync, baseSchema, schema, grants, cron, acceleratedCron, leases, quota, publicHistoryQuota, preserve, repairQueue, clearEtfRepairs, etfDirectionRepair, lateCoverageRepair, clearOldVersionRepairs, trim, config, marketHandler, workflow, exporter, backtest, freeInsights, backtestSchema, hardening, diagnosticPrivacy, adminDashboard, dateReconcile] = await Promise.all([
+const [sync, baseSchema, schema, grants, cron, acceleratedCron, leases, quota, publicHistoryQuota, preserve, repairQueue, clearEtfRepairs, etfDirectionRepair, lateCoverageRepair, clearOldVersionRepairs, trim, config, marketHandler, workflow, exporter, backtest, freeInsights, backtestSchema, hardening, diagnosticPrivacy, adminDashboard, dateReconcile, finmindVault] = await Promise.all([
   readFile(new URL("../supabase/functions/twss-sync-batch/index.ts", import.meta.url), "utf8"),
   readFile(new URL("../supabase/migrations/20260714040000_base_schema.sql", import.meta.url), "utf8"),
   readFile(new URL("../supabase/migrations/20260714090000_add_persistent_stock_backend.sql", import.meta.url), "utf8"),
@@ -29,6 +30,7 @@ const [sync, baseSchema, schema, grants, cron, acceleratedCron, leases, quota, p
   readFile(new URL("../supabase/migrations/20260715201357_restrict_health_diagnostics_admin_only.sql", import.meta.url), "utf8"),
   readFile(new URL("../supabase/migrations/20260715205510_add_admin_health_dashboard.sql", import.meta.url), "utf8"),
   readFile(new URL("../supabase/migrations/20260715210000_add_evening_market_date_reconciliation.sql", import.meta.url), "utf8"),
+  readFile(new URL("../supabase/migrations/20260715235500_secure_finmind_vault.sql", import.meta.url), "utf8"),
 ]);
 
 const hardenedBacktest = hardening.match(
@@ -44,8 +46,13 @@ const restrictedContext = diagnosticPrivacy.match(
   /create or replace function public\.twss_get_stock_context[\s\S]*?grant execute on function public\.twss_get_stock_context/,
 )?.[0] || "";
 
-assert.match(sync, /FINMIND_AUTHENTICATED \? 22 : 10/, "reused company batches must double throughput inside the same request slice");
-assert.match(sync, /FINMIND_AUTHENTICATED \? 23 : 19/, "ETF batches must use their fair rolling-hour slice");
+assert.equal(selectFinmindProfile("   "), FINMIND_PROFILES.public, "blank credentials must stay on the 300/hour profile");
+assert.equal(selectFinmindProfile("configured"), FINMIND_PROFILES.authenticated);
+assert.equal(FINMIND_PROFILES.authenticated.scheduledClaimPerHour, 597,
+  "authenticated cron demand must approach 600/hour while retaining safety headroom");
+assert.ok(FINMIND_PROFILES.authenticated.scheduledClaimPerHour <= FINMIND_PROFILES.authenticated.hourlyLimit);
+assert.match(sync, /access\.profile\.companyBatchLimit/, "company batches must use the selected FinMind profile");
+assert.match(sync, /access\.profile\.etfBatchLimit/, "ETF batches must use the selected FinMind profile");
 assert.match(sync, /twss_reserve_api_batch/, "every persistent batch must reserve the shared FinMind budget");
 assert.match(sync, /return 4 \+ \(reusableRevenue \? 0 : 1\) \+ \(reusableFinancial \? 0 : 3\)/, "request cost must reflect reusable history");
 assert.match(sync, /cursor_offset: processed/, "successful batches must persist their verified count");
@@ -61,7 +68,7 @@ assert.match(sync, /next_retry_at/, "failed symbols must use persisted retry bac
 assert.match(sync, /previous\?\.status === "ready"/, "a refresh failure must preserve the last-known-good analysis");
 assert.match(sync, /currentQuote: stock/, "same-day official quotes must close the historical provider lag");
 assert.match(sync, /serveOnDemandHistory/, "missing per-symbol history must use the persistent on-demand path");
-assert.match(sync, /reserveFinmindBatch\(\[1\], 0, 1/, "on-demand history must reserve exactly one shared API unit");
+assert.match(sync, /reserveFinmindBatch\(access, \[1\], 0, 1/, "on-demand history must reserve exactly one shared API unit");
 assert.match(sync, /buildPriceHistory[\s\S]*finmindRetries: 0/, "a one-unit reservation must not hide in-request FinMind retries");
 assert.match(sync, /stock_price_history[\s\S]*symbol,trade_date/, "on-demand history must be persisted for later requests");
 assert.match(sync, /HISTORY_PENDING/, "a full hourly budget must return a structured pending state");
@@ -73,7 +80,13 @@ assert.match(sync, /bypassCache: true/, "reserved scheduled calls must not be hi
 assert.match(sync, /passesPreflight\(stock, group\)/, "liquidity and hard-risk exclusions must run before expensive history requests");
 assert.match(sync, /missingRevenueParams\.set\("raw_data->>revenue", "is\.null"\)/, "the deep queue must identify cross-section revenue gaps explicitly");
 assert.match(sync, /const backfillSlots = group === "etf" \? 0 : Math\.max\(1, Math\.ceil\(limit \/ 2\)\)/, "company batches must reserve half their slots for missing-revenue repair");
-assert.match(sync, /FINMIND_AUTHENTICATED \? 88 : 50/, "free-level company batches may claim up to 50 calls while the shared ledger enforces 300 per rolling hour");
+assert.match(sync, /access\.profile\.companyClaimCap/, "company reservations must use the selected 300\/600 profile");
+assert.match(sync, /rpc\/twss_finmind_token/, "the worker must support a service-role Vault fallback");
+assert.match(sync, /finmindToken: access\.token/, "the Vault credential must stay in memory and be passed directly to the provider client");
+assert.match(sync, /if \(finmindProviderPaused\(error\)\) break/,
+  "a global FinMind auth or quota error must stop the remaining symbol batch");
+assert.doesNotMatch(sync, /console\.(?:log|info|warn|error)\([^\n]*finmindAccess\.token/i,
+  "the resolved FinMind credential must never be logged");
 assert.doesNotMatch(sync.match(/function compactDeep[\s\S]*?\n}/)?.[0] || "", /priceHistory:/, "rank caches must not duplicate price history");
 assert.match(sync, /row\[key\] === undefined \? null : row\[key\]/, "bulk rows must preserve missing values as null");
 assert.match(sync, /for \(const row of rows\)/, "a failed symbol must not cancel sibling symbols");
@@ -189,6 +202,11 @@ assert.match(publicHistoryQuota, /metadata ->> 'job' = 'public_history'/);
 assert.match(publicHistoryQuota, /then 60 else 30/, "interactive repair must have a separate hourly allowance");
 assert.match(publicHistoryQuota, /then 20 else 10/, "interactive repair must preserve scheduled-job headroom without blocking near-limit repairs");
 assert.match(publicHistoryQuota, /pg_advisory_xact_lock/, "public and scheduled reservations must remain atomic");
+assert.match(finmindVault, /from vault\.decrypted_secrets/);
+assert.match(finmindVault, /security definer[\s\S]*set search_path = ''/,
+  "the Vault reader must use a fixed search path");
+assert.match(finmindVault, /revoke all on function public\.twss_finmind_token\(\)[\s\S]*from public, anon, authenticated/);
+assert.match(finmindVault, /grant execute on function public\.twss_finmind_token\(\)[\s\S]*to service_role/);
 assert.match(preserve, /last_attempt_at/);
 assert.match(preserve, /'43 6 \* \* 1-5'/);
 assert.match(repairQueue, /needs_repair boolean not null default false/);

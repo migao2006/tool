@@ -2,6 +2,20 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { deepDataInternals } from "../src/deep-data.js";
 
+assert.equal(deepDataInternals.finmindCooldownMs({ status: 401 }), 60 * 60 * 1_000);
+assert.equal(
+  deepDataInternals.finmindCooldownMs({ status: 400, message: "Invalid access token" }),
+  60 * 60 * 1_000,
+  "credential failures returned inside a FinMind payload must open the circuit",
+);
+assert.equal(deepDataInternals.finmindCooldownMs({ status: 429, retryAfter: 120 }), 120 * 1_000);
+assert.equal(deepDataInternals.finmindCooldownMs({ status: 429, retryAfter: 15 }), 60 * 1_000);
+assert.equal(
+  deepDataInternals.finmindCooldownMs({ status: 400, message: "Dataset not available" }),
+  0,
+  "a dataset-specific 400 must not pause unrelated FinMind datasets",
+);
+
 const deepDataSource = await readFile(new URL("../src/deep-data.js", import.meta.url), "utf8");
 assert.match(deepDataSource, /finmind\("TaiwanStockPrice", symbol/);
 assert.doesNotMatch(

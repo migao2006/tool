@@ -7,7 +7,7 @@ const SUPABASE_PUBLIC_KEY =
   env.SUPABASE_PUBLISHABLE_KEY || env.SUPABASE_ANON_KEY || DEFAULT_PUBLIC_KEY;
 const EXPECTED_ANALYSIS_VERSION = "16.3-ultimate-data-audit";
 const SCORE_MODEL_VERSION = "16.3";
-const PUBLIC_API_VERSION = "17.3";
+const PUBLIC_API_VERSION = "17.2";
 
 const finite = (value) => value != null && Number.isFinite(Number(value));
 
@@ -116,81 +116,6 @@ function normalizeStoredRow(row, currentDataDate = null) {
   };
 }
 
-function safeErrorCode(value) {
-  if (value == null || String(value).trim() === "") return null;
-  const message = String(value).toLowerCase();
-  if (/(^|\D)429(\D|$)|rate.?limit|quota|too many requests/.test(message)) return "rate_limited";
-  if (/(^|\D)(408|504)(\D|$)|timeout|timed out|abort/.test(message)) return "upstream_timeout";
-  if (/(^|\D)(401|403)(\D|$)|unauthori[sz]ed|forbidden|credential|api.?key/.test(message)) {
-    return "upstream_authentication_failed";
-  }
-  if (/(^|\D)404(\D|$)|not found/.test(message)) return "upstream_not_found";
-  if (/(^|\D)(500|502|503)(\D|$)|network|fetch|econn|socket|dns/.test(message)) {
-    return "upstream_unavailable";
-  }
-  if (/(^|\D)(400|409|422)(\D|$)|invalid|validation/.test(message)) return "invalid_upstream_response";
-  return "sync_error";
-}
-
-function compactRankingFinalization(value) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-  const compact = pick(value, ["status", "attemptedAt"]);
-  if (value.result && typeof value.result === "object") {
-    compact.result = pick(value.result, [
-      "group", "scoreDate", "modelVersion", "expected", "scored", "official", "status",
-    ]);
-  }
-  if (value.backtest && typeof value.backtest === "object") {
-    compact.backtest = pick(value.backtest, [
-      "status", "group", "modelVersion", "rowsAffected", "evaluatedAt",
-    ]);
-    const backtestErrorCode = safeErrorCode(value.backtest.error || value.backtest.message);
-    if (backtestErrorCode) compact.backtest.errorCode = backtestErrorCode;
-  }
-  const errorCode = safeErrorCode(value.error || value.message);
-  if (errorCode) compact.errorCode = errorCode;
-  return compact;
-}
-
-function failureSummary(failures) {
-  if (!Array.isArray(failures) || !failures.length) return undefined;
-  const byCode = failures.reduce((counts, failure) => {
-    const code = safeErrorCode(failure?.error || failure?.message || failure) || "sync_error";
-    counts[code] = (counts[code] || 0) + 1;
-    return counts;
-  }, {});
-  return { count: failures.length, byCode };
-}
-
-function compactSyncState(row) {
-  if (!row || typeof row !== "object") return row;
-  // This object is returned by public endpoints.  Keep only operational
-  // progress fields and stable codes: service URLs, lease tokens, raw upstream
-  // errors and per-symbol exception messages must remain server-side.
-  const compact = pick(row, [
-    "job_key", "group_name", "cycle_date", "cursor_offset", "total_items",
-    "processed_count", "cycle_number", "status", "started_at", "last_success_at",
-    "next_run_at", "updated_at",
-  ]);
-  const lastErrorCode = safeErrorCode(row.last_error);
-  if (lastErrorCode) compact.last_error_code = lastErrorCode;
-
-  const source = row.details && typeof row.details === "object" && !Array.isArray(row.details)
-    ? row.details
-    : {};
-  const details = pick(source, [
-    "counts", "eligibleCounts", "groupDates", "remaining", "waitingRetry",
-    "revenueBackfillPending", "verified", "batchSize", "batchLimit", "finmindQuota",
-    "refreshCycle", "completedCycleKey", "completedCycleAt", "version",
-  ]);
-  const failures = failureSummary(source.failures);
-  if (failures) details.failureSummary = failures;
-  const rankingFinalization = compactRankingFinalization(source.rankingFinalization);
-  if (rankingFinalization) details.rankingFinalization = rankingFinalization;
-  compact.details = details;
-  return compact;
-}
-
 function rpcObject(data, fallback = {}) {
   if (data && typeof data === "object" && !Array.isArray(data)) return data;
   if (Array.isArray(data) && data[0] && typeof data[0] === "object") return data[0];
@@ -293,19 +218,10 @@ export async function readBackendRankings(limit = 100) {
     "symbol,group_name,data_date,score,confidence,official,tier,stock,analysis,result,updated_at",
   );
   const groups = ["listed", "otc", "etf"];
-  const [stateResult, cycleEntries] = await Promise.all([
-    request(
-      "stock_sync_state?select=*&job_key=in.(universe,deep_listed,deep_otc,deep_etf)&order=job_key.asc",
-    ).catch(() => ({ data: [] })),
-    Promise.all(groups.map(async (group) => [group, await readFinalCycles(group)])),
-  ]);
-  const states = Array.isArray(stateResult.data) ? stateResult.data : [];
+  const cycleEntries = await Promise.all(
+    groups.map(async (group) => [group, await readFinalCycles(group)]),
+  );
   const cyclesByGroup = Object.fromEntries(cycleEntries);
-  const universeState = states.find((row) => row.job_key === "universe");
-  const groupDates = Object.fromEntries(groups.map((group) => [
-    group,
-    universeState?.details?.groupDates?.[group] || universeState?.cycle_date || null,
-  ]));
   const filters = (group) => [
     `group_name=eq.${group}`,
     "status=eq.ready",
@@ -324,6 +240,11 @@ export async function readBackendRankings(limit = 100) {
     ])),
   ]);
   const rawGroups = Object.fromEntries(rowsByGroup);
+  const groupDates = Object.fromEntries(groups.map((group) => [
+    group,
+    cyclesByGroup[group]?.[0]?.score_date ||
+      rawGroups[group].map((row) => row.data_date).filter(Boolean).sort().at(-1) || null,
+  ]));
   const scoresByGroup = Object.fromEntries(scoreEntries);
   const scoreRanksByGroup = Object.fromEntries(groups.map((group) => [
     group,
@@ -367,7 +288,6 @@ export async function readBackendRankings(limit = 100) {
     backend: {
       persistent: true,
       counts: Object.fromEntries(groups.map((group, index) => [group, counts[index]])),
-      sync: states.map(compactSyncState),
       rankingCycles: Object.fromEntries(groups.map((group) => [group, cyclesByGroup[group]])),
     },
   };
@@ -405,7 +325,7 @@ export async function readBackendHistory(symbol, limit = 280) {
 export async function readBackendAnalysis(symbol) {
   if (!/^\d{4,6}[A-Z]?$/i.test(String(symbol || ""))) throw new Error("股票代號格式不正確");
   const select = encodeURIComponent(
-    "symbol,group_name,data_date,stock,analysis,result,analysis_version,status,last_error,fetched_at,updated_at",
+    "symbol,group_name,data_date,stock,analysis,result,analysis_version,status,fetched_at,updated_at",
   );
   const [cacheResult, contextResult] = await Promise.all([
     request(
@@ -445,10 +365,18 @@ export async function readBackendAnalysis(symbol) {
 // presented as same-day live data.
 export async function readBackendMarketStocks(group) {
   if (!['listed', 'otc', 'etf'].includes(group)) return { date: null, stocks: [] };
-  const { data: states } = await request(
-    'stock_sync_state?select=cycle_date&job_key=eq.universe&limit=1',
-  );
-  const date = Array.isArray(states) ? states[0]?.cycle_date : null;
+  const dateParams = new URLSearchParams({
+    select: 'trade_date',
+    order: 'trade_date.desc',
+    limit: '1',
+  });
+  if (group === 'etf') dateParams.set('instrument_type', 'eq.ETF');
+  else {
+    dateParams.set('instrument_type', 'neq.ETF');
+    dateParams.set('market', `eq.${group === 'otc' ? '上櫃' : '上市'}`);
+  }
+  const { data: latestRows } = await request(`stock_snapshots?${dateParams}`);
+  const date = Array.isArray(latestRows) ? latestRows[0]?.trade_date : null;
   if (!date) return { date: null, stocks: [] };
   const params = new URLSearchParams({
     select: 'symbol,trade_date,market,industry,instrument_type,open,high,low,close,change_pct,volume,trade_value,transactions,pe,pb,dividend_yield,revenue_growth,eps,roe,debt_ratio,foreign_buy,trust_buy,dealer_buy,institutional_buy,margin_balance,margin_change,short_balance,short_change,is_disposition,is_full_delivery,raw_data,source_dates',
@@ -499,20 +427,6 @@ export async function readBackendMarketStocks(group) {
   return { date, stocks };
 }
 
-export async function readDataHealth() {
-  const [healthResult, missingResult] = await Promise.all([
-    request("rpc/twss_public_data_health"),
-    request("rpc/twss_public_missing_data?p_limit=40")
-      .catch(() => ({ data: { summary: [], examples: [], status: "unavailable" } })),
-  ]);
-  return {
-    mode: "live",
-    ...rpcObject(healthResult.data, {}),
-    version: PUBLIC_API_VERSION,
-    missingData: rpcObject(missingResult.data, { summary: [], examples: [] }),
-  };
-}
-
 export async function readRankingBacktest() {
   const { data } = await request(
     `rpc/twss_public_ranking_backtest?p_model_version=${encodeURIComponent(SCORE_MODEL_VERSION)}`,
@@ -525,24 +439,10 @@ export async function readRankingBacktest() {
   };
 }
 
-export async function readBackendStatus() {
-  const { data } = await request(
-    "stock_sync_state?select=*&job_key=in.(universe,deep_listed,deep_otc,deep_etf)&order=job_key.asc",
-  );
-  return {
-    mode: "live",
-    version: PUBLIC_API_VERSION,
-    persistent: true,
-    jobs: Array.isArray(data) ? data.map(compactSyncState) : [],
-  };
-}
-
 export const backendStoreInternals = {
   request,
   countRows,
   normalizeStoredRow,
-  compactSyncState,
-  safeErrorCode,
   compactRankingStock,
   compactRankingAnalysis,
   rpcObject,

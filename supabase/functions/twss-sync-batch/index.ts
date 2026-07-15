@@ -102,6 +102,41 @@ async function patchState(jobKey: string, values: Record<string, unknown>) {
   });
 }
 
+async function finalizeRankingCycle(group: Group, date: string, total: number) {
+  const attemptedAt = now();
+  try {
+    const { data } = await rest("rpc/twss_finalize_ranking_cycle", {
+      method: "POST",
+      body: {
+        p_group_name: group,
+        p_score_date: date,
+        p_model_version: VERSION,
+        p_expected_count: Math.max(0, Math.round(total)),
+      },
+    });
+    let backtest: unknown = null;
+    try {
+      const evaluated = await rest("rpc/twss_evaluate_matured_backtests", {
+        method: "POST",
+        body: { p_group_name: group, p_model_version: VERSION },
+      });
+      backtest = evaluated.data || null;
+    } catch (error) {
+      // The evaluator uses only stored prices and scores.  It is observational
+      // and must not turn a completed market sync into a failed cycle.
+      backtest = { status: "error", error: error instanceof Error ? error.message : String(error) };
+      console.error("[ranking-backtest] evaluation failed", { group, date, error: backtest });
+    }
+    return { status: "final", attemptedAt, result: data || null, backtest };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    // Ranking history is an observation layer.  A transient finalization
+    // failure must never roll back the completed market-data synchronization.
+    console.error("[ranking-cycle] finalization failed", { group, date, error: message });
+    return { status: "error", attemptedAt, error: message.slice(0, 1000) };
+  }
+}
+
 async function getState(jobKey: string) {
   const { data } = await rest(`stock_sync_state?select=*&job_key=eq.${encodeURIComponent(jobKey)}&limit=1`);
   return Array.isArray(data) ? data[0] : null;
@@ -1098,6 +1133,9 @@ async function syncDeepUnlocked(group: Group, requestedLimit: number) {
   if (!rows.length) {
     const completionKey = `${date}:${ANALYSIS_VERSION}`;
     const completedNow = currentCount === total && total > 0 && state?.details?.completedCycleKey !== completionKey;
+    const rankingFinalization = completedNow
+      ? await finalizeRankingCycle(group, date, total)
+      : null;
     await patchState(jobKey, {
       status: "success",
       last_success_at: now(),
@@ -1108,6 +1146,7 @@ async function syncDeepUnlocked(group: Group, requestedLimit: number) {
       details: {
         ...(state?.details || {}),
         ...(completedNow ? { completedCycleKey: completionKey, completedCycleAt: now() } : {}),
+        ...(completedNow ? { rankingFinalization } : {}),
         message: waitingRetry ? "Waiting for retry backoff" : "No candidates",
         waitingRetry,
         revenueBackfillPending,
@@ -1236,6 +1275,9 @@ async function syncDeepUnlocked(group: Group, requestedLimit: number) {
   const processed = Math.min(total, currentCount + newlyPersisted);
   const completionKey = `${date}:${ANALYSIS_VERSION}`;
   const completedNow = processed === total && total > 0 && state?.details?.completedCycleKey !== completionKey;
+  const rankingFinalization = completedNow
+    ? await finalizeRankingCycle(group, date, total)
+    : null;
   await patchState(jobKey, {
     status: failures.length ? "partial" : "success",
     cursor_offset: processed,
@@ -1248,6 +1290,7 @@ async function syncDeepUnlocked(group: Group, requestedLimit: number) {
     details: {
       ...(state?.details || {}),
       ...(completedNow ? { completedCycleKey: completionKey, completedCycleAt: now() } : {}),
+      ...(completedNow ? { rankingFinalization } : {}),
       successes,
       failures,
       batchSize: rows.length,

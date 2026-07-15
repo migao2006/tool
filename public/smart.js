@@ -97,7 +97,7 @@
 
   function categoryBars(result) {
     if (!result.categories?.length) return '<div class="muted small">歷史深度資料尚未完成，因此不顯示假精準的分項分數。</div>';
-    return `<div class="ultimate-factors">${result.categories.map(category => `<div class="ultimate-factor"><span>${esc(category.label)}</span><div><i style="width:${category.score ?? 0}%"></i></div><b>${category.score == null ? '—' : fmt(category.score, 0)}</b><small>${fmt(category.coverage, 0)}%</small></div>`).join('')}</div>`;
+    return `<div class="ultimate-factors">${result.categories.map(category => `<div class="ultimate-factor"><span>${esc(category.label)}</span><div role="progressbar" aria-label="${esc(category.label)}分數" aria-valuemin="0" aria-valuemax="100"${category.score == null ? '' : ` aria-valuenow="${fmt(category.score, 0)}"`}><i style="width:${category.score ?? 0}%"></i></div><b>${category.score == null ? '—' : fmt(category.score, 0)}</b><small>${fmt(category.coverage, 0)}%</small></div>`).join('')}</div>`;
   }
 
   function companyMetrics(row) {
@@ -138,6 +138,16 @@
       ${metric('20 日相對大盤', finite(price.relative20) ? pct(price.relative20) : reasonDash('指數或價格不足'))}
       ${metric('營業利益率', finite(financial.operatingMargin) ? `${fmt(financial.operatingMargin)}%` : reasonDash('財報不足'), finite(financial.operatingMarginYoyChange) ? `年變化 ${pct(financial.operatingMarginYoyChange)}` : '')}
       ${metric('近四季現金轉換', cashConversionLabel, finite(financial.ttmOperatingCashFlow) ? `TTM 營業現金流 ${fmt(financial.ttmOperatingCashFlow / 100000000)} 億` : financial.cashConversionBasis === 'latest-quarter' ? '近四季不足，暫用最新季' : 'TTM 平滑單季營運資金波動')}`;
+  }
+
+  function companyKeyMetrics(row) {
+    const revenue = row.analysis?.revenue || {};
+    const chip = row.analysis?.institutional || {};
+    const price = row.analysis?.price || {};
+    return `${metric('3 月平均營收年增', finite(revenue.avg3Yoy) ? pct(revenue.avg3Yoy) : reasonDash('歷史不足'), revenue.period || '')}
+      ${metric('營收加速度', finite(revenue.acceleration3) ? pct(revenue.acceleration3) : reasonDash('歷史不足'), revenue.consecutiveAcceleration ? `連升 ${revenue.consecutiveAcceleration} 期` : '')}
+      ${metric('20 日法人買賣超', finite(chip.inst20) ? `${fmt(chip.inst20, 0)} 張` : reasonDash('歷史不足'), finite(chip.intensity5) ? `近 5 日占量 ${fmt(chip.intensity5, 1)}%` : '')}
+      ${metric('20 日相對大盤', finite(price.relative20) ? pct(price.relative20) : reasonDash('指數或價格不足'))}`;
   }
 
   function dataNotes(row) {
@@ -204,6 +214,33 @@
       ${metric('基金結構', etf.leveraged ? '槓桿型' : etf.inverse ? '反向型' : etf.fundType ? '一般型' : reasonDash('未辨識'))}`;
   }
 
+  function etfKeyMetrics(row) {
+    const price = row.analysis?.price || {};
+    return `${metric('20 日動能', finite(price.return20) ? pct(price.return20) : reasonDash('歷史不足'))}
+      ${metric('相對市場', finite(price.relative20) ? pct(price.relative20) : reasonDash('指數不足'))}
+      ${metric('5／20 日量能比', finite(price.volumeRatio) ? `${fmt(price.volumeRatio)} 倍` : reasonDash('歷史不足'))}
+      ${metric('ATR 波動', finite(price.atrPct) ? `${fmt(price.atrPct)}%` : reasonDash('歷史不足'))}`;
+  }
+
+  function trendFor(row) {
+    return row.result?.trend || row.trend || row.context?.trend || row.analysis?.context?.trend || row.analysis?.trend || null;
+  }
+
+  function trendBadges(row) {
+    const trend = trendFor(row), status = String(trend?.status || '').toLowerCase();
+    const rankDelta = finite(trend?.rankDelta) ? Number(trend.rankDelta) : null;
+    const scoreDelta = finite(trend?.scoreDelta) ? Number(trend.scoreDelta) : null;
+    const previousRank = finite(trend?.previousRank) ? Number(trend.previousRank) : null;
+    const historyCount = Array.isArray(trend?.history) ? trend.history.length : Number(trend?.count || 0);
+    if (['accumulating', 'insufficient', 'pending'].includes(status) || (rankDelta == null && scoreDelta == null && previousRank == null)) {
+      return `<div class="smart-trend"><span class="tag warn">歷史分數累積中${historyCount ? ` · ${historyCount} 份` : ''}</span></div>`;
+    }
+    const values = [];
+    if (rankDelta != null) values.push(`<span class="tag info">排名 ${rankDelta > 0 ? `↑${fmt(rankDelta, 0)}` : rankDelta < 0 ? `↓${fmt(Math.abs(rankDelta), 0)}` : '持平'}</span>`);
+    if (scoreDelta != null) values.push(`<span class="tag ${scoreDelta < 0 ? 'warn' : ''}">分數 ${scoreDelta > 0 ? '+' : ''}${fmt(scoreDelta, 1)}</span>`);
+    return `<div class="smart-trend">${values.join('')}</div>`;
+  }
+
   function opportunityCard(row, rank) {
     const { stock, result } = row;
     const formal = result.official;
@@ -211,27 +248,34 @@
     const missingCount = notes.filter(note => !['na', 'pending'].includes(note.type)).length;
     const risks = [...(result.risk?.hardReasons || []), ...(result.risk?.flags || [])];
     const category = result.categories?.slice().sort((a, b) => (b.score ?? -1) - (a.score ?? -1))[0];
+    const mainReasons = [...new Set([...(result.archetypes || []), ...(result.reasons || [])])].slice(0, 2);
+    const confidence = finite(result.confidence) ? Math.max(0, Math.min(100, Number(result.confidence))) : 0;
+    const keyMetrics = selectedGroup === 'etf' ? etfKeyMetrics(row) : companyKeyMetrics(row);
+    const allMetrics = selectedGroup === 'etf' ? etfMetrics(row) : companyMetrics(row);
     return `<article class="card ultimate-card ${formal ? 'formal' : 'provisional'}">
       <div class="ultimate-rank">${rank}</div>
       <div class="head"><div><div class="row wrap"><b class="smart-name">${esc(stock.name)}</b><span class="tag ${formal ? '' : 'warn'}">${formal ? '正式候選' : '驗證／信心未達標'}</span>${row.isStale ? `<span class="tag warn">沿用 ${esc(row.dataDate || '前次')} 驗證</span>` : ''}</div><div class="muted">${stock.symbol} · ${esc(groupLabels[selectedGroup])}${stock.industry ? ` · ${esc(stock.industry)}` : ''}</div></div><div class="smart-score"><small>最終分數</small><strong>${finite(result.score) ? result.score : '—'}</strong></div></div>
+      ${trendBadges(row)}
       <div class="smart-price"><span class="price">${fmt(stock.close)}</span><b class="${cls(stock.change)}">${pct(stock.change)}</b></div>
-      <div class="rules smart-reasons">${(result.archetypes || []).map(value => `<span>${esc(value)}</span>`).join('')}${(result.reasons || []).slice(0, 3).map(value => `<span>${esc(value)}</span>`).join('')}</div>
-      <div class="grid three ultimate-metrics">${selectedGroup === 'etf' ? etfMetrics(row) : companyMetrics(row)}</div>
-      ${categoryBars(result)}
-      <div class="ultimate-confidence"><div><span>資料信心</span><b>${result.confidence}%</b></div><div class="progress"><span style="width:${result.confidence}%"></span></div><small>${esc(result.tier || '')}${category ? ` · 最強項 ${esc(category.label)}` : ''}</small></div>
-      ${risks.length ? `<div class="ultimate-risk"><b>風險扣分 ${result.risk?.deduction || 0}</b>：${risks.map(esc).join('、')}</div>` : ''}
-      <details class="ultimate-missing"><summary>${missingCount ? `資料缺漏 ${missingCount} 項` : '資料狀態正常'}${notes.length > missingCount ? ` · ${notes.length - missingCount} 項待確認／不適用` : ''}</summary><div>${notes.length ? notes.map(note => `<span data-state="${note.type}">${esc(note.label)}</span>`).join('') : '<span data-state="complete">核心欄位完整</span>'}</div></details>
+      <div class="rules smart-reasons">${mainReasons.length ? mainReasons.map(value => `<span>${esc(value)}</span>`).join('') : '<span>等待深度原因資料</span>'}</div>
+      <div class="grid ultimate-key-metrics">${keyMetrics}</div>
+      <div class="ultimate-confidence"><div><span>資料信心</span><b>${fmt(confidence, 0)}%</b></div><div class="progress" role="progressbar" aria-label="${esc(stock.name)}資料信心" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${fmt(confidence, 0)}"><span style="width:${confidence}%"></span></div><small>${esc(result.tier || '')}${category ? ` · 最強項 ${esc(category.label)}` : ''}</small></div>
+      <details class="ultimate-research"><summary>展開完整研究資料</summary><div class="grid three ultimate-metrics">${allMetrics}</div>${categoryBars(result)}${risks.length ? `<div class="ultimate-risk"><b>風險扣分 ${result.risk?.deduction || 0}</b>：${risks.map(esc).join('、')}</div>` : ''}<div class="ultimate-missing embedded"><div>${notes.length ? notes.map(note => `<span data-state="${note.type}">${esc(note.label)}</span>`).join('') : '<span data-state="complete">核心欄位完整</span>'}</div></div><div class="muted small">${missingCount ? `資料缺漏 ${missingCount} 項` : '資料狀態正常'}${notes.length > missingCount ? ` · ${notes.length - missingCount} 項待確認／不適用` : ''}</div></details>
       <div class="row smart-actions"><button class="btn grow" data-forecast="${stock.symbol}">深度趨勢頁</button><button class="btn secondary" data-watch="${stock.symbol}">${isWatched(stock.symbol) ? '★ 已自選' : '＋自選'}</button></div>
     </article>`;
   }
 
   function backtestPanel() {
     const data = backtest || snapshot?.backtest;
-    if (!data || data.status !== 'ready') {
-      return `<section class="card"><div class="head"><div><h3>點時回測</h3><div class="muted">只使用當時已公開資料，不倒填未來財報。</div></div><span class="tag warn">累積中</span></div><p class="muted">${esc(data?.message || '每日快照開始累積後，至少 25 個交易日才公布結果。')} ${finite(data?.snapshotCount) ? `目前 ${data.snapshotCount} 份。` : ''}</p></section>`;
+    const groupHorizon = data?.byGroup?.[selectedGroup]?.['20'] || data?.byGroup?.[selectedGroup]?.[20] || null;
+    const ready = groupHorizon ? groupHorizon.status !== 'insufficient_history' && finite(groupHorizon.count) : data?.status === 'ready';
+    if (!data || !ready) {
+      const count = groupHorizon?.maturedDateCount ?? data?.snapshotCount;
+      const minimum = groupHorizon?.minimumSnapshots ?? data?.minimumSnapshots ?? 25;
+      return `<section class="card"><div class="head"><div><h3>點時回測</h3><div class="muted">訊號後次一交易日開盤進場，不倒填未來資料。</div></div><span class="tag warn">累積中</span></div><p class="muted">${esc(data?.message || `至少 ${minimum} 個成熟訊號日才公布結果。`)} ${finite(count) ? `目前 ${count} / ${minimum} 份。` : ''}</p></section>`;
     }
-    const horizon = data.horizons?.['20'] || data.horizons?.[20] || {};
-    return `<section class="card"><div class="head"><div><h3>點時回測</h3><div class="muted">排名前 10 · 不偷看未來 · 已累積 ${data.snapshotCount} 個交易日</div></div><span class="tag">可檢驗</span></div><div class="grid four">${metric('20 日平均報酬', pct(horizon.averageReturn))}${metric('20 日超額報酬', pct(horizon.averageExcessReturn))}${metric('20 日勝率', finite(horizon.winRate) ? `${fmt(horizon.winRate)}%` : '—')}${metric('平均最大回撤', pct(horizon.averageMae))}</div></section>`;
+    const horizon = groupHorizon || data.horizons?.['20'] || data.horizons?.[20] || {};
+    return `<section class="card"><div class="head"><div><h3>點時回測</h3><div class="muted">${groupLabels[selectedGroup]}排名前 10 · 次日開盤進場 · 不偷看未來</div></div><span class="tag">可檢驗</span></div><div class="grid four">${metric('20 日平均報酬', pct(horizon.averageReturn))}${metric('20 日超額報酬', pct(horizon.averageExcessReturn))}${metric('20 日勝率', finite(horizon.winRate) ? `${fmt(horizon.winRate)}%` : '—')}${metric('平均最大回撤', pct(horizon.averageMae))}</div></section>`;
   }
 
   opportunitiesPage = function () {
@@ -248,7 +292,7 @@
     return `<div class="smart-hero compact"><div><h2>機會股排行</h2><p>上市、上櫃與 ETF 分組評分；資料不足、待觀察與不適用會分開標示。</p></div><span class="status-pill ${stateClass}">${snapshotState === 'ready' ? (persistentCount ? `後端已累積 ${persistentCount} 檔` : '深度快照已載入') : snapshotState === 'error' ? '目前使用快照初篩' : '正在讀取深度快照'}</span></div>
       ${statusCard()}
       <details class="card ultimate-policy method-summary"><summary><b>評分方法</b><span class="tag info">${esc(ageLabel())}</span></summary><div class="muted">風險排除 → 成長確認 → 籌碼確認 → 價量進場判斷</div><div class="ultimate-pipeline"><span>硬性排除</span><i>→</i><span>成長 30</span><i>→</i><span>籌碼 25</span><i>→</i><span>價量 25</span><i>→</i><span>估值 10</span><i>→</i><span>環境 10</span></div><p class="muted">缺漏項目會移除權重並重正規化；資料信心低於 70% 不進正式榜。風險最高扣 30 分，交易限制與價格未還原直接排除。</p></details>
-      <section class="card smart-filter-card"><div class="head"><div><h3>獨立排行榜</h3><div class="muted">${groupNotes[selectedGroup]}</div></div><button id="ultimateRefresh" class="btn secondary">重新讀取</button></div><div class="smart-groups">${Object.entries(groupLabels).map(([group, label]) => `<button data-ultimate-group="${group}" class="${selectedGroup === group ? 'active' : ''}">${label}<small>${counts[group] || 0}</small></button>`).join('')}</div><div class="ultimate-controls"><label>榜單<select id="ultimateOfficial"><option value="official" ${officialOnly ? 'selected' : ''}>只看正式候選</option><option value="all" ${!officialOnly ? 'selected' : ''}>含驗證中候選</option></select></label><label>最低分數<input id="ultimateMinScore" type="number" min="0" max="100" value="${minimumScore}"></label>${selectedGroup === 'etf' ? '' : `<label>產業<select id="ultimateIndustry">${industries.map(value => `<option ${value === selectedIndustry ? 'selected' : ''}>${esc(value)}</option>`).join('')}</select></label>`}</div></section>
+      <section class="card smart-filter-card"><div class="head"><div><h3>獨立排行榜</h3><div class="muted">${groupNotes[selectedGroup]}</div></div><button id="ultimateRefresh" class="btn secondary">重新讀取</button></div><div class="smart-groups" role="group" aria-label="市場分組">${Object.entries(groupLabels).map(([group, label]) => `<button data-ultimate-group="${group}" class="${selectedGroup === group ? 'active' : ''}" aria-pressed="${selectedGroup === group}">${label}<small>${counts[group] || 0}</small></button>`).join('')}</div><div class="ultimate-controls"><label>榜單<select id="ultimateOfficial"><option value="official" ${officialOnly ? 'selected' : ''}>只看正式候選</option><option value="all" ${!officialOnly ? 'selected' : ''}>含驗證中候選</option></select></label><label>最低分數<input id="ultimateMinScore" type="number" min="0" max="100" value="${minimumScore}"></label>${selectedGroup === 'etf' ? '' : `<label>產業<select id="ultimateIndustry">${industries.map(value => `<option ${value === selectedIndustry ? 'selected' : ''}>${esc(value)}</option>`).join('')}</select></label>`}</div></section>
       <div class="smart-results-head"><div><h3>${groupLabels[selectedGroup]}正式排序</h3><div class="muted">深度驗證 ${verifiedCount} 檔 · 信心達標 ${formalCount} 檔 · 顯示 ${rows.length} 檔${snapshot?.backend?.persistent ? ' · 後端持續累積' : ''}</div></div><b>${snapshot?.groupDates?.[selectedGroup] || snapshot?.dataDate || S.date || '日期核對中'}</b></div>
       ${rows.length ? `<div class="list ultimate-results">${rows.map((row, index) => opportunityCard(row, index + 1)).join('')}</div>${rows.length >= visibleCount[selectedGroup] ? '<button id="ultimateMore" class="btn secondary load-more">再顯示 20 檔</button>' : ''}` : `<div class="card empty"><h3>目前沒有符合正式門檻的標的</h3><p class="muted">這不是錯誤：可能是資料信心未滿 70%、分數低於 ${minimumScore}，或所有候選被風險規則排除。可切換「含驗證中候選」查看原因。</p></div>`}
       ${backtestPanel()}
@@ -274,10 +318,14 @@
     if (S.tab === 'opportunities') render();
     let staticSnapshot = null;
     let backendSnapshot = null;
-    const backtestPromise = fetch(`/data/backtest.json?${force ? Date.now() : 'v=16.3'}`, { cache: 'no-store' })
-      .then(response => response.ok ? response.json() : null).catch(() => null);
+    const backtestPromise = fetch(`/api/market-data?type=ranking-backtest${force ? '&refresh=1' : ''}`, { cache: 'no-store' })
+      .then(response => response.ok ? response.json() : null)
+      .then(async payload => payload?.byGroup ? payload : fetch('/data/backtest.json?v=17.1', { cache: 'no-store' })
+        .then(response => response.ok ? response.json() : null).catch(() => null))
+      .catch(() => fetch('/data/backtest.json?v=17.1', { cache: 'no-store' })
+        .then(response => response.ok ? response.json() : null).catch(() => null));
     try {
-      const response = await fetch(`/api/market-data?type=backend-rankings&limit=40${force ? `&refresh=1&_=${Date.now()}` : ''}`, { cache: 'no-store' });
+      const response = await fetch(`/api/market-data?type=backend-rankings&limit=40${force ? '&refresh=1' : ''}`, { cache: 'no-store' });
       if (response.ok) {
         const payload = await response.json();
         if (payload?.groups) backendSnapshot = payload;
@@ -285,7 +333,7 @@
     } catch {}
     if (!backendSnapshot) {
       try {
-        const response = await fetch(`/data/latest.json?${force ? Date.now() : 'v=16.3'}`, { cache: 'no-store' });
+        const response = await fetch('/data/latest.json?v=17.1', { cache: 'no-store' });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const payload = await response.json();
         if (!payload.generatedAt || !payload.groups) throw new Error(payload.message || '每日快照尚未建立');
@@ -303,6 +351,7 @@
   }
 
   globalThis.twssUltimateSnapshot = () => snapshot;
+  globalThis.twssUltimateBacktest = () => backtest || snapshot?.backtest || null;
   const oldBind = bind;
   bind = function () { oldBind(); bindUltimate(); };
   const button = q('.bottom-nav [data-tab="opportunities"]');

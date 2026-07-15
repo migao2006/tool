@@ -1,9 +1,11 @@
 {
-  "version": "16.3",
-  "generatedAt": "2026-07-14T08:26:40.647Z",
+  "version": "17.1",
+  "generatedAt": "2026-07-15T04:35:00.788Z",
   "status": "insufficient_history",
+  "readiness": "accumulating",
   "snapshotCount": 0,
+  "observationCount": 0,
   "minimumSnapshots": 25,
   "noLookAhead": true,
-  "message": "目前有 0 個點時快照；至少 25 個不同交易日後才產生正式回測。"
+  "message": "目前有 0 個點時快照；每個市場與期間至少需要 25 個成熟訊號日，統計仍在累積。"
 }

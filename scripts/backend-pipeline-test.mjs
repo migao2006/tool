@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
-const [sync, baseSchema, schema, grants, cron, acceleratedCron, leases, quota, publicHistoryQuota, preserve, repairQueue, clearEtfRepairs, etfDirectionRepair, lateCoverageRepair, clearOldVersionRepairs, trim, config, marketHandler, workflow, exporter, backtest] = await Promise.all([
+const [sync, baseSchema, schema, grants, cron, acceleratedCron, leases, quota, publicHistoryQuota, preserve, repairQueue, clearEtfRepairs, etfDirectionRepair, lateCoverageRepair, clearOldVersionRepairs, trim, config, marketHandler, workflow, exporter, backtest, freeInsights, backtestSchema, hardening] = await Promise.all([
   readFile(new URL("../supabase/functions/twss-sync-batch/index.ts", import.meta.url), "utf8"),
   readFile(new URL("../supabase/migrations/20260714040000_base_schema.sql", import.meta.url), "utf8"),
   readFile(new URL("../supabase/migrations/20260714090000_add_persistent_stock_backend.sql", import.meta.url), "utf8"),
@@ -23,24 +23,20 @@ const [sync, baseSchema, schema, grants, cron, acceleratedCron, leases, quota, p
   readFile(new URL("../.github/workflows/update-market-data.yml", import.meta.url), "utf8"),
   readFile(new URL("./export-backend-snapshot.mjs", import.meta.url), "utf8"),
   readFile(new URL("./backtest-snapshots.mjs", import.meta.url), "utf8"),
+  readFile(new URL("../supabase/migrations/20260715170000_remove_paid_ai_and_add_free_insights.sql", import.meta.url), "utf8"),
+  readFile(new URL("../supabase/migrations/20260715172000_free_backtest_and_missing_data_audit.sql", import.meta.url), "utf8"),
+  readFile(new URL("../supabase/migrations/20260715173000_harden_free_insights_audit.sql", import.meta.url), "utf8"),
 ]);
 
-const [aiEdge, aiShared, aiMigration, aiExpiryPolicy, aiManualMigration, aiUnlimitedMigration] = await Promise.all([
-  readFile(new URL("../supabase/functions/twss-ai-research/index.ts", import.meta.url), "utf8"),
-  readFile(new URL("../supabase/functions/_shared/ai-research.js", import.meta.url), "utf8"),
-  readFile(new URL("../supabase/migrations/20260714213000_add_independent_ai_research.sql", import.meta.url), "utf8"),
-  readFile(new URL("../supabase/migrations/20260714220000_hide_expired_ai_research.sql", import.meta.url), "utf8"),
-  readFile(new URL("../supabase/migrations/20260715070000_manual_ai_research_button.sql", import.meta.url), "utf8"),
-  readFile(new URL("../supabase/migrations/20260715120000_unlimited_manual_ai_research.sql", import.meta.url), "utf8"),
-]);
-const aiInternalPolicies = await readFile(
-  new URL("../supabase/migrations/20260714214500_explicit_ai_internal_policies.sql", import.meta.url),
-  "utf8",
-);
-const aiVaultReader = await readFile(
-  new URL("../supabase/migrations/20260715060000_add_vault_gemini_secret_reader.sql", import.meta.url),
-  "utf8",
-);
+const hardenedBacktest = hardening.match(
+  /create or replace function public\.twss_evaluate_matured_backtests[\s\S]*?grant execute on function public\.twss_evaluate_matured_backtests/,
+)?.[0] || "";
+const hardenedHealth = hardening.match(
+  /create or replace function public\.twss_public_data_health[\s\S]*?grant execute on function public\.twss_public_data_health/,
+)?.[0] || "";
+const hardenedMissing = hardening.match(
+  /create or replace function public\.twss_public_missing_data[\s\S]*?grant execute on function public\.twss_public_missing_data/,
+)?.[0] || "";
 
 assert.match(sync, /FINMIND_AUTHENTICATED \? 22 : 10/, "reused company batches must double throughput inside the same request slice");
 assert.match(sync, /FINMIND_AUTHENTICATED \? 23 : 19/, "ETF batches must use their fair rolling-hour slice");
@@ -76,6 +72,13 @@ assert.doesNotMatch(sync.match(/function compactDeep[\s\S]*?\n}/)?.[0] || "", /p
 assert.match(sync, /row\[key\] === undefined \? null : row\[key\]/, "bulk rows must preserve missing values as null");
 assert.match(sync, /for \(const row of rows\)/, "a failed symbol must not cancel sibling symbols");
 assert.match(sync, /x-twss-sync-token/);
+assert.match(sync, /rpc\/twss_finalize_ranking_cycle/, "a completed deep group must finalize its immutable ranking date");
+assert.match(sync, /rpc\/twss_evaluate_matured_backtests/, "completed cycles must evaluate matured results using stored data only");
+assert.match(sync, /p_model_version: VERSION/, "ranking finalization must use the frozen score-model version");
+assert.match(sync, /const VERSION = "16\.3"/, "the score model version must remain frozen at 16.3");
+assert.match(marketHandler, /const VERSION = "17\.1"/, "the public API patch version must match package 17.1");
+assert.match(sync, /\[ranking-cycle\] finalization failed/, "ranking finalization failures must remain diagnosable without aborting the data sync");
+assert.match(sync, /rankingFinalization/, "the deep job state must retain finalization success or failure diagnostics");
 assert.doesNotMatch(sync, /sb_secret_[A-Za-z0-9_-]{8,}/, "server secrets must not exist in source");
 
 for (const table of [
@@ -133,6 +136,9 @@ assert.match(clearOldVersionRepairs, /analysis_version <> '16\.3-ultimate-data-a
 assert.match(sync, /repair_reasons.*some[\s\S]*etf-direction-classification/, "one-time migration repairs must not wait six hours");
 assert.match(sync, /financial-source-coverage/, "fresh analyses must persist incomplete financial-source coverage as a repair reason");
 assert.match(marketHandler, /readBackendAnalysis\(symbol\)/);
+assert.match(marketHandler, /type === "data-health"/);
+assert.match(marketHandler, /type === "ranking-backtest"/);
+assert.match(marketHandler, /readDataHealth\(\)/);
 assert.doesNotMatch(marketHandler, /payload \|\|= await buildPriceHistory/);
 assert.match(workflow, /npm run export-data/);
 assert.doesNotMatch(workflow, /npm run update-data/);
@@ -142,54 +148,91 @@ assert.match(exporter, /skippedExistingSnapshot/, "the export must report an imm
 assert.match(exporter, /backtestReady/);
 assert.match(exporter, /minimumGroupRatio: 0\.75/);
 assert.match(backtest, /snapshotCoverage\?\.backtestReady === true/, "partial daily rankings must never enter the point-in-time backtest");
+assert.match(backtest, /entry\.open/, "snapshot backtests must enter only at the next trading-day open");
+assert.match(freeInsights, /opportunity_ranking_cycles/, "final ranking dates must be persisted separately from in-progress rows");
+assert.match(backtestSchema, /opportunity_backtest_outcomes/, "matured ranking outcomes must persist in the backend");
+assert.match(backtestSchema, /p\.trade_date > s\.signal_date/, "database backtests must not enter before the next trading day");
+assert.match(backtestSchema, /matured_dates >= 25/, "validation metrics must remain hidden below the minimum mature-date count");
+assert.match(backtestSchema, /security invoker/, "public validation and missing-data RPCs must retain caller RLS");
+assert.match(hardening, /if v_scored < v_expected then[\s\S]*ranking_cycle_incomplete/,
+  "ranking dates must remain building until scored rows meet the non-decreasing expected count");
+assert.match(hardening, /greatest\(coalesce\(p_expected_count, 0\), coalesce\(v_existing_expected, 0\)\)/,
+  "a retry must never lower an existing cycle's expected population");
+assert.match(hardening, /create trigger preserve_final_score_history[\s\S]*before insert or update on public\.opportunity_score_history/,
+  "finalized point-in-time score rows must be immutable during later same-day refreshes");
+assert.match(hardening, /revoke all on function public\.twss_preserve_final_score_history\(\)\s+from public, anon, authenticated/,
+  "the internal immutable-history trigger helper must not be directly callable by public roles");
+assert.match(hardenedBacktest, /p\.trade_date > greatest\([\s\S]*s\.signal_date[\s\S]*Asia\/Taipei/,
+  "database backtests must enter after the later of signal date and Taipei finalization date");
+assert.match(hardenedBacktest, /from public\.opportunity_score_history membership/,
+  "benchmark membership must come from the point-in-time score cross-section");
+assert.doesNotMatch(hardenedBacktest, /stock_analysis_cache/,
+  "historical benchmarks must not use today's surviving analysis cache membership");
+assert.match(hardenedBacktest, /mfe_pct, mae_pct, 'unknown'/,
+  "market regime must stay unknown rather than use future entry-to-exit returns");
+assert.match(hardening, /delete from public\.opportunity_backtest_outcomes[\s\S]*where not exists[\s\S]*c\.status = 'final'/,
+  "legacy orphan, incomplete, or invalid-entry outcomes must be removed before public rollups");
+assert.match(hardening, /set benchmark_return_pct = null,[\s\S]*market_regime = 'unknown'/,
+  "legacy survivorship-derived benchmark fields must be quarantined until recalculation");
+assert.match(hardening, /a\.data_date = p_data_date[\s\S]*a\.analysis_version = p_analysis_version/,
+  "peer percentiles must use the target's exact analysis date and version");
+assert.match(hardening, /when nullif\(a\.stock ->> 'pe', ''\)::numeric > 0/,
+  "loss-making and zero-PE rows must be excluded from valuation percentiles");
+assert.match(hardening, /'premium_discount', pg_catalog\.abs/,
+  "ETF premium/discount quality must compare absolute deviation from NAV");
+assert.match(hardenedHealth, /coalesce\(min\(final_count\), 0\)/,
+  "overall score-history readiness must equal the weakest independent group");
+assert.match(hardenedHealth, /'perGroup', v_final_by_group/,
+  "data health must disclose final-date counts separately for each market group");
+assert.match(hardenedHealth, /h\.score_date = s\.cycle_date[\s\S]*h\.model_version = '16\.3'[\s\S]*h\.official/,
+  "official counts must be scoped to the exact date and score version");
+assert.doesNotMatch(hardenedHealth, /'lastError',/,
+  "public health must not return raw internal synchronization errors");
+assert.match(hardenedHealth, /'lastErrorCode'/,
+  "public health should expose only stable error codes");
+assert.match(hardenedMissing, /'datasets'.*jsonb_object_agg/s,
+  "missing-data diagnostics must provide per-dataset aggregates");
+assert.match(hardenedMissing, /jsonb_strip_nulls[\s\S]*'expectedPeriod'[\s\S]*'actualPeriod'/,
+  "public evidence must be reduced to a safe diagnostic allowlist");
+assert.match(hardenedMissing, /source_evidence ->> 'rowCount', r\.source_evidence ->> 'rows'/,
+  "safe diagnostics must accept the actual source row-count field");
+for (const dataset of [
+  "monthly_revenue", "quarterly_revenue", "cash_conversion", "holdings", "deep_analysis",
+  "etf_profile", "etf_premium_discount", "etf_tracking_error", "etf_fees", "etf_top10_concentration",
+]) {
+  assert.match(hardenedMissing, new RegExp(`'${dataset}'`),
+    `${dataset} gaps must remain independently diagnosable`);
+}
+assert.match(hardenedMissing, /v16\.3-source-coverage-audit/,
+  "legacy generic repair flags must remain retryable during the v17 transition");
+assert.match(hardenedMissing, /'deep_refresh'/,
+  "last-good rows with a failed refresh need a separate API diagnostic");
+assert.match(hardenedMissing, /financial,revenueStatus|revenueStatus/,
+  "quarterly revenue diagnostics must distinguish non-comparable industries from missing source fields");
+assert.match(hardenedMissing, /cashConversionBasis/,
+  "cash conversion diagnostics must distinguish inapplicable ratios from missing cash-flow data");
+assert.match(hardenedMissing, /cashConversionBasis}' = 'TTM-nonpositive-net-income'/,
+  "only a non-positive TTM denominator may make cash conversion not applicable");
+assert.doesNotMatch(hardenedMissing, /cashConversionBasis}' in \([\s\S]*insufficient-positive-income/,
+  "insufficient positive-income history must remain partial instead of being hidden as not applicable");
+assert.match(hardenedMissing, /'official-not-provided' then 'official_not_provided'/,
+  "known free-source ETF omissions must be explicit instead of becoming misleading zero scores");
+assert.match(hardenedMissing, /where c\.dataset_key = s\.dataset_key and c\.retryable/,
+  "retryable counts must remain independent from the user-facing failure classification");
+assert.doesNotMatch(hardenedMissing, /source_status in \([^)]*upstream[^)]*\) or error_kind is not null/,
+  "a row-level refresh error must not relabel every otherwise valid dataset as an API failure");
+assert.match(hardenedMissing, /'insufficient-history'/,
+  "per-dataset history depth must be distinguished from missing and upstream-error states");
+assert.doesNotMatch(hardenedMissing, /'repairReasons'/,
+  "public missing-data evidence must not expose internal repair implementation details");
 assert.match(config, /verify_jwt = false/);
 assert.match(config, /entrypoint = "\.\/functions\/twss-sync-batch\/index\.ts"/);
-assert.match(config, /\[functions\.twss-ai-research\][\s\S]*verify_jwt = false/);
-assert.match(config, /entrypoint = "\.\/functions\/twss-ai-research\/index\.ts"/);
 assert.match(trim, /analysis - 'priceHistory'/);
+assert.doesNotMatch(config, /gemini|ai[_-]?research|twss-ai/i,
+  "removed paid research Edge Function must not remain configured");
+assert.doesNotMatch(marketHandler, /gemini|ai[_-]?research|readAiResearch/i,
+  "market routes must not expose removed paid research features");
+assert.doesNotMatch(sync, /gemini|ai[_-]?research/i,
+  "the free public-data synchronization worker must be independent of paid research services");
 
-assert.match(aiMigration, /create table if not exists public\.ai_stock_research/);
-assert.match(aiMigration, /create table if not exists public\.ai_research_runs/);
-assert.match(aiMigration, /create table if not exists public\.ai_research_usage/);
-assert.match(aiMigration, /alter table public\.ai_stock_research enable row level security/);
-assert.match(aiMigration, /for select to anon, authenticated using \(status = 'ready'\)/);
-assert.match(aiMigration, /grant select \([\s\S]*analysis[\s\S]*\) on public\.ai_stock_research to anon, authenticated/);
-assert.match(aiMigration, /twss_reserve_ai_calls/);
-assert.match(aiMigration, /greatest\(1, least\(20/);
-assert.match(aiMigration, /'20 10 \* \* 1-5'/);
-assert.match(aiMigration, /vault\.decrypted_secrets/);
-assert.match(aiInternalPolicies, /for all to service_role using \(true\) with check \(true\)/);
-assert.doesNotMatch(aiInternalPolicies, /to anon|to authenticated/);
-assert.match(aiExpiryPolicy, /expires_at is null or expires_at > now\(\)/);
-assert.match(aiExpiryPolicy, /for select to anon, authenticated/);
-assert.match(aiExpiryPolicy, /body := '\{\}'::jsonb/);
-assert.match(aiManualMigration, /twss_claim_manual_ai_request/);
-assert.match(aiManualMigration, /cron\.unschedule/);
-assert.match(aiManualMigration, /'mode', 'manual-only'/);
-assert.match(aiManualMigration, /to service_role/);
-assert.doesNotMatch(aiManualMigration, /grant execute[\s\S]*to anon|grant execute[\s\S]*to authenticated/);
-assert.match(aiUnlimitedMigration, /twss-ai-manual-concurrency/);
-assert.match(aiUnlimitedMigration, /v_active_count >= 2/);
-assert.doesNotMatch(aiUnlimitedMigration, /v_recent_count|twss_reserve_ai_calls|user_limit|global_limit/);
-assert.match(aiUnlimitedMigration, /interval '90 days'/);
-assert.match(aiUnlimitedMigration, /interval '30 days'/);
-assert.match(aiUnlimitedMigration, /'quotaMode', 'unlimited'/);
-assert.doesNotMatch(aiUnlimitedMigration, /grant execute[\s\S]*to anon|grant execute[\s\S]*to authenticated/);
-assert.match(aiVaultReader, /from vault\.decrypted_secrets/);
-assert.match(aiVaultReader, /to service_role/);
-assert.doesNotMatch(aiVaultReader, /grant execute[\s\S]*to anon|grant execute[\s\S]*to authenticated/);
-assert.match(aiEdge, /x-twss-sync-token/);
-assert.match(aiEdge, /GEMINI_API_KEY/);
-assert.match(aiEdge, /configured: false/);
-assert.match(aiEdge, /selectAiCandidates/);
-assert.match(aiEdge, /twss_reserve_ai_calls/);
-assert.match(aiEdge, /body\.mode === "manual"/);
-assert.match(aiEdge, /verifyUserRequest/);
-assert.match(aiEdge, /twss_claim_manual_ai_request/);
-assert.doesNotMatch(aiEdge, /opportunity_score_history/);
-assert.doesNotMatch(aiEdge, /stock_analysis_cache\?on_conflict/);
-assert.match(aiShared, /quantitativeResultReadOnly/);
-assert.match(aiShared, /不得覆寫、重算/);
-assert.match(marketHandler, /readAiResearch\(symbol\)/);
-
-console.log("Backend pipeline tests passed: bounded cursors, unlimited manual AI concurrency gate, Vault auth, RLS, and read-only grants");
+console.log("Backend pipeline tests passed: bounded cursors, shared quota, Vault auth, RLS, and read-only grants");

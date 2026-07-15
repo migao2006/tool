@@ -1,15 +1,26 @@
 (() => {
   'use strict';
-  const PATCH_VERSION = 'v16.3';
+  const PATCH_VERSION = 'v17.0';
   const PREDICTION_KEY = 'twss-predictions-v15';
   const JOURNAL_KEY = 'twss-journal-v15';
-  const patchState = { verifyQuery: '', mineTab: 'watch', backtestCache: new Map() };
+  const ALERTS_KEY = 'twss-rule-alerts-v17';
+  // Audited legacy paid-analysis builds: responses only lived in an in-memory
+  // Map and the backend, so no legacy localStorage key is known. Keep the
+  // cleanup allowlist explicit and empty rather than deleting guessed user data.
+  const LEGACY_AI_LOCAL_STORAGE_KEYS = Object.freeze([]);
+  for (const key of LEGACY_AI_LOCAL_STORAGE_KEYS) localStorage.removeItem(key);
+  const patchState = {
+    verifyQuery: '', mineTab: 'watch', verifyGroup: 'listed', verifyHorizon: '20',
+    rankingBacktest: null, backtestCache: new Map()
+  };
   const localRead = (key, fallback = []) => { try { return JSON.parse(localStorage.getItem(key) || JSON.stringify(fallback)); } catch { return fallback; } };
   const localWrite = (key, value) => localStorage.setItem(key, JSON.stringify(value));
   const getPredictionLogs = () => localRead(PREDICTION_KEY, []);
   const setPredictionLogs = value => localWrite(PREDICTION_KEY, value);
   const getJournal = () => localRead(JOURNAL_KEY, []);
   const setJournal = value => localWrite(JOURNAL_KEY, value);
+  const getAlertStore = () => localRead(ALERTS_KEY, { events: [], lastSeen: {} });
+  const setAlertStore = value => localWrite(ALERTS_KEY, value);
   const createId = () => crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const escapeText = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
   const average = values => { const valid = values.filter(value => value != null && Number.isFinite(value)); return valid.length ? valid.reduce((sum, value) => sum + value, 0) / valid.length : null; };
@@ -17,6 +28,70 @@
   const directionFromReturn = value => value > 1.5 ? 'up' : value < -1.5 ? 'down' : 'neutral';
   const directionFromForecast = value => value.up >= value.down + 12 ? 'up' : value.down >= value.up + 12 ? 'down' : 'neutral';
   const directionLabel = value => value === 'up' ? '偏多' : value === 'down' ? '偏空' : '震盪';
+  const groupLabel = value => ({ listed: '上市', otc: '上櫃', etf: 'ETF' })[value] || value;
+
+  function ultimateRows() {
+    const snapshot = globalThis.twssUltimateSnapshot?.();
+    if (!snapshot?.groups) return [];
+    return Object.entries(snapshot.groups).flatMap(([group, rows]) => (Array.isArray(rows) ? rows : []).map((row, index) => ({ ...row, group, rank: index + 1 })));
+  }
+
+  function alertSnapshot(row) {
+    const trend = row?.trend || row?.result?.trend || row?.context?.trend || {};
+    const finalDate = trend.currentDate || null;
+    if (!finalDate || String(row?.dataDate || '') !== String(finalDate)) return null;
+    const technical = row?.analysis?.price || {};
+    const revenue = row?.analysis?.revenue || {};
+    const institutional = row?.analysis?.institutional || {};
+    return {
+      dataDate: finalDate,
+      group: row.group,
+      rank: Number.isFinite(Number(trend.rank)) ? Number(trend.rank) : null,
+      score: Number.isFinite(Number(row.result?.score)) ? Number(row.result.score) : null,
+      official: row.result?.official === true,
+      revenueAcceleration: Number.isFinite(Number(revenue.acceleration3)) ? Number(revenue.acceleration3) : null,
+      institutionalIntensity: Number.isFinite(Number(institutional.intensity5)) ? Number(institutional.intensity5) : null,
+      breakout: technical.breakout20 === true || technical.breakout === true,
+      overheat: Number(technical.distanceMa20) >= 12 || Number(technical.rsi14) >= 75,
+      present: true
+    };
+  }
+
+  function refreshRuleAlerts() {
+    const watched = new Set(getWatchlist().map(item => item.symbol));
+    const rowMap = new Map(ultimateRows().filter(row => watched.has(row.stock?.symbol) && alertSnapshot(row)).map(row => [row.stock.symbol, row]));
+    if (!rowMap.size) return getAlertStore();
+    const stored = getAlertStore();
+    const events = Array.isArray(stored.events) ? stored.events : [];
+    const lastSeen = stored.lastSeen && typeof stored.lastSeen === 'object' ? stored.lastSeen : {};
+    const existing = new Set(events.map(event => event.key));
+    const definitions = [];
+    for (const [symbol, row] of rowMap) {
+      const current = alertSnapshot(row);
+      if (!current) continue;
+      const previous = lastSeen[symbol];
+      if (previous && previous.dataDate !== current.dataDate) {
+        if ((previous.score ?? -Infinity) < 70 && (current.score ?? -Infinity) >= 70) definitions.push([symbol, row, current, 'score70', '機會分數突破 70', `分數由 ${previous.score ?? '—'} 升至 ${current.score}。`]);
+        if (!previous.official && current.official) definitions.push([symbol, row, current, 'official', '進入正式候選', '資料信心與風險條件已達正式候選門檻。']);
+        if ((previous.rank == null || previous.rank > 10) && current.rank <= 10) definitions.push([symbol, row, current, 'top10', `進入${groupLabel(current.group)}前 10 名`, `目前排名第 ${current.rank}。`]);
+        if ((previous.revenueAcceleration ?? 0) <= 0 && (current.revenueAcceleration ?? 0) > 0) definitions.push([symbol, row, current, 'revenue', '營收加速度轉正', `最新營收加速度 ${fmt(current.revenueAcceleration, 1)}%。`]);
+        if ((previous.institutionalIntensity ?? 0) <= 0 && (current.institutionalIntensity ?? 0) > 0) definitions.push([symbol, row, current, 'institution', '法人強度轉正', `近 5 日法人強度 ${fmt(current.institutionalIntensity, 1)}%。`]);
+        if (!previous.breakout && current.breakout) definitions.push([symbol, row, current, 'breakout', '出現 20 日突破', '價量資料符合突破條件，仍需留意追價風險。']);
+        if (!previous.overheat && current.overheat) definitions.push([symbol, row, current, 'overheat', '短線過熱警示', '股價與均線距離或 RSI 已進入過熱條件。']);
+        if (previous.official && !current.official) definitions.push([symbol, row, current, 'lost', '正式候選資格失效', '最新資料已不符合正式候選門檻，請重新檢視原因。']);
+      }
+      lastSeen[symbol] = current;
+    }
+    for (const [symbol, row, current, type, title, message] of definitions) {
+      const key = `${symbol}:${current.dataDate}:${type}:${current.score ?? ''}:${current.rank ?? ''}`;
+      if (existing.has(key)) continue;
+      existing.add(key);
+      events.unshift({ key, symbol, name: row.stock?.name || symbol, group: current.group, dataDate: current.dataDate, type, title, message, read: false, createdAt: new Date().toISOString() });
+    }
+    const next = { events: events.slice(0, 200), lastSeen };
+    setAlertStore(next);
+    return next;
+  }
 
   function marketEnvironment() {
     const tradable = S.stocks.filter(stock => stock.change != null);
@@ -187,15 +262,33 @@
   function eventHtml(stock, indicators) {
     return `<div class="card">${buildEvents(stock, indicators).map(event => `<div class="patch-event"><div class="patch-event-icon">${event.icon}</div><div><b>${event.title}</b><div class="muted">${event.detail}</div></div><span class="tag ${event.level === 'bad' ? 'bad' : event.level === 'warn' ? 'warn' : 'info'}">${event.level === 'bad' ? '風險' : event.level === 'warn' ? '注意' : '事件'}</span></div>`).join('')}</div>`;
   }
+
+  function rankingPerformanceHtml() {
+    const data = globalThis.twssUltimateBacktest?.() || patchState.rankingBacktest;
+    const group = patchState.verifyGroup;
+    const horizon = patchState.verifyHorizon;
+    const result = data?.byGroup?.[group]?.[horizon] || data?.byGroup?.[group]?.[Number(horizon)] || null;
+    const snapshots = Number(result?.maturedDateCount ?? data?.snapshotCount) || 0;
+    const minimum = Number(result?.minimumSnapshots ?? data?.minimumSnapshots) || 25;
+    const progress = Math.max(0, Math.min(100, snapshots / minimum * 100));
+    const ready = data?.status === 'ready' && result && result.status !== 'insufficient_history' && Number.isFinite(Number(result.count));
+    return `<section class="card ranking-performance" aria-labelledby="rankingPerformanceTitle">
+      <div class="head"><div><h3 id="rankingPerformanceTitle">排行榜歷史驗證</h3><div class="muted">只檢驗當時正式榜前 10 名，不倒填後來公布的資料。</div></div><span class="tag ${ready ? '' : 'warn'}">${ready ? '可檢驗' : '累積中'}</span></div>
+      <div class="patch-tabs compact" role="group" aria-label="市場分組">${['listed', 'otc', 'etf'].map(value => `<button type="button" data-verify-group="${value}" class="${group === value ? 'active' : ''}" aria-pressed="${group === value}">${groupLabel(value)}</button>`).join('')}</div>
+      <div class="patch-tabs compact" role="group" aria-label="驗證期間">${['5', '10', '20'].map(value => `<button type="button" data-verify-horizon="${value}" class="${horizon === value ? 'active' : ''}" aria-pressed="${horizon === value}">${value} 日</button>`).join('')}</div>
+      ${ready ? `<div class="grid">${metric(`${horizon} 日樣本`, fmt(result.count, 0))}${metric('平均報酬', pct(result.averageReturn))}${metric('相對市場超額', pct(result.averageExcessReturn))}${metric('勝率', result.winRate == null ? '—' : `${fmt(result.winRate, 1)}%`)}${metric('平均最大漲幅', pct(result.averageMfe))}${metric('平均最大回撤', pct(result.averageMae))}</div><p class="muted small">已累積 ${snapshots} 個正式評分日；歷史結果只用來檢驗排序，不代表未來報酬。</p>` : `<div class="ranking-progress"><div class="progress" role="progressbar" aria-label="正式評分日累積進度" aria-valuemin="0" aria-valuemax="${minimum}" aria-valuenow="${Math.min(snapshots, minimum)}"><span style="width:${progress}%"></span></div><b>${snapshots} / ${minimum} 個正式評分日</b></div><p class="muted">${escapeText(data?.message || `至少累積 ${minimum} 個正式評分日後才公布結果。目前不顯示勝率，避免用不足樣本造成誤判。`)}</p>`}
+    </section>`;
+  }
+
   function verifyPage() {
     const stats = predictionStats();
     const query = patchState.verifyQuery.trim().toLowerCase();
     const matches = query ? S.stocks.filter(stock => stock.symbol.includes(query) || stock.name.toLowerCase().includes(query)).slice(0, 10) : [];
     const rows = stats.all.filter(log => !query || log.symbol.includes(query) || String(log.stock_name || '').toLowerCase().includes(query));
-    return `<h2>預測驗證</h2><p class="muted">系統會保存每次預測，五個交易日後比對實際收盤價。歷史回測只使用當時以前的價量資料。</p>
+    return `<h2>預測驗證</h2><p class="muted">先檢驗正式排行榜的 5／10／20 日表現；個股技術回測屬輔助工具。</p>
+      ${rankingPerformanceHtml()}
       <div class="grid">${metric('已保存預測', fmt(stats.all.length, 0))}${metric('已完成驗證', fmt(stats.evaluated.length, 0))}${metric('整體命中率', stats.accuracy == null ? '尚無樣本' : `${fmt(stats.accuracy, 1)}%`)}${metric('近 90 日命中率', stats.accuracy90 == null ? '尚無樣本' : `${fmt(stats.accuracy90, 1)}%`)}</div>
-      <div class="card"><h3>查詢個股回測</h3><div class="search-row"><input id="patchVerifySearch" value="${escapeText(patchState.verifyQuery)}" placeholder="輸入代號或名稱"><button id="patchVerifyButton" class="btn">查詢</button></div>${matches.length ? `<div class="search-results">${matches.map(stock => `<button class="search-result" data-patch-backtest="${stock.symbol}"><span><b>${stock.name}</b><small class="muted"> ${stock.symbol}</small></span><span>執行回測</span></button>`).join('')}</div>` : ''}</div>
-      <div class="card"><h3>預測紀錄</h3>${rows.length ? `<div class="table-wrap"><table><thead><tr><th>日期</th><th>股票</th><th>預測</th><th>機率</th><th>實際</th><th>結果</th></tr></thead><tbody>${rows.slice(0, 80).map(log => `<tr><td>${log.prediction_date}</td><td>${log.stock_name || log.symbol}</td><td>${directionLabel(log.predicted_direction)}</td><td>${fmt(log.up_probability, 0)}/${fmt(log.neutral_probability, 0)}/${fmt(log.down_probability, 0)}</td><td class="${cls(log.actual_return_pct)}">${log.actual_return_pct == null ? '待驗證' : pct(log.actual_return_pct)}</td><td>${log.is_correct == null ? '—' : log.is_correct ? '✓' : '×'}</td></tr>`).join('')}</tbody></table></div>` : '<div class="empty muted">開啟任何股票的趨勢預測後，就會開始累積紀錄。</div>'}</div>${disclaimer()}`;
+      <details class="card"><summary><b>個股技術回測與預測紀錄</b><span class="muted">輔助驗證</span></summary><div class="verify-secondary"><h3>查詢個股回測</h3><div class="search-row"><label class="sr-only" for="patchVerifySearch">股票代號或名稱</label><input id="patchVerifySearch" value="${escapeText(patchState.verifyQuery)}" placeholder="輸入代號或名稱"><button id="patchVerifyButton" class="btn">查詢</button></div>${matches.length ? `<div class="search-results">${matches.map(stock => `<button class="search-result" data-patch-backtest="${stock.symbol}"><span><b>${stock.name}</b><small class="muted"> ${stock.symbol}</small></span><span>執行回測</span></button>`).join('')}</div>` : ''}<h3>預測紀錄</h3>${rows.length ? `<div class="table-wrap"><table><caption class="sr-only">個股五日預測驗證紀錄</caption><thead><tr><th scope="col">日期</th><th scope="col">股票</th><th scope="col">預測</th><th scope="col">機率</th><th scope="col">實際</th><th scope="col">結果</th></tr></thead><tbody>${rows.slice(0, 80).map(log => `<tr><td>${log.prediction_date}</td><td>${log.stock_name || log.symbol}</td><td>${directionLabel(log.predicted_direction)}</td><td>${fmt(log.up_probability, 0)}/${fmt(log.neutral_probability, 0)}/${fmt(log.down_probability, 0)}</td><td class="${cls(log.actual_return_pct)}">${log.actual_return_pct == null ? '待驗證' : pct(log.actual_return_pct)}</td><td>${log.is_correct == null ? '—' : log.is_correct ? '✓' : '×'}</td></tr>`).join('')}</tbody></table></div>` : '<div class="empty muted">開啟任何股票的趨勢預測後，就會開始累積紀錄。</div>'}</div></details>${disclaimer()}`;
   }
 
   function backtestHtml(result) {
@@ -215,11 +308,22 @@
     };
   }
 
+  function alertSection() {
+    const store = refreshRuleAlerts();
+    const events = Array.isArray(store.events) ? store.events : [];
+    const unread = events.filter(event => !event.read).length;
+    if (!events.length) return `<div class="card empty"><h3>尚無規則提醒</h3><p class="muted">系統會在正式資料日期更新後，比較自選股的分數、排名、營收、法人與技術條件。第一次載入只建立基準，不會產生舊訊號。</p></div>`;
+    return `<div class="head alert-toolbar"><div><h3>站內規則提醒</h3><div class="muted">${unread ? `${unread} 則未讀` : '全部已讀'} · 僅儲存在此裝置</div></div>${unread ? '<button id="patchReadAlerts" class="btn secondary">全部標為已讀</button>' : ''}</div><div class="list alert-list">${events.map(event => `<button type="button" class="card alert-event ${event.read ? '' : 'unread'}" data-alert-key="${escapeText(event.key)}" data-alert-symbol="${escapeText(event.symbol)}"><div class="head"><span><b>${escapeText(event.name)} ${escapeText(event.symbol)}</b><small class="muted"> ${escapeText(groupLabel(event.group))}</small></span><time datetime="${escapeText(event.dataDate)}">${escapeText(event.dataDate)}</time></div><strong>${escapeText(event.title)}</strong><p class="muted">${escapeText(event.message)}</p></button>`).join('')}</div>`;
+  }
+
   function watchSection() {
+    const alertStore = refreshRuleAlerts();
+    const latestAlert = new Map();
+    for (const event of alertStore.events || []) if (!latestAlert.has(event.symbol)) latestAlert.set(event.symbol, event);
     const items = getWatchlist();
     const rows = items.map(item => ({ item, stock: S.stocks.find(stock => stock.symbol === item.symbol) })).filter(row => row.stock);
     if (!rows.length) return '<div class="card empty"><h3>尚未加入自選股票</h3><p class="muted">可在機會股或股票詳細頁加入。</p></div>';
-    return `<div class="list two-col">${rows.map(({ item, stock }) => { const gain = item.addedPrice && stock.close ? (stock.close / item.addedPrice - 1) * 100 : null; const etf = instrumentGroup(stock) === 'etf'; return `<div class="card clickable" data-detail="${stock.symbol}"><div class="head"><div><b>${stock.name}</b><div class="muted">${stock.symbol} · ${stock.industry}</div></div><button class="icon-btn" data-watch="${stock.symbol}">移除</button></div><div class="grid">${metric('目前價格', fmt(stock.close))}${metric('加入後漲跌', `<span class="${cls(gain)}">${pct(gain)}</span>`)}${metric(etf ? '商品類型' : '月營收年增', etf ? 'ETF' : pct(stock.rev))}${metric(etf ? '成交量' : '機會分數', etf ? `${fmt(stock.volume, 0)} 張` : opportunityScore(stock))}</div><button class="btn" data-forecast="${stock.symbol}" style="width:100%;margin-top:10px">查看趨勢預測</button></div>`; }).join('')}</div>`;
+    return `<div class="list two-col">${rows.map(({ item, stock }) => { const gain = item.addedPrice && stock.close ? (stock.close / item.addedPrice - 1) * 100 : null; const etf = instrumentGroup(stock) === 'etf'; const alert = latestAlert.get(stock.symbol); return `<div class="card clickable" data-detail="${stock.symbol}"><div class="head"><div><b>${stock.name}</b><div class="muted">${stock.symbol} · ${stock.industry}</div></div><button class="icon-btn" aria-label="從自選清單移除 ${escapeText(stock.name)}" data-watch="${stock.symbol}">移除</button></div>${alert ? `<div class="watch-alert ${alert.read ? '' : 'unread'}"><b>${escapeText(alert.title)}</b><span>${escapeText(alert.dataDate)}</span></div>` : ''}<div class="grid">${metric('目前價格', fmt(stock.close))}${metric('加入後漲跌', `<span class="${cls(gain)}">${pct(gain)}</span>`)}${metric(etf ? '商品類型' : '月營收年增', etf ? 'ETF' : pct(stock.rev))}${metric(etf ? '成交量' : '機會分數', etf ? `${fmt(stock.volume, 0)} 張` : opportunityScore(stock))}</div><button class="btn" data-forecast="${stock.symbol}" style="width:100%;margin-top:10px">查看趨勢預測</button></div>`; }).join('')}</div>`;
   }
 
   function actionLabel(value) { return ({ observe: '觀察', buy: '買入紀錄', sell: '賣出紀錄', review: '事後檢討' })[value] || value; }
@@ -232,7 +336,9 @@
   }
 
   function minePage() {
-    return `<h2>我的</h2><div class="patch-tabs"><button data-patch-mine="watch" class="${patchState.mineTab === 'watch' ? 'active' : ''}">自選清單</button><button data-patch-mine="journal" class="${patchState.mineTab === 'journal' ? 'active' : ''}">投資紀錄</button></div>${patchState.mineTab === 'watch' ? watchSection() : journalSection()}${disclaimer()}`;
+    const unread = refreshRuleAlerts().events?.filter(event => !event.read).length || 0;
+    const section = patchState.mineTab === 'watch' ? watchSection() : patchState.mineTab === 'alerts' ? alertSection() : journalSection();
+    return `<h2>我的</h2><div class="patch-tabs"><button data-patch-mine="watch" class="${patchState.mineTab === 'watch' ? 'active' : ''}">自選清單</button><button data-patch-mine="alerts" class="${patchState.mineTab === 'alerts' ? 'active' : ''}">規則提醒${unread ? `<span class="nav-count">${unread}</span>` : ''}</button><button data-patch-mine="journal" class="${patchState.mineTab === 'journal' ? 'active' : ''}">投資紀錄</button></div>${section}${disclaimer()}`;
   }
   function openJournalModal(record = null, stock = null) {
     const item = record || { local_id: createId(), symbol: stock?.symbol || '', stock_name: stock?.name || '', entry_date: new Date().toISOString().slice(0, 10), action: 'observe', price: stock?.close ?? null, quantity: null, horizon: 'swing', thesis: '', risk_plan: '', target_plan: '', emotion: '', followed_plan: null, exit_price: null, exit_date: '', return_pct: null, result_note: '' };
@@ -260,6 +366,8 @@
   }
 
   function bindPatch() {
+    qa('[data-verify-group]').forEach(button => button.onclick = () => { patchState.verifyGroup = button.dataset.verifyGroup; render(); });
+    qa('[data-verify-horizon]').forEach(button => button.onclick = () => { patchState.verifyHorizon = button.dataset.verifyHorizon; render(); });
     q('#patchVerifySearch')?.addEventListener('input', event => { patchState.verifyQuery = event.target.value; });
     q('#patchVerifyButton')?.addEventListener('click', () => { patchState.verifyQuery = q('#patchVerifySearch')?.value || ''; render(); });
     qa('[data-patch-backtest]').forEach(button => button.onclick = async () => {
@@ -279,6 +387,18 @@
       }
     });
     qa('[data-patch-mine]').forEach(button => button.onclick = () => { patchState.mineTab = button.dataset.patchMine; render(); });
+    q('#patchReadAlerts')?.addEventListener('click', () => {
+      const store = getAlertStore();
+      store.events = (store.events || []).map(event => ({ ...event, read: true }));
+      setAlertStore(store); render();
+    });
+    qa('[data-alert-key]').forEach(button => button.onclick = () => {
+      const store = getAlertStore();
+      const event = (store.events || []).find(item => item.key === button.dataset.alertKey);
+      store.events = (store.events || []).map(item => item.key === button.dataset.alertKey ? { ...item, read: true } : item);
+      setAlertStore(store);
+      if (event?.symbol) openDetail(event.symbol);
+    });
     q('#patchNewJournal')?.addEventListener('click', () => openJournalModal());
     q('#patchExportJournal')?.addEventListener('click', () => {
       const blob = new Blob([JSON.stringify(getJournal(), null, 2)], { type: 'application/json' });
@@ -328,5 +448,12 @@
   }
 
   updateNavigation();
+  fetch('/api/market-data?type=ranking-backtest', { cache: 'no-store' })
+    .then(response => response.ok ? response.json() : null)
+    .catch(() => null)
+    .then(value => value?.byGroup ? value : fetch('/data/backtest.json?v=17.1', { cache: 'no-store' })
+      .then(response => response.ok ? response.json() : null).catch(() => null))
+    .then(value => { if (value) patchState.rankingBacktest = value; if (S.tab === 'verify') render(); })
+    .catch(() => {});
   render();
 })();

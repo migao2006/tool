@@ -5,9 +5,3 @@ project_id = "lfkdkdyaatdlizryiyon"
 # rejects every request that cannot pass twss_verify_sync_token().
 verify_jwt = false
 entrypoint = "./functions/twss-sync-batch/index.ts"
-
-[functions.twss-ai-research]
-# Scheduled by pg_cron with the same Vault-only internal token.  The function
-# performs its own token verification before any Gemini or database work.
-verify_jwt = false
-entrypoint = "./functions/twss-ai-research/index.ts"

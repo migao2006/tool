@@ -8,6 +8,7 @@ const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const url = process.env.SUPABASE_URL || "https://lfkdkdyaatdlizryiyon.supabase.co";
 const key = process.env.SUPABASE_PUBLISHABLE_KEY ||
   "sb_publishable_r3h9eQIYdIqScvmc77avAg_OLgBT6lh";
+const GROUPS = ["listed", "otc", "etf"];
 
 async function writeJson(path, payload) {
   await mkdir(dirname(path), { recursive: true });
@@ -37,7 +38,7 @@ async function readMarketPrices(groupDates) {
   const output = [];
   for (let offset = 0; ; offset += 1000) {
     const select = encodeURIComponent(
-      "symbol,trade_date,market,instrument_type,industry,close,high,low,change_pct,raw_data",
+      "symbol,trade_date,market,instrument_type,industry,open,close,high,low,change_pct,raw_data",
     );
     const response = await fetch(
       `${url}/rest/v1/stock_snapshots?select=${select}&trade_date=in.(${dates.join(",")})&order=symbol.asc&limit=1000&offset=${offset}`,
@@ -53,6 +54,7 @@ async function readMarketPrices(groupDates) {
         symbol: String(row.symbol),
         group,
         industry: row.industry || "未分類",
+        open: row.open == null ? null : Number(row.open),
         close: row.close == null ? null : Number(row.close),
         high: row.high == null ? null : Number(row.high),
         low: row.low == null ? null : Number(row.low),
@@ -68,20 +70,22 @@ async function readMarketPrices(groupDates) {
 }
 
 const backend = await readBackendRankings(200);
-const groups = Object.fromEntries(["listed", "otc", "etf"].map((group) => [
+const groupDates = Object.fromEntries(GROUPS.map((group) => [group, backend.groupDates?.[group] || null]));
+const groups = Object.fromEntries(GROUPS.map((group) => [
   group,
   (backend.groups?.[group] || []).filter((row) =>
-    row?.analysis?.analysisVersion === ANALYSIS_VERSION && row?.stock?.symbol),
+    row?.analysis?.analysisVersion === ANALYSIS_VERSION && row?.stock?.symbol &&
+    String(row.dataDate || "") === String(groupDates[group] || "")),
 ]));
 const verified = Object.values(groups).reduce((sum, rows) => sum + rows.length, 0);
 if (!verified) throw new Error("後端尚無 v16.3 深度結果，保留既有靜態快照");
 
 const generatedAt = backend.generatedAt || new Date().toISOString();
-const marketPrices = await readMarketPrices(backend.groupDates);
+const marketPrices = await readMarketPrices(groupDates);
 const universeState = (backend.backend?.sync || []).find((row) => row.job_key === "universe");
 const eligibleCounts = universeState?.details?.eligibleCounts || {};
 const verifiedCounts = backend.backend?.counts || {};
-const coverageByGroup = Object.fromEntries(["listed", "otc", "etf"].map((group) => {
+const coverageByGroup = Object.fromEntries(GROUPS.map((group) => {
   const eligible = Number(eligibleCounts[group]) || 0;
   const verifiedCount = Number(verifiedCounts[group]) || 0;
   return [group, {
@@ -90,30 +94,53 @@ const coverageByGroup = Object.fromEntries(["listed", "otc", "etf"].map((group) 
     ratio: eligible ? Number((verifiedCount / eligible).toFixed(4)) : 0,
   }];
 }));
-const backtestReady = Object.values(coverageByGroup).every((row) => row.eligible > 0 && row.ratio >= 0.75);
+const rankingCycles = backend.backend?.rankingCycles || {};
+const finalCycleByGroup = Object.fromEntries(GROUPS.map((group) => [group,
+  (rankingCycles[group] || []).find((cycle) =>
+    cycle?.status === "final" && String(cycle.score_date || "") === String(groupDates[group] || "")) || null,
+]));
+const exactDateByGroup = Object.fromEntries(GROUPS.map((group) => [group, {
+  groupDate: groupDates[group],
+  finalCycle: Boolean(finalCycleByGroup[group]),
+  rankingRows: groups[group].length,
+  marketPrices: marketPrices.filter((row) => row.group === group && row.tradeDate === groupDates[group]).length,
+  officialOpens: marketPrices.filter((row) =>
+    row.group === group && row.tradeDate === groupDates[group] && Number.isFinite(row.open)).length,
+}]));
+const uniqueGroupDates = [...new Set(Object.values(groupDates).filter(Boolean))];
+const coherentTradingDate = uniqueGroupDates.length === 1;
+const backtestReady = coherentTradingDate && GROUPS.every((group) =>
+  Boolean(groupDates[group]) && exactDateByGroup[group].finalCycle &&
+  exactDateByGroup[group].marketPrices > 0 && exactDateByGroup[group].officialOpens > 0);
 const snapshot = {
   version: "16.3",
   analysisVersion: ANALYSIS_VERSION,
   methodology: backend.methodology,
   generatedAt,
-  dataDate: backend.dataDate,
-  groupDates: backend.groupDates,
+  dataDate: coherentTradingDate ? uniqueGroupDates[0] : backend.dataDate,
+  groupDates,
   universe: backend.universe,
   backend: backend.backend,
   snapshotCoverage: {
     backtestReady,
+    coherentTradingDate,
+    readinessRule: "each-group-final-cycle-on-exact-group-date",
+    finalCycleByGroup: Object.fromEntries(GROUPS.map((group) => [group,
+      finalCycleByGroup[group]?.score_date || null,
+    ])),
+    exactDateByGroup,
     minimumGroupRatio: 0.75,
     byGroup: coverageByGroup,
     note: backtestReady
-      ? "各市場最後成功驗證覆蓋率已達封存門檻"
-      : "僅更新最新備援檔；未達覆蓋門檻，不封存為回測樣本",
+      ? "上市、上櫃與 ETF 均有同一交易日的 final ranking cycle 與官方行情"
+      : "僅更新最新備援檔；分組 final cycle 或精確交易日尚未一致，不封存為回測樣本",
   },
   groups,
   disclaimer: "候選排序僅供研究，不構成投資建議、買賣邀約或獲利保證。",
 };
 
 await writeJson(resolve(root, "public/data/latest.json"), snapshot);
-const day = backend.dataDate || new Date().toISOString().slice(0, 10);
+const day = coherentTradingDate ? uniqueGroupDates[0] : backend.dataDate || new Date().toISOString().slice(0, 10);
 const pointInTime = backtestReady
   ? await writePointInTimeJson(resolve(root, `data/snapshots/${day}.json`), {
       ...snapshot,
@@ -129,4 +156,5 @@ console.log(JSON.stringify({
   skippedExistingSnapshot: pointInTime.skippedExistingSnapshot,
   skippedIncompleteCoverage: Boolean(pointInTime.skippedIncompleteCoverage),
   snapshotCoverage: coverageByGroup,
+  snapshotReadiness: exactDateByGroup,
 }));

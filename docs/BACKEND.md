@@ -1,4 +1,4 @@
-# v16.6 持久化後端（量化核心仍為 v16.3）
+# v17.1 持久化後端（量化核心仍為 v16.3）
 
 這一版把「一次只深度驗證 10 檔」改成可續跑的資料管線。GitHub 靜態快照仍是前端備援；正式頁面會合併 Supabase 已累積的深度結果，因此完成檔數會隨排程增加，而不是每次從零開始。
 
@@ -10,6 +10,8 @@
 4. API 回傳成功但必要內容為空或落後期別時，保留 last-good 並設為修復候選；每批最多四分之一槽位處理這類缺口。財報快取只有 income、balance、cashflow 三者都有來源覆蓋時才可重用。
 5. 單檔失敗會保存 `error_kind`、`attempt_count`、`next_retry_at`；同批其他股票仍可完成，新股票優先於退避中的失敗股票。
 6. 前端優先讀取 `stock_analysis_cache`；`public/data/latest.json` 是同版本後端匯出備援，不合併舊模型結果。
+7. 一組深度游標完整跑完後才寫入 `opportunity_ranking_cycles.status = final`；排名變化、同業比較與回測都不讀取尚未完成的日期。
+8. 完成正式週期後，資料庫只用既有 `stock_price_history` 評估已成熟訊號，不增加 FinMind 或其他外部 API 請求。
 
 當期 TWSE／TPEx 月營收橫斷面若少於交易母體，公司批次會把一半候選名額優先給 `raw_data.revenue` 缺漏者；逐檔歷史成功後會回寫 `stock_snapshots`，下一輪便恢復正常分數排序。這個補缺不另開旁路，所有 FinMind 呼叫仍先由中央滑動配額帳本保留。
 
@@ -33,7 +35,6 @@
 | 上市深度 | 每小時 01、21、41 分 | 每小時 01、21、41 分 | 冷資料最多 6；可重用 10；有 Token 時 11／22 |
 | 上櫃深度 | 每小時 08、28、48 分 | 每小時 08、28、48 分 | 冷資料最多 6；可重用 10；有 Token 時 11／22 |
 | ETF 深度 | 每小時 15、35、55 分 | 每小時 15、35、55 分 | 最多 19；有 Token 23 |
-| Gemini 獨立摘要 | 平日 10:20 | 平日 18:20 | 預設 12，硬上限 20 |
 
 台灣與 UTC 的分鐘相同，只有小時相差 8 小時。三組錯開 6～7 分鐘；FinMind 使用兩個通道並以 0.5 秒錯開啟動。每批開始前會透過資料庫 advisory lock 統計最近 60 分鐘的所有保留量，無 Token 上限 300、有 Token 上限 600；額度不足就縮小批次或等待，不會在整點邊界超額。此上限已依 [FinMind 官方說明](https://finmind.github.io/quickstart/) 核對。
 
@@ -63,6 +64,16 @@
 
 公開的 `sb_publishable_...` key 只用於受 RLS 保護的讀取，可放在前端；`sb_secret_...`、service role key 與 Vault 權杖不可提交到 GitHub。
 
+## v17 資料健康、同業與長期驗證
+
+- `twss_public_data_health()`：各來源日期、分組覆蓋率、修復數與正式評分日數。
+- `twss_public_missing_data(limit)`：依每檔 `sourceDiagnostics` 與 `repair_reasons` 判定可重試、上游異常、官方期別落後、來源沒有或不適用。
+- `twss_get_stock_context(symbol)`：同市場、同產業百分位與正式排名歷史；同產業少於 5 檔才使用同市場備援。
+- `twss_evaluate_matured_backtests(group, model)`：service-role-only，使用訊號日後第一個交易日開盤價與第 5／10／20 個交易日收盤價，保存至 `opportunity_backtest_outcomes`。
+- `twss_public_ranking_backtest(model)`：只在該市場與期間已有至少 25 個成熟訊號日時公開統計，否則回傳 `insufficient_history`。
+
+公開 RPC 使用 `security invoker` 並沿用資料表 RLS；寫入與評估函式只授權 `service_role`。後端驗證不倒填後來公布的財報或營收，也不使用訊號日收盤價假設成交。
+
 ## 從原始碼重新部署
 
 使用目前版 Supabase CLI；先執行 `supabase db push --help`，確認可用 `--dry-run` 與 `--include-all`。官方旗標定義見 [Supabase CLI `db push`](https://supabase.com/docs/reference/cli/introduction#supabase-db-push)。
@@ -77,7 +88,6 @@ supabase link --project-ref lfkdkdyaatdlizryiyon
 supabase db push --dry-run --include-all
 supabase db push --include-all
 supabase functions deploy twss-sync-batch
-supabase functions deploy twss-ai-research
 ```
 
 `20260714040000_base_schema.sql` 使用 `create table if not exists`、policy 存在檢查與可重複的權限設定，因此補套到既有專案不會清空資料。不要使用 `db reset --linked`，那會重建遠端資料庫。
@@ -94,7 +104,6 @@ supabase link --project-ref YOUR_PROJECT_REF
 supabase db push --dry-run
 supabase db push
 supabase functions deploy twss-sync-batch
-supabase functions deploy twss-ai-research
 ```
 
 若有 FinMind Token，只設在 Edge Function secrets；不要放進 GitHub 或 Vercel 公開環境：
@@ -109,7 +118,7 @@ supabase functions deploy twss-sync-batch
 若是在另一個 Supabase 專案重建，必須在 `db push` 與 Vercel 部署前同步修改：
 
 - `supabase/config.toml` 的 `project_id`
-- 所有 migration 內的 Edge URL，包括 `https://<project-ref>.supabase.co/functions/v1/twss-sync-batch` 與 `.../twss-ai-research`；後面的排程 migration 會覆寫前面的工作，不能只改一個檔案
+- 所有 migration 內的 Edge URL，包括 `https://<project-ref>.supabase.co/functions/v1/twss-sync-batch`；後面的排程 migration 會覆寫前面的工作，不能只改一個檔案
 - `src/backend-store.js` 與 `scripts/export-backend-snapshot.mjs` 的預設 project URL／publishable key，或在 Vercel／GitHub Repository Variables 設定 `SUPABASE_URL`、`SUPABASE_PUBLISHABLE_KEY`
 - `src/market-data.js` 的舊 `twss-market-data` 備援 URL；此舊函式不包含在本 repository，沒有部署時應視為可選備援，不可誤認為主要資料源
 - `vercel.json` 的 Content-Security-Policy `connect-src`
@@ -142,6 +151,20 @@ from public.stock_analysis_cache
 where status = 'ready'
 group by group_name
 order by group_name;
+```
+
+正式評分日與成熟回測進度：
+
+```sql
+select score_date, group_name, status, scored_count, official_count
+from public.opportunity_ranking_cycles
+order by score_date desc, group_name;
+
+select group_name, horizon_days, count(distinct signal_date) as matured_signal_days,
+       count(*) as observations
+from public.opportunity_backtest_outcomes
+group by group_name, horizon_days
+order by group_name, horizon_days;
 ```
 
 第一輪尚未跑完並不是錯誤；`processed_count` 與 `cursor_offset` 持續增加，且 `last_error` 為空，即代表正常累積。

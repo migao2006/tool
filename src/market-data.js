@@ -4,10 +4,11 @@ import {
   buildRiskSnapshot,
 } from "./deep-data.js";
 import {
-  readAiResearch,
+  readDataHealth,
   readBackendAnalysis,
   readBackendHistory,
   readBackendRankings,
+  readRankingBacktest,
   readBackendStatus,
 } from "./backend-store.js";
 
@@ -16,7 +17,7 @@ const SUPABASE_HISTORY_EDGE = "https://lfkdkdyaatdlizryiyon.supabase.co/function
 const TWSE_OPEN = "https://openapi.twse.com.tw/v1";
 const TWSE_WEB = "https://www.twse.com.tw";
 const TPEX_OPEN = "https://www.tpex.org.tw/openapi/v1";
-const VERSION = "16.6";
+const VERSION = "17.1";
 
 const FINANCIAL_CATEGORIES = ["ci", "fh", "basi", "bd", "ins", "mim"];
 
@@ -1320,12 +1321,6 @@ export function sourcesPayload() {
         name: "Supabase Postgres 持久化後端",
         coverage: ["歷史日線", "月營收與財務", "法人與融資", "累積排行榜", "同步游標"],
       },
-      {
-        id: "gemini",
-        name: "Google Gemini（選用、獨立研究層）",
-        coverage: ["使用者手動要求的研究摘要", "支持與風險證據", "1～8 週情境與觀察項目"],
-        isolation: "不參與量化計分、排名或原始預測",
-      },
     ],
     failOpen: true,
   };
@@ -1343,21 +1338,12 @@ export function healthPayload() {
       "FinMind 歷史公開資料",
       "TDCC 集保戶股權分散開放資料",
       "Supabase Postgres 歷史資料與排行榜",
-      "Google Gemini 手動獨立研究摘要（選用）",
     ],
     markets: ["上市股票", "上櫃股票", "ETF"],
     rankingGroups: {
       listed: "上市股票獨立排名",
       otc: "上櫃股票獨立排名",
       etf: "ETF 獨立排名，不使用公司月營收與 ROE",
-    },
-    aiResearch: {
-      independent: true,
-      affectsScores: false,
-      mode: "manual-only",
-      quotaMode: "unlimited",
-      maxConcurrent: 2,
-      cacheDays: 14,
     },
   };
 }
@@ -1392,6 +1378,12 @@ export async function handleMarketData(request, url = new URL(request.url)) {
     if (type === "backend-status") {
       return jsonResponse(await readBackendStatus(), {}, force ? 0 : 60);
     }
+    if (type === "data-health") {
+      return jsonResponse(await readDataHealth(), {}, force ? 0 : 60);
+    }
+    if (type === "ranking-backtest") {
+      return jsonResponse(await readRankingBacktest(), {}, force ? 0 : 300);
+    }
     if (type === "backend-rankings") {
       const limit = numeric(url.searchParams.get("limit")) || 100;
       return jsonResponse(await readBackendRankings(limit), {}, force ? 0 : 120);
@@ -1400,10 +1392,6 @@ export async function handleMarketData(request, url = new URL(request.url)) {
       const symbol = text(url.searchParams.get("symbol"));
       const payload = await readBackendAnalysis(symbol);
       return jsonResponse(payload, {}, force ? 0 : 120);
-    }
-    if (type === "ai-research") {
-      const symbol = text(url.searchParams.get("symbol"));
-      return jsonResponse(await readAiResearch(symbol), {}, force ? 0 : 300);
     }
     if (type === "history") {
       const symbol = text(url.searchParams.get("symbol"));

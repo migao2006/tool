@@ -120,7 +120,7 @@ CORE 的既有 URL、publishable key 與連線名稱保持原樣。若最終 rel
 | 快照流程 | `node scripts/snapshot-pipeline-test.mjs` | 通過 |
 | 靜態 smoke | `node scripts/smoke.mjs` | 通過 |
 | v19 合約 | `node scripts/v19-test.mjs`：API、游標、日期、RLS、migration、新聞、秘密防洩漏 | 21/21 通過 |
-| 瀏覽器驗收 | 首頁、主題、載入更多、個股、自選股、管理員可見性 | 本機通過；production 發布後再次驗證 |
+| 瀏覽器／production 驗收 | 首頁、主題、載入更多、個股、自選股、管理員可見性；production 首頁與三個 v19 API | 通過；production 首頁、home、rankings、stocks 均為 200 |
 | 資料庫驗收 | MARKET transaction dry-run、正式 migration、RLS、快照、Cron、Worker 冪等；CORE 無 v19 表 | 通過 |
 
 ## 8. 已修復問題
@@ -135,7 +135,7 @@ CORE 的既有 URL、publishable key 與連線名稱保持原樣。若最終 rel
 
 ## 9. 尚未完成項目
 
-核心 v19 升級沒有未完成的程式或資料庫項目。後續營運項目只有持續觀察公開資料來源與排程成功率；若 production 最終驗證未通過，維護模式必須保持開啟並使用第 11 節回滾。
+核心 v19 升級沒有未完成的程式、資料庫或部署項目；production 已解除維護模式並完成驗證。後續營運項目只有持續觀察公開資料來源與排程成功率。
 
 ## 10. 部署方式
 

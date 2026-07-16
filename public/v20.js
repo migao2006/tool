@@ -166,6 +166,29 @@
     return first(value?.changePercent, value?.change_pct, value?.change);
   }
 
+  const globalIndicatorDefinitions = [[['nasdaq'], 'NASDAQ'], [['sp500'], 'S&P 500'], [['sox'], 'SOX'], [['tsmAdr'], '台積電 ADR'], [['nvidia', 'nvda'], 'NVIDIA'], [['vix'], 'VIX'], [['us10y', 'usTreasury'], '美債 10Y'], [['usdTwd', 'twdUsd'], 'USD/TWD']];
+
+  function usableMarketValue(value) {
+    return num(marketValue(value)) != null;
+  }
+
+  function visibleDegradedSources(sources, market = {}) {
+    const officialIndices = new Map(safeArray(globalThis.twssV19Benchmarks?.marketIndices).map(item => [String(item.code || ''), item]));
+    const resolved = new Set([
+      usableMarketValue(officialIndices.get('taiex') || market.taiex) && 'taiex_official_index',
+      usableMarketValue(officialIndices.get('tpex') || market.tpex) && 'tpex_official_index',
+      usableMarketValue(officialIndices.get('tx') || market.txFutures) && 'tx_futures',
+    ].filter(Boolean));
+    const context = market.globalContext || {};
+    const resolvedGlobal = globalIndicatorDefinitions.filter(([keys]) => keys.some(key => usableMarketValue(context[key])));
+    resolvedGlobal.forEach(([keys]) => keys.forEach(key => resolved.add(`global_${key}`)));
+    if (resolvedGlobal.length === globalIndicatorDefinitions.length) {
+      resolved.add('international_context');
+      resolved.add('global_market_context');
+    }
+    return [...new Set(safeArray(sources))].filter(source => !resolved.has(source));
+  }
+
   function marketCard(label, value) {
     const quote = marketValue(value);
     const change = marketChange(value);
@@ -207,8 +230,7 @@
 
   function globalStrip(market) {
     const context = market?.globalContext || {};
-    const definitions = [[['nasdaq'], 'NASDAQ'], [['sp500'], 'S&P 500'], [['sox'], 'SOX'], [['tsmAdr'], '台積電 ADR'], [['nvidia', 'nvda'], 'NVIDIA'], [['vix'], 'VIX'], [['us10y', 'usTreasury'], '美債 10Y'], [['usdTwd', 'twdUsd'], 'USD/TWD']];
-    const rows = definitions.flatMap(([keys, label]) => {
+    const rows = globalIndicatorDefinitions.flatMap(([keys, label]) => {
       const value = keys.map(key => context[key]).find(Boolean);
       return value ? [[label, value]] : [];
     });
@@ -226,8 +248,9 @@
     const focus = safeArray(first(report.watchStocks, report.opportunityStocks)).slice(0, 4);
     const risks = safeArray(first(report.mainRisks, report.risks)).slice(0, 3);
     const changes = safeArray(report.watchlistChanges).slice(0, 4);
+    const degradedSources = visibleDegradedSources(meta.degradedSources, v20.home?.market);
     if (!wrapped) return `<section class="v20-section"><div class="v20-section-title"><div><span>DAILY AI BRIEF</span><h3>AI 每日報告</h3></div></div><div class="card v20-empty">${v20.dailyPhase === 'refreshing' ? '<span class="spinner"></span> 正在背景讀取最近一次報告，首頁其他內容可先使用。' : '每日報告更新失敗，保留其他已載入內容。'}</div></section>`;
-    return `<section class="v20-section"><div class="v20-section-title"><div><span>DAILY AI BRIEF</span><h3>AI 每日報告</h3></div><small>${esc(meta.dataDate || '日期待補')}</small></div><article class="card v20-daily-report">${statusBanner({ dataState: meta.updateStatus || meta.dataState, dataDate: meta.dataDate, publicationPhase: meta.publicationPhase, enrichmentPending: meta.enrichmentPending, degradedSources: meta.degradedSources }, v20.dailyPhase, v20.dailyError)}<p class="v20-daily-lead">${esc(first(report.oneLine, report.todayInOneSentence, '今日市場結論待補'))}</p><div class="v20-daily-grid"><div><small>市場強弱</small><b>${esc(first(strength.level, strength.label, '資料不足'))}</b><p>${esc(first(strength.explanation, '等待市場廣度資料補齊。'))}</p></div><div><small>法人方向</small><b>${esc(first(institutional.direction, institutional.label, '資料不足'))}</b><p>${esc(first(institutional.explanation, '等待法人資料補齊。'))}</p></div></div>${industries.length ? `<div class="v20-daily-block"><h4>熱門產業</h4><div class="v20-chip-row">${industries.map(item => `<span>${esc(item.industry || item.name || item)}${num(item.averageChangePct) == null ? '' : ` ${displayPercent(item.averageChangePct)}`}</span>`).join('')}</div></div>` : ''}${focus.length ? `<div class="v20-daily-block"><h4>值得關注</h4><div class="v20-report-stocks">${focus.map(item => `<button type="button" data-v20-detail="${esc(item.symbol)}"><b>${esc(item.name || item.symbol)}</b><small>${esc(item.symbol)} · ${esc(first(item.whyNotice, item.advantage, '查看量化分析'))}</small></button>`).join('')}</div></div>` : ''}${risks.length ? `<div class="v20-daily-block"><h4>主要風險</h4><ul>${risks.map(item => `<li><b>${esc(item.title || '風險提醒')}</b> ${esc(item.explanation || item.risk || item)}</li>`).join('')}</ul></div>` : ''}<div class="v20-daily-block"><h4>自選股變化</h4>${changes.length ? `<ul>${changes.map(item => `<li>${esc(typeof item === 'string' ? item : first(item.explanation, item.message, item.title, item.symbol))}</li>`).join('')}</ul>` : '<p class="muted">目前沒有已驗證的重要變化。</p>'}</div></article></section>`;
+    return `<section class="v20-section"><div class="v20-section-title"><div><span>DAILY AI BRIEF</span><h3>AI 每日報告</h3></div><small>${esc(meta.dataDate || '日期待補')}</small></div><article class="card v20-daily-report">${statusBanner({ dataState: degradedSources.length ? meta.updateStatus || meta.dataState : 'complete', dataDate: meta.dataDate, publicationPhase: meta.publicationPhase, enrichmentPending: meta.enrichmentPending, degradedSources }, v20.dailyPhase, v20.dailyError)}<p class="v20-daily-lead">${esc(first(report.oneLine, report.todayInOneSentence, '今日市場結論待補'))}</p><div class="v20-daily-grid"><div><small>市場強弱</small><b>${esc(first(strength.level, strength.label, '資料不足'))}</b><p>${esc(first(strength.explanation, '等待市場廣度資料補齊。'))}</p></div><div><small>法人方向</small><b>${esc(first(institutional.direction, institutional.label, '資料不足'))}</b><p>${esc(first(institutional.explanation, '等待法人資料補齊。'))}</p></div></div>${industries.length ? `<div class="v20-daily-block"><h4>熱門產業</h4><div class="v20-chip-row">${industries.map(item => `<span>${esc(item.industry || item.name || item)}${num(item.averageChangePct) == null ? '' : ` ${displayPercent(item.averageChangePct)}`}</span>`).join('')}</div></div>` : ''}${focus.length ? `<div class="v20-daily-block"><h4>值得關注</h4><div class="v20-report-stocks">${focus.map(item => `<button type="button" data-v20-detail="${esc(item.symbol)}"><b>${esc(item.name || item.symbol)}</b><small>${esc(item.symbol)} · ${esc(first(item.whyNotice, item.advantage, '查看量化分析'))}</small></button>`).join('')}</div></div>` : ''}${risks.length ? `<div class="v20-daily-block"><h4>主要風險</h4><ul>${risks.map(item => `<li><b>${esc(item.title || '風險提醒')}</b> ${esc(item.explanation || item.risk || item)}</li>`).join('')}</ul></div>` : ''}<div class="v20-daily-block"><h4>自選股變化</h4>${changes.length ? `<ul>${changes.map(item => `<li>${esc(typeof item === 'string' ? item : first(item.explanation, item.message, item.title, item.symbol))}</li>`).join('')}</ul>` : '<p class="muted">目前沒有已驗證的重要變化。</p>'}</div></article></section>`;
   }
 
   function homePageV20() {
@@ -236,17 +259,7 @@
     const officialIndices = new Map(safeArray(globalThis.twssV19Benchmarks?.marketIndices).map(item => [String(item.code || ''), item]));
     const reportNews = safeArray(first(v20.dailyReport?.report?.importantNewsAndAnnouncements, v20.dailyReport?.report?.importantNews));
     const news = safeArray(home.importantNews).length ? safeArray(home.importantNews) : reportNews;
-    const resolvedSources = new Set([
-      marketValue(officialIndices.get('taiex')) != null && 'taiex_official_index',
-      marketValue(officialIndices.get('tpex')) != null && 'tpex_official_index',
-      marketValue(officialIndices.get('tx')) != null && 'tx_futures',
-    ].filter(Boolean));
-    let visibleDegraded = safeArray(home.degradedSources).filter(source => !resolvedSources.has(source));
-    const globalMissing = visibleDegraded.filter(source => source === 'international_context' || source.startsWith('global_'));
-    if (globalMissing.length > 1) {
-      visibleDegraded = visibleDegraded.filter(source => !globalMissing.includes(source));
-      visibleDegraded.push('international_context');
-    }
+    const visibleDegraded = visibleDegradedSources(home.degradedSources, market);
     const state = statusBanner({
       ...home,
       dataState: visibleDegraded.length ? home.dataState : 'complete',

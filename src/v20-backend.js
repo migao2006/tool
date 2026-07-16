@@ -226,6 +226,27 @@ function globalIndicators(row = {}) {
   });
 }
 
+function usableGlobalIndicator(value) {
+  if (!value || typeof value !== "object") return false;
+  return numeric(value.value ?? value.close ?? value.index ?? value.price ?? value.settlement) != null;
+}
+
+function pruneResolvedDegradedSources(sources, row = {}) {
+  const context = cleanObject(row.globalContext);
+  const resolvedGlobalKeys = new Set();
+  for (const [key, aliases] of Object.entries(GLOBAL_ALIASES)) {
+    if (aliases.map((alias) => context[alias]).some(usableGlobalIndicator)) {
+      resolvedGlobalKeys.add(`global_${key}`);
+    }
+  }
+  const allGlobalIndicatorsReady = resolvedGlobalKeys.size === Object.keys(GLOBAL_ALIASES).length;
+  return unique(sources).filter((source) => {
+    if (resolvedGlobalKeys.has(source)) return false;
+    if (allGlobalIndicatorsReady && ["international_context", "global_market_context"].includes(source)) return false;
+    return true;
+  });
+}
+
 function carryForwardGlobal(rows) {
   const current = rows[0] || normalizeMarket({});
   if (globalIndicators(current).length >= Object.keys(GLOBAL_ALIASES).length) return current;
@@ -873,6 +894,7 @@ export async function readV20Market(options = {}) {
   for (const [key, aliases] of Object.entries(GLOBAL_ALIASES)) {
     if (!aliases.some((alias) => row.globalContext?.[alias])) degraded.push(`global_${key}`);
   }
+  degraded = pruneResolvedDegradedSources(degraded, row);
   return {
     ...publicMeta({
       dataState: row.dataDate ? (degraded.length ? "partial" : "complete") : "partial",
@@ -1201,6 +1223,7 @@ export const v20BackendInternals = {
   encodeCursor,
   decodeCursor,
   publicMeta,
+  pruneResolvedDegradedSources,
   normalizePublication,
   loadPublicationState,
   loadSignals,

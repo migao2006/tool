@@ -150,6 +150,19 @@ try {
   assert.equal(normalizedRelated.dataDate, "2026-07-16");
   assert.equal(normalized.recommendedAction, "資料不足");
 
+  const globalContext = Object.fromEntries([
+    "nasdaq", "sp500", "sox", "tsmAdr", "nvidia", "vix", "us10y", "usdTwd",
+  ].map((key, index) => [key, { value: 100 + index, dataDate: "2026-07-15" }]));
+  const resolvedMarket = backend.v20BackendInternals.normalizeMarket({
+    global_context: globalContext,
+    degraded_sources: ["international_context", "global_market_context", "taiex_official_index"],
+  });
+  assert.deepEqual(
+    backend.v20BackendInternals.pruneResolvedDegradedSources(resolvedMarket.degradedSources, resolvedMarket),
+    ["taiex_official_index"],
+    "usable persisted international indicators must clear stale umbrella degraded flags",
+  );
+
   const bootstrap = backend.v20BackendInternals.normalizeRanking(detailSignalRow);
   assert.equal(bootstrap.predictionState.status, "not_calibrated");
   assert.equal(bootstrap.predictionState.publicForecast, false);

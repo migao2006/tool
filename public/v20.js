@@ -109,6 +109,18 @@
     watchAttempted: new Set(),
     watchErrors: new Map(),
     watchLoading: false,
+    mineTab: 'watchlist',
+    portfolio: [],
+    portfolioOwner: '',
+    portfolioLoaded: false,
+    portfolioLoading: false,
+    portfolioSaving: false,
+    portfolioError: '',
+    portfolioMessage: '',
+    portfolioEditId: '',
+    portfolioDraft: null,
+    portfolioAttempted: new Set(),
+    portfolioErrors: new Map(),
     newsVisible: 5,
     analysisSymbol: '',
     analysisMessage: ''
@@ -260,20 +272,69 @@
       ${page.nextCursor ? `<button id="v20LoadMore" class="btn secondary v20-load-more" type="button" ${page.loading ? 'disabled' : ''}>${page.loading ? '載入中…' : '載入更多 20 檔'}</button>` : ''}${disclaimer()}</div>`;
   }
 
-  function watchlistPageV20() {
+  function watchlistRowsV20() {
     const watched = getWatchlist();
-    const rows = watched.map(item => {
+    return watched.map(item => {
       const symbol = String(item.symbol || '');
       const detail = v20.detailCache.get(symbol) || readCache(`stock:${symbol}`);
       const short = safeArray(detail?.short).find(signal => signal.horizon === DEFAULT_HORIZON.short) || safeArray(detail?.short)[0];
       const medium = safeArray(detail?.medium).find(signal => signal.horizon === DEFAULT_HORIZON.medium) || safeArray(detail?.medium)[0];
       return { item, detail, short, medium, stock: detail?.stock || S.stocks.find(stock => String(stock.symbol) === symbol) };
     }).filter(({ item }) => item.symbol);
-    return `<div class="v20-watch-page">${pageHero('WATCHLIST', '自選股', '只追蹤你關心的股票、重要變化與風險，不記錄成本或損益。')}
-      ${rows.length ? `<div class="v20-card-list">${rows.map(({ item, detail, short, medium, stock }) => {
+  }
+
+  function watchlistSectionV20() {
+    const rows = watchlistRowsV20();
+    return rows.length ? `<div class="v20-card-list">${rows.map(({ item, detail, short, medium, stock }) => {
         const reminder = localizeStrategyText(first(v20.watchErrors.get(String(item.symbol)), safeArray(short?.risks)[0], safeArray(medium?.risks)[0], safeArray(short?.reasons)[0], safeArray(medium?.reasons)[0], detail ? '目前沒有已驗證的新提醒。' : '正在背景載入 AI 分析。'));
         return `<article class="card v20-watch-card" data-v20-detail="${esc(item.symbol)}"><div class="head"><div><b>${esc(stock?.name || item.symbol)}</b><small>${esc(item.symbol)} · ${esc(first(stock?.market, '市場待補'))}</small></div><button type="button" class="icon-btn" data-watch="${esc(item.symbol)}">移除</button></div><div class="v20-watch-metrics"><div><small>最新價格</small><b>${displayNumber(first(stock?.close, stock?.price), 2)}</b></div><div><small>短期機會／風險</small><b>${displayNumber(short?.opportunityScore, 0)}／${displayNumber(short?.riskScore, 0)}</b></div><div><small>中期機會／風險</small><b>${displayNumber(medium?.opportunityScore, 0)}／${displayNumber(medium?.riskScore, 0)}</b></div><div><small>資料日期</small><b>${esc(first(detail?.dataDate, stock?.priceDate, S.date, '待補'))}</b></div></div><div class="v20-inline-note"><b>重要提醒：</b>${esc(reminder)}</div><button type="button" class="btn v20-full" data-v20-detail="${esc(item.symbol)}">查看短中期分析</button></article>`;
-      }).join('')}</div>` : '<div class="card v20-empty"><h3>尚未加入自選股票</h3><p>可在短期、中期排行榜或個股分析中加入。</p></div>'}${disclaimer()}</div>`;
+      }).join('')}</div>` : '<div class="card v20-empty"><h3>尚未加入自選股票</h3><p>可在短期、中期排行榜或個股分析中加入。</p></div>';
+  }
+
+  function portfolioStock(symbol) {
+    const detail = v20.detailCache.get(symbol) || readCache(`stock:${symbol}`);
+    return { detail, stock: detail?.stock || S.stocks.find(item => String(item.symbol) === symbol) };
+  }
+
+  function portfolioFormV20() {
+    const editing = v20.portfolio.find(item => item.id === v20.portfolioEditId);
+    const values = editing || v20.portfolioDraft || {};
+    return `<form id="v20PortfolioForm" class="card v20-portfolio-form"><div class="head"><div><h3>${editing ? '修改目前持股' : '新增目前持股'}</h3><p class="muted">只保存目前股數與平均成本，不建立交易明細。</p></div>${editing ? '<button id="v20PortfolioCancel" class="icon-btn" type="button">取消</button>' : ''}</div><div class="v20-portfolio-form-grid"><label>股票代號<input id="v20PortfolioSymbol" name="symbol" maxlength="12" inputmode="latin" required value="${esc(values.symbol || '')}" ${editing ? 'readonly' : ''} placeholder="例如 2330"></label><label>股票名稱（選填）<input id="v20PortfolioName" name="stockName" maxlength="120" value="${esc(values.stock_name || '')}" placeholder="留空會自動帶入"></label><label>目前股數<input id="v20PortfolioQuantity" name="quantity" type="number" min="0.0001" step="any" required value="${esc(values.quantity || '')}" placeholder="例如 1000"></label><label>平均成本<input id="v20PortfolioCost" name="averageCost" type="number" min="0.0001" step="any" required value="${esc(values.average_cost || '')}" placeholder="每股成本"></label></div><label>備註（選填）<textarea id="v20PortfolioNote" name="note" maxlength="1000" placeholder="最多 1000 字">${esc(values.note || '')}</textarea></label>${v20.portfolioMessage ? `<div class="v20-form-message">${esc(v20.portfolioMessage)}</div>` : ''}<button class="btn v20-full" type="submit" ${v20.portfolioSaving ? 'disabled' : ''}>${v20.portfolioSaving ? '儲存中…' : editing ? '儲存修改' : '新增持股'}</button></form>`;
+  }
+
+  function portfolioSectionV20() {
+    if (!S.session || !sessionUserId()) return '<div class="card v20-empty"><h3>登入後使用目前持股</h3><p>持股資料只會保存在你的 CORE 雲端帳戶。</p><button id="v20PortfolioLogin" class="btn" type="button">前往登入</button></div>';
+    const positions = v20.portfolio;
+    const list = positions.length ? `<div class="v20-card-list">${positions.map(position => {
+      const symbol = String(position.symbol || '');
+      const { detail, stock } = portfolioStock(symbol);
+      const price = num(first(stock?.close, stock?.price));
+      const quantity = num(position.quantity);
+      const averageCost = num(position.average_cost);
+      const marketValue = price != null && quantity != null ? price * quantity : null;
+      const profit = price != null && quantity != null && averageCost != null ? (price - averageCost) * quantity : null;
+      const profitPct = price != null && averageCost > 0 ? (price / averageCost - 1) * 100 : null;
+      const quoteError = v20.portfolioErrors.get(symbol);
+      return `<article class="card v20-portfolio-card"><div class="head"><div><b>${esc(position.stock_name || stock?.name || symbol)}</b><small>${esc(symbol)} · ${esc(first(stock?.market, '市場待補'))}</small></div><div class="row"><button class="icon-btn" type="button" data-portfolio-edit="${esc(position.id)}">修改</button><button class="icon-btn v20-delete" type="button" data-portfolio-delete="${esc(position.id)}">刪除</button></div></div><div class="v20-portfolio-metrics"><div><small>目前股數</small><b>${displayNumber(quantity, 4)}</b></div><div><small>平均成本</small><b>${displayNumber(averageCost, 2)}</b></div><div><small>最新價格</small><b>${price == null ? '行情待補' : displayNumber(price, 2)}</b></div><div><small>部位市值</small><b>${marketValue == null ? '行情待補' : displayNumber(marketValue, 0)}</b></div><div><small>未實現損益</small><b class="${profit > 0 ? 'up' : profit < 0 ? 'down' : 'muted'}">${profit == null ? '行情待補' : displayNumber(profit, 0)}</b></div><div><small>損益率</small><b class="${profitPct > 0 ? 'up' : profitPct < 0 ? 'down' : 'muted'}">${profitPct == null ? '行情待補' : displayPercent(profitPct, 2)}</b></div></div>${position.note ? `<p class="v20-portfolio-note">${esc(position.note)}</p>` : ''}${quoteError ? `<div class="v20-inline-note">${esc(quoteError)}</div>` : ''}<div class="row"><button type="button" class="btn secondary grow" data-v20-detail="${esc(symbol)}">查看分析</button></div><small class="muted">行情資料日期 ${esc(first(detail?.dataDate, stock?.priceDate, S.date, '待補'))}</small></article>`;
+    }).join('')}</div>` : v20.portfolioLoading ? '<div class="card v20-empty"><span class="spinner"></span> 正在載入持股資料…</div>' : '<div class="card v20-empty"><h3>尚未建立目前持股</h3><p>請手動輸入目前股數與平均成本。</p></div>';
+    return `${portfolioFormV20()}${v20.portfolioError ? `<div class="notice">${esc(v20.portfolioError)}</div>` : ''}${list}`;
+  }
+
+  function reminderSectionV20() {
+    const symbols = [...new Set([...getWatchlist().map(item => String(item.symbol || '')), ...v20.portfolio.map(item => String(item.symbol || ''))].filter(Boolean))];
+    if (!symbols.length) return '<div class="card v20-empty"><h3>目前沒有重要提醒</h3><p>加入自選或目前持股後，這裡會整理短中期風險。</p></div>';
+    return `<div class="v20-card-list">${symbols.map(symbol => {
+      const { detail, stock } = portfolioStock(symbol);
+      const short = safeArray(detail?.short).find(signal => signal.horizon === DEFAULT_HORIZON.short) || safeArray(detail?.short)[0];
+      const medium = safeArray(detail?.medium).find(signal => signal.horizon === DEFAULT_HORIZON.medium) || safeArray(detail?.medium)[0];
+      const message = localizeStrategyText(first(v20.watchErrors.get(symbol), v20.portfolioErrors.get(symbol), safeArray(short?.risks)[0], safeArray(medium?.risks)[0], detail ? '目前沒有已驗證的新提醒。' : '分析資料待補。'));
+      return `<article class="card v20-reminder-card"><div class="head"><div><b>${esc(stock?.name || v20.portfolio.find(item => item.symbol === symbol)?.stock_name || symbol)}</b><small>${esc(symbol)} · ${esc(first(detail?.dataDate, stock?.priceDate, S.date, '日期待補'))}</small></div><button class="icon-btn" type="button" data-v20-detail="${esc(symbol)}">查看</button></div><div class="v20-watch-metrics"><div><small>短期風險</small><b>${displayNumber(short?.riskScore, 0)}</b></div><div><small>中期風險</small><b>${displayNumber(medium?.riskScore, 0)}</b></div></div><div class="v20-inline-note">${esc(message)}</div></article>`;
+    }).join('')}</div>`;
+  }
+
+  function watchlistPageV20() {
+    const section = v20.mineTab === 'portfolio' ? portfolioSectionV20() : v20.mineTab === 'reminders' ? reminderSectionV20() : watchlistSectionV20();
+    return `<div class="v20-watch-page">${pageHero('MY CENTER', '我的', '管理自選、手動目前持股與重要提醒。')}<div class="v20-mine-tabs" role="tablist"><button type="button" data-v20-mine="watchlist" class="${v20.mineTab === 'watchlist' ? 'active' : ''}">自選</button><button type="button" data-v20-mine="portfolio" class="${v20.mineTab === 'portfolio' ? 'active' : ''}">持股</button><button type="button" data-v20-mine="reminders" class="${v20.mineTab === 'reminders' ? 'active' : ''}">提醒</button></div>${section}${disclaimer()}</div>`;
   }
 
   async function ensureWatchDetails() {
@@ -302,6 +363,126 @@
       if (S.tab === 'watchlist') render();
     }
     v20.watchLoading = false;
+  }
+
+  function resetPortfolio(owner = '') {
+    v20.portfolioOwner = owner;
+    v20.portfolio = [];
+    v20.portfolioLoaded = false;
+    v20.portfolioLoading = false;
+    v20.portfolioError = '';
+    v20.portfolioMessage = '';
+    v20.portfolioEditId = '';
+    v20.portfolioDraft = null;
+    v20.portfolioAttempted.clear();
+    v20.portfolioErrors.clear();
+  }
+
+  async function ensurePortfolioDetails(positions = v20.portfolio) {
+    const symbols = [...new Set(positions.map(item => String(item.symbol || '').trim().toUpperCase()))]
+      .filter(symbol => /^[0-9A-Z]{2,12}$/.test(symbol))
+      .filter(symbol => !portfolioStock(symbol).stock && !v20.portfolioAttempted.has(symbol))
+      .slice(0, 40);
+    if (!symbols.length) return;
+    symbols.forEach(symbol => v20.portfolioAttempted.add(symbol));
+    for (let index = 0; index < symbols.length; index += 4) {
+      const batch = symbols.slice(index, index + 4);
+      const settled = await Promise.allSettled(batch.map(symbol => apiJson(`/stocks?symbol=${encodeURIComponent(symbol)}`)));
+      settled.forEach((result, offset) => {
+        const symbol = batch[offset];
+        if (result.status !== 'fulfilled') {
+          v20.portfolioErrors.set(symbol, '行情或分析更新失敗；持股資料已保留。');
+          return;
+        }
+        v20.portfolioErrors.delete(symbol);
+        v20.detailCache.set(symbol, result.value);
+        writeCache(`stock:${symbol}`, result.value);
+      });
+      if (S.tab === 'watchlist' && ['portfolio', 'reminders'].includes(v20.mineTab)) render();
+    }
+  }
+
+  async function loadPortfolio(force = false) {
+    const owner = sessionUserId();
+    if (!owner || !S.session) {
+      if (v20.portfolioOwner) resetPortfolio();
+      return;
+    }
+    if (v20.portfolioOwner !== owner) resetPortfolio(owner);
+    if (v20.portfolioLoading || (v20.portfolioLoaded && !force)) return;
+    v20.portfolioLoading = true;
+    v20.portfolioError = '';
+    if (S.tab === 'watchlist') render();
+    try {
+      if (!await refreshSession() || sessionUserId() !== owner) throw new Error('登入已過期，請重新登入。');
+      const rows = await coreSb(`/rest/v1/portfolio_positions?user_id=eq.${encodeURIComponent(owner)}&select=id,user_id,symbol,stock_name,quantity,average_cost,note,created_at,updated_at&order=updated_at.desc`);
+      if (sessionUserId() !== owner) return;
+      v20.portfolio = safeArray(rows);
+      v20.portfolioLoaded = true;
+      void ensurePortfolioDetails(v20.portfolio);
+    } catch (error) {
+      if (v20.portfolioOwner === owner) v20.portfolioError = `持股載入失敗：${error.message}`;
+    } finally {
+      if (v20.portfolioOwner === owner) v20.portfolioLoading = false;
+      if (S.tab === 'watchlist') render();
+    }
+  }
+
+  async function savePortfolio(event) {
+    event.preventDefault();
+    if (v20.portfolioSaving) return;
+    const owner = sessionUserId();
+    const symbol = String(q('#v20PortfolioSymbol')?.value || '').trim().toUpperCase();
+    const localStock = S.stocks.find(item => String(item.symbol) === symbol);
+    const stockName = String(q('#v20PortfolioName')?.value || localStock?.name || symbol).trim();
+    const quantity = num(q('#v20PortfolioQuantity')?.value);
+    const averageCost = num(q('#v20PortfolioCost')?.value);
+    const note = String(q('#v20PortfolioNote')?.value || '').trim();
+    v20.portfolioDraft = { symbol, stock_name: stockName, quantity: q('#v20PortfolioQuantity')?.value || '', average_cost: q('#v20PortfolioCost')?.value || '', note };
+    v20.portfolioMessage = '';
+    if (!owner || !S.session) v20.portfolioMessage = '請先登入。';
+    else if (!/^[0-9A-Z]{2,12}$/.test(symbol)) v20.portfolioMessage = '股票代號需為 2～12 位英數字。';
+    else if (!stockName || stockName.length > 120) v20.portfolioMessage = '請輸入有效股票名稱。';
+    else if (!(quantity > 0)) v20.portfolioMessage = '目前股數必須大於 0。';
+    else if (!(averageCost > 0)) v20.portfolioMessage = '平均成本必須大於 0。';
+    else if (note.length > 1000) v20.portfolioMessage = '備註不可超過 1000 字。';
+    if (v20.portfolioMessage) { render(); return; }
+    v20.portfolioSaving = true;
+    const submit = q('#v20PortfolioForm button[type="submit"]');
+    if (submit) { submit.disabled = true; submit.textContent = '儲存中…'; }
+    try {
+      if (!await refreshSession() || sessionUserId() !== owner) throw new Error('登入已過期，請重新登入。');
+      const body = { user_id: owner, symbol, stock_name: stockName, quantity, average_cost: averageCost, note };
+      if (v20.portfolioEditId) {
+        await coreSb(`/rest/v1/portfolio_positions?id=eq.${encodeURIComponent(v20.portfolioEditId)}&user_id=eq.${encodeURIComponent(owner)}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body });
+      } else {
+        await coreSb('/rest/v1/portfolio_positions?on_conflict=user_id,symbol', { method: 'POST', headers: { Prefer: 'resolution=merge-duplicates,return=minimal' }, body });
+      }
+      v20.portfolioEditId = '';
+      v20.portfolioDraft = null;
+      v20.portfolioMessage = '';
+      await loadPortfolio(true);
+    } catch (error) {
+      v20.portfolioMessage = `儲存失敗：${error.message}`;
+    } finally {
+      v20.portfolioSaving = false;
+      if (S.tab === 'watchlist') render();
+    }
+  }
+
+  async function deletePortfolio(id) {
+    const position = v20.portfolio.find(item => item.id === id);
+    if (!position || !confirm(`確定刪除 ${position.stock_name || position.symbol} 的目前持股？`)) return;
+    const owner = sessionUserId();
+    try {
+      if (!owner || !await refreshSession() || sessionUserId() !== owner) throw new Error('登入已過期，請重新登入。');
+      await coreSb(`/rest/v1/portfolio_positions?id=eq.${encodeURIComponent(id)}&user_id=eq.${encodeURIComponent(owner)}`, { method: 'DELETE', headers: { Prefer: 'return=minimal' } });
+      if (v20.portfolioEditId === id) v20.portfolioEditId = '';
+      await loadPortfolio(true);
+    } catch (error) {
+      v20.portfolioError = `刪除失敗：${error.message}`;
+      render();
+    }
   }
 
   function analysisPageV20() {
@@ -521,6 +702,26 @@
   bind = function bindV20() {
     legacyBind();
     enforceDarkOnly();
+    qa('[data-v20-mine]').forEach(button => button.onclick = () => {
+      v20.mineTab = button.dataset.v20Mine;
+      v20.portfolioMessage = '';
+      v20.portfolioEditId = '';
+      v20.portfolioDraft = null;
+      render();
+      if (['portfolio', 'reminders'].includes(v20.mineTab)) void loadPortfolio();
+    });
+    q('#v20PortfolioLogin')?.addEventListener('click', () => q('#accountBtn')?.click());
+    q('#v20PortfolioForm')?.addEventListener('submit', savePortfolio);
+    q('#v20PortfolioCancel')?.addEventListener('click', () => { v20.portfolioEditId = ''; v20.portfolioDraft = null; v20.portfolioMessage = ''; render(); });
+    q('#v20PortfolioSymbol')?.addEventListener('change', event => {
+      const symbol = String(event.target.value || '').trim().toUpperCase();
+      event.target.value = symbol;
+      const nameInput = q('#v20PortfolioName');
+      const stock = S.stocks.find(item => String(item.symbol) === symbol);
+      if (nameInput && !nameInput.value.trim() && stock?.name) nameInput.value = stock.name;
+    });
+    qa('[data-portfolio-edit]').forEach(button => button.onclick = () => { v20.portfolioEditId = button.dataset.portfolioEdit; v20.portfolioDraft = null; v20.portfolioMessage = ''; render(); q('#v20PortfolioForm')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); });
+    qa('[data-portfolio-delete]').forEach(button => button.onclick = () => void deletePortfolio(button.dataset.portfolioDelete));
     qa('[data-tab-jump]').forEach(button => button.onclick = () => navigateToTab(button.dataset.tabJump));
     q('#v20NewsMore')?.addEventListener('click', () => { v20.newsVisible += 10; render(); });
     qa('[data-v20-detail]').forEach(element => element.onclick = event => {
@@ -540,7 +741,10 @@
       q('#v20Search')?.addEventListener('keydown', event => { if (event.key === 'Enter') search(); });
       q('#v20LoadMore')?.addEventListener('click', () => loadRankings(model, true));
     }
-    if (S.tab === 'watchlist') void ensureWatchDetails();
+    if (S.tab === 'watchlist') {
+      void ensureWatchDetails();
+      if (['portfolio', 'reminders'].includes(v20.mineTab)) void loadPortfolio();
+    }
     q('#v20Analyze')?.addEventListener('click', () => {
       const symbol = q('#v20AnalysisSymbol')?.value.trim().toUpperCase() || '';
       v20.analysisSymbol = symbol;
@@ -558,7 +762,10 @@
     render();
     resetPageScroll();
     if (next === 'short' || next === 'medium') ensureRankings(next);
-    if (next === 'watchlist') void ensureWatchDetails();
+    if (next === 'watchlist') {
+      void ensureWatchDetails();
+      if (['portfolio', 'reminders'].includes(v20.mineTab)) void loadPortfolio();
+    }
   };
 
   render = function renderV20() {

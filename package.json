@@ -30,6 +30,7 @@
     "test:v20-worker": "node scripts/v20-worker-test.mjs",
     "test:v20-sql": "node scripts/v20-signal-outcomes-sql-test.mjs",
     "test:daily-report": "node scripts/daily-market-report-test.mjs",
-    "test": "npm run build && npm run validate && npm run test:pipeline && npm run test:backend && npm run test:data && npm run test:sync-db-first && npm run test:engine && npm run test:snapshots && npm run test:v19 && npm run test:v20-models && npm run test:v20-api && npm run test:v20-global && npm run test:v20-worker && npm run test:v20-sql && npm run test:daily-report && npm run smoke"
+    "test:portfolio": "node scripts/portfolio-center-test.mjs",
+    "test": "npm run build && npm run validate && npm run test:pipeline && npm run test:backend && npm run test:data && npm run test:sync-db-first && npm run test:engine && npm run test:snapshots && npm run test:v19 && npm run test:v20-models && npm run test:v20-api && npm run test:v20-global && npm run test:v20-worker && npm run test:v20-sql && npm run test:daily-report && npm run test:portfolio && npm run smoke"
   }
 }

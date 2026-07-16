@@ -1,13 +1,13 @@
-const CACHE='twss-v20.0.5';
+const CACHE='twss-v20.0.6';
 const STATIC=[
   '/',
-  '/app.js?v=20.0.5',
-  '/patch.js?v=20.0.5',
-  '/smart.js?v=20.0.5',
-  '/v20.js?v=20.0.5',
-  '/styles.css?v=20.0.5',
-  '/manifest.webmanifest?v=20.0.5',
-  '/icon.svg?v=20.0.5'
+  '/app.js?v=20.0.6',
+  '/patch.js?v=20.0.6',
+  '/smart.js?v=20.0.6',
+  '/v20.js?v=20.0.6',
+  '/styles.css?v=20.0.6',
+  '/manifest.webmanifest?v=20.0.6',
+  '/icon.svg?v=20.0.6'
 ];
 
 self.addEventListener('install',event=>event.waitUntil(

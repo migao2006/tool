@@ -23,6 +23,20 @@
   const probability = value => num(value) == null ? '資料不足' : `${Number(value).toFixed(1)}%`;
   const safeArray = value => Array.isArray(value) ? value : [];
   const first = (...values) => values.find(value => value != null && value !== '');
+  const strategyLabels = {
+    momentum_breakout: '動能突破',
+    trend_pullback: '趨勢拉回',
+    institutional_flow: '法人籌碼',
+    event_catalyst: '事件催化',
+    oversold_rebound: '超跌反彈',
+    growth_momentum: '成長動能',
+    institutional_positioning: '法人布局',
+    industry_trend: '產業趨勢',
+    medium_breakout: '中期突破',
+    value_recovery: '價值回升',
+    cycle_recovery: '景氣復甦'
+  };
+  const strategyLabel = value => value ? (strategyLabels[value] || value) : '策略待確認';
 
   function readCache(key) {
     try {
@@ -146,7 +160,7 @@
     return `<article class="card v20-model-card ${reference ? 'reference' : ''}" data-v20-detail="${esc(row.symbol)}">
       <div class="v20-card-head"><span class="v20-rank">${rank || row.rank || '—'}</span><div class="v20-card-name"><b>${esc(row.name || row.symbol)}</b><small>${esc(row.symbol)} · ${esc(first(row.market, row.group, '市場待補'))}</small></div><div class="v20-card-score"><small>${reference ? '舊資料參考' : '機會分數'}</small><strong>${reference ? '—' : displayNumber(row.opportunityScore, 0)}</strong></div></div>
       <p class="v20-summary">${esc(first(row.summary, safeArray(row.reasons)[0], reference ? 'v20 模型建立中，暫不提供推測分數。' : '分析原因待補'))}</p>
-      <div class="v20-chip-row"><span>${esc(first(row.strategy, '策略待確認'))}</span><span>風險 ${displayNumber(row.riskScore, 0)}</span><span>信心 ${probability(row.confidence)}</span><span>資料 ${esc(first(row.dataDate, '日期待補'))}</span></div>
+      <div class="v20-chip-row"><span>${esc(strategyLabel(row.strategy))}</span><span>風險 ${displayNumber(row.riskScore, 0)}</span><span>信心 ${probability(row.confidence)}</span><span>資料 ${esc(first(row.dataDate, '日期待補'))}</span></div>
       <div class="v20-forecast-row"><div><small>${row.horizon} 日${forecast.dataState === 'quant_bootstrap' ? '規則初估（待校準）' : '上漲機率'}</small><b>${probability(forecast.upProbability)}</b></div><div><small>預估淨報酬</small><b>${displayPercent(forecast.expectedNetReturn)}</b></div><div><small>建議</small><b>${esc(row.recommendedAction || '資料不足')}</b></div></div>
       <div class="row v20-card-actions"><button class="btn secondary grow" type="button" data-watch="${esc(row.symbol)}">${isWatched(row.symbol) ? '✓ 已自選' : '＋ 加入自選'}</button><button class="btn grow" type="button" data-v20-detail="${esc(row.symbol)}">查看分析</button></div>
     </article>`;
@@ -154,7 +168,7 @@
 
   function compactList(rows, model) {
     if (!rows.length) return '<div class="card v20-empty"><b>模型資料正在建立</b><p>先顯示頁面，完成校準後會自動補上排行，不會使用猜測數字。</p></div>';
-    return `<div class="v20-top-list">${rows.slice(0, 5).map((row, index) => `<button type="button" data-v20-detail="${esc(row.symbol)}"><span>${index + 1}</span><div><b>${esc(row.name || row.symbol)}</b><small>${esc(row.symbol)} · ${esc(first(row.strategy, row.industry, '資料待補'))}</small></div><strong>${row.legacyReference ? '—' : displayNumber(row.opportunityScore, 0)}</strong><i>›</i></button>`).join('')}</div><button class="v20-more-link" type="button" data-tab-jump="${model}">查看完整${model === 'short' ? '短期' : '中期'}排行 →</button>`;
+    return `<div class="v20-top-list">${rows.slice(0, 5).map((row, index) => `<button type="button" data-v20-detail="${esc(row.symbol)}"><span>${index + 1}</span><div><b>${esc(row.name || row.symbol)}</b><small>${esc(row.symbol)} · ${esc(first(strategyLabel(row.strategy), row.industry, '資料待補'))}</small></div><strong>${row.legacyReference ? '—' : displayNumber(row.opportunityScore, 0)}</strong><i>›</i></button>`).join('')}</div><button class="v20-more-link" type="button" data-tab-jump="${model}">查看完整${model === 'short' ? '短期' : '中期'}排行 →</button>`;
   }
 
   function globalStrip(market) {
@@ -304,7 +318,7 @@
       const forecast = forecastFor(signal);
       const range = forecast.returnRange || {};
       const invalidations = safeArray(signal.invalidationConditions);
-      return `<article class="card v20-signal-card"><div class="head"><div><span class="tag info">${signal.horizon} 日 · ${esc(first(signal.dataDate, '日期待補'))}</span><h3>${esc(first(signal.strategy, '策略待確認'))}</h3></div><div class="v20-card-score"><small>機會／風險</small><strong>${displayNumber(signal.opportunityScore, 0)}<i>／${displayNumber(signal.riskScore, 0)}</i></strong></div></div><div class="v20-forecast-row"><div><small>${forecast.dataState === 'quant_bootstrap' ? '規則初估（待校準）' : '上漲機率'}</small><b>${probability(forecast.upProbability)}</b></div><div><small>預估淨報酬</small><b>${displayPercent(forecast.expectedNetReturn)}</b></div><div><small>信心／完整度</small><b>${probability(signal.confidence)}／${probability(signal.completeness)}</b></div></div>${factorGrid(signal.featureScores)}<p><b>為什麼值得注意：</b>${esc(first(safeArray(signal.reasons)[0], signal.summary, '資料不足'))}</p><p class="v20-risk-text"><b>主要風險：</b>${esc(first(safeArray(signal.risks)[0], '尚未發現已驗證的額外風險'))}</p><div class="v20-plan-grid"><span>悲觀／中位／樂觀 <b>${displayPercent(range.p10)}／${displayPercent(range.p50)}／${displayPercent(range.p90)}</b></span><span>MFE／MAE <b>${displayPercent(forecast.averageMfe)}／${displayPercent(forecast.averageMae)}</b></span><span>布局區 <b>${displayNumber(signal.tradePlan?.entryLow, 2)}–${displayNumber(signal.tradePlan?.entryHigh, 2)}</b></span><span>突破確認價 <b>${displayNumber(signal.tradePlan?.breakoutPrice, 2)}</b></span><span>不追價價格 <b>${displayNumber(signal.tradePlan?.noChasePrice, 2)}</b></span><span>停損 <b>${displayNumber(signal.tradePlan?.stopLoss, 2)}</b></span><span>第一／第二停利 <b>${displayNumber(signal.tradePlan?.takeProfit1, 2)}／${displayNumber(signal.tradePlan?.takeProfit2, 2)}</b></span><span>風報比／持有期 <b>${displayNumber(signal.tradePlan?.riskRewardRatio, 2)}／${displayNumber(signal.tradePlan?.recommendedHoldingDays, 0)} 日</b></span></div>${invalidations.length ? `<h4>失效條件</h4><ul class="v20-detail-list">${invalidations.slice(0, 6).map(item => `<li>${esc(item)}</li>`).join('')}</ul>` : ''}<div class="v20-action">${esc(signal.recommendedAction || '資料不足')}</div></article>`;
+      return `<article class="card v20-signal-card"><div class="head"><div><span class="tag info">${signal.horizon} 日 · ${esc(first(signal.dataDate, '日期待補'))}</span><h3>${esc(strategyLabel(signal.strategy))}</h3></div><div class="v20-card-score"><small>機會／風險</small><strong>${displayNumber(signal.opportunityScore, 0)}<i>／${displayNumber(signal.riskScore, 0)}</i></strong></div></div><div class="v20-forecast-row"><div><small>${forecast.dataState === 'quant_bootstrap' ? '規則初估（待校準）' : '上漲機率'}</small><b>${probability(forecast.upProbability)}</b></div><div><small>預估淨報酬</small><b>${displayPercent(forecast.expectedNetReturn)}</b></div><div><small>信心／完整度</small><b>${probability(signal.confidence)}／${probability(signal.completeness)}</b></div></div>${factorGrid(signal.featureScores)}<p><b>為什麼值得注意：</b>${esc(first(safeArray(signal.reasons)[0], signal.summary, '資料不足'))}</p><p class="v20-risk-text"><b>主要風險：</b>${esc(first(safeArray(signal.risks)[0], '尚未發現已驗證的額外風險'))}</p><div class="v20-plan-grid"><span>悲觀／中位／樂觀 <b>${displayPercent(range.p10)}／${displayPercent(range.p50)}／${displayPercent(range.p90)}</b></span><span>MFE／MAE <b>${displayPercent(forecast.averageMfe)}／${displayPercent(forecast.averageMae)}</b></span><span>布局區 <b>${displayNumber(signal.tradePlan?.entryLow, 2)}–${displayNumber(signal.tradePlan?.entryHigh, 2)}</b></span><span>突破確認價 <b>${displayNumber(signal.tradePlan?.breakoutPrice, 2)}</b></span><span>不追價價格 <b>${displayNumber(signal.tradePlan?.noChasePrice, 2)}</b></span><span>停損 <b>${displayNumber(signal.tradePlan?.stopLoss, 2)}</b></span><span>第一／第二停利 <b>${displayNumber(signal.tradePlan?.takeProfit1, 2)}／${displayNumber(signal.tradePlan?.takeProfit2, 2)}</b></span><span>風報比／持有期 <b>${displayNumber(signal.tradePlan?.riskRewardRatio, 2)}／${displayNumber(signal.tradePlan?.recommendedHoldingDays, 0)} 日</b></span></div>${invalidations.length ? `<h4>失效條件</h4><ul class="v20-detail-list">${invalidations.slice(0, 6).map(item => `<li>${esc(item)}</li>`).join('')}</ul>` : ''}<div class="v20-action">${esc(signal.recommendedAction || '資料不足')}</div></article>`;
     }).join('')}</div></section>`;
   }
 

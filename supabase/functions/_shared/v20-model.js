@@ -328,11 +328,26 @@ function actionFor(modelKey, gates, score, risk, price) {
   return "成長降溫";
 }
 
+const strategyLabels = {
+  momentum_breakout: "動能突破",
+  trend_pullback: "趨勢拉回",
+  institutional_flow: "法人籌碼",
+  event_catalyst: "事件催化",
+  oversold_rebound: "超跌反彈",
+  growth_momentum: "成長動能",
+  institutional_positioning: "法人布局",
+  industry_trend: "產業趨勢",
+  medium_breakout: "中期突破",
+  value_recovery: "價值回升",
+  cycle_recovery: "景氣復甦",
+};
+
 function reasonList(row, modelKey, strategyKey) {
   const base = Array.isArray(row?.result?.reasons) ? row.result.reasons : [];
+  const strategyName = strategyLabels[strategyKey] || strategyKey;
   const strategyReason = modelKey === "short"
-    ? `短期策略：${strategyKey}`
-    : `中期類型：${strategyKey}`;
+    ? `短期策略：${strategyName}`
+    : `中期類型：${strategyName}`;
   return [...new Set([strategyReason, ...base])].slice(0, 5);
 }
 

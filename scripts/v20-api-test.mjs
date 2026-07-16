@@ -176,11 +176,11 @@ try {
   assert.match(smart, /globalThis\.twssV19Benchmarks\s*=\s*value/);
   assert.match(ui, /不會儲存資金、成本或交易紀錄/);
   assert.doesNotMatch(ui, /localStorage\.setItem\([^\n]*(?:capital|cost|position)/i);
-  assert.match(sw, /twss-v20\.0\.1/);
-  assert.match(sw, /v20\.js\?v=20\.0\.1/);
+  assert.match(sw, /twss-v20\.0\.2/);
+  assert.match(sw, /v20\.js\?v=20\.0\.2/);
   assert.match(generator, /read\("public\/v20\.js"\)/);
   assert.match(generator, /path==="\/v20\.js"/);
-  assert.equal(JSON.parse(manifest).start_url.includes("v=20.0.1"), true);
+  assert.equal(JSON.parse(manifest).start_url.includes("v=20.0.2"), true);
 
   console.log("v20 API/UI contract: passed");
 } finally {

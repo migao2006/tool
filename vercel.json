@@ -11,6 +11,15 @@
     }
   },
   "cleanUrls": true,
+  "redirects": [
+    { "source": "/", "destination": "/api/maintenance", "permanent": false },
+    { "source": "/admin", "destination": "/api/maintenance", "permanent": false },
+    { "source": "/admin.html", "destination": "/api/maintenance", "permanent": false },
+    { "source": "/api/market-data", "destination": "/api/maintenance", "permanent": false },
+    { "source": "/api/ai-research", "destination": "/api/maintenance", "permanent": false },
+    { "source": "/api/v19/(.*)", "destination": "/api/maintenance", "permanent": false },
+    { "source": "/api/v20/(.*)", "destination": "/api/maintenance", "permanent": false }
+  ],
   "headers": [
     {
       "source": "/(.*)",

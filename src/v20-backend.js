@@ -894,6 +894,7 @@ export async function readV20Market(options = {}) {
   for (const [key, aliases] of Object.entries(GLOBAL_ALIASES)) {
     if (!aliases.some((alias) => row.globalContext?.[alias])) degraded.push(`global_${key}`);
   }
+  row.degradedSources = pruneResolvedDegradedSources(row.degradedSources, row);
   degraded = pruneResolvedDegradedSources(degraded, row);
   return {
     ...publicMeta({

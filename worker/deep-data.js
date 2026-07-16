@@ -1657,9 +1657,11 @@ export async function buildPriceHistory(symbol, market = "上市", months = 18, 
         finmindToken: options.finmindToken,
       }),
     ).slice(-280);
-    if (history.length < 20) throw new Error(`${market} ${symbol} 歷史日線不足`);
+    if (history.length < 20 && options.allowShortHistory !== true) {
+      throw new Error(`${market} ${symbol} 歷史日線不足`);
+    }
     return {
-      mode: "live",
+      mode: history.length >= 20 ? "live" : "partial",
       symbol,
       market,
       source: `FinMind TaiwanStockPrice 歷史行情（${market}）`,

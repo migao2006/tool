@@ -385,6 +385,7 @@ async function serveOnDemandHistory(url: URL, access: FinmindAccess) {
       // retry a transient failure without silently exceeding the hourly ceiling.
       finmindRetries: 0,
       finmindToken: access.token,
+      allowShortHistory: true,
     });
     const history = await mergeLatestOfficialSnapshot(symbol, payload.history || []);
     const updatedAt = now();
@@ -520,10 +521,15 @@ function reusableDiagnostic(analysis: Record<string, any> | null | undefined, ke
 function analysisRepairReasons(deep: Record<string, any>, group: Group) {
   if (group === "etf") return [];
   const essential = ["revenue", "income", "balance", "cashflow", "institutional", "margin"];
-  const reasons = essential.filter((key) =>
-    ["empty-no-history", "stale-source-period"].includes(String(deep?.sourceDiagnostics?.[key]?.status || "")));
+  const reasons = essential.filter((key) => {
+    const diagnostic = deep?.sourceDiagnostics?.[key];
+    return diagnostic?.retryable === true &&
+      ["empty-no-history", "stale-source-period"].includes(String(diagnostic?.status || ""));
+  });
   const coverage = deep?.financial?.sourceCoverage || {};
-  if (["incomeRows", "balanceRows", "cashflowRows"].some((key) => Number(coverage[key]) <= 0)) {
+  const financialDiagnostics = ["income", "balance", "cashflow"].map((key) => deep?.sourceDiagnostics?.[key]);
+  if (["incomeRows", "balanceRows", "cashflowRows"].some((key) => Number(coverage[key]) <= 0) &&
+      financialDiagnostics.some((diagnostic) => diagnostic?.retryable === true)) {
     reasons.push("financial-source-coverage");
   }
   return [...new Set(reasons)];

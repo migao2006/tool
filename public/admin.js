@@ -42,7 +42,9 @@
     }).format(date);
   };
   const groupLabel = value => ({ listed: '上市', otc: '上櫃', etf: 'ETF' })[value] || value || '全市場';
-  const jobLabel = value => ({
+  const jobLabel = value => /^history_/i.test(String(value || ''))
+    ? `歷史日線 ${String(value).replace(/^history_/i, '')}`
+    : ({
     universe: '全市場盤後資料',
     deep_listed: '上市深度分析',
     deep_otc: '上櫃深度分析',
@@ -270,17 +272,21 @@
       <div class="admin-action-grid"><button id="adminRefresh" class="btn" type="button">重新整理</button><button id="adminCopyReport" class="btn secondary" type="button">複製修復報告</button><button id="adminLogout" class="btn danger" type="button">登出</button></div>
     </section>
     <section class="admin-summary grid three">
-      ${metric('待修復', `${number(summary.pendingRepairs)} 筆`)}
+      ${metric('待修復標的', `${number(summary.pendingRepairs)} 筆`)}
+      ${metric('可修復資料項', `${number(summary.actionableMissing)} 項`)}
       ${metric('分析錯誤', `${number(summary.analysisErrors)} 筆`)}
-      ${metric('失敗工作', `${number(summary.failedJobs)} 個`)}
+      ${metric('核心失敗工作', `${number(summary.failedJobs)} 個`)}
+      ${metric('按需查詢異常', `${number(summary.historyLookupIssues)} 個`)}
       ${metric('執行中', `${number(summary.runningJobs)} 個`)}
-      ${metric('完成分析', `${number(summary.readyAnalyses)} 檔`)}
+      ${metric('本期深度分析', `${number(summary.currentReadyAnalyses)} 檔`)}
+      ${metric('保留分析快取', `${number(summary.readyAnalyses)} 檔`)}
+      ${metric('v20 模型完成', `${number(summary.v20ModelSymbols)} 檔`)}
       ${metric('最新資料日', summary.latestDataDate || health.dataDate || '—')}
     </section>
     <section class="health-section"><h2>同步工作</h2><div class="admin-job-list">${jobs.length ? jobs.map(jobCard).join('') : '<div class="card muted">尚無同步工作日誌。</div>'}</div></section>
     <section class="health-section"><h2>API 使用量</h2><div class="card"><div class="grid three">${metric('近 60 分鐘', `${number(quota.usedLast60Minutes)} 單位`)}${metric('預約紀錄', `${number(quota.reservationCount)} 筆`)}${metric('最早釋放', timestamp(quota.nextReleaseAt))}</div>${groupQuota.length ? `<div class="rules admin-quota-tags">${groupQuota.map(item => `<span>${escapeHtml(jobLabel(item.key))} ${number(item.value)} 單位</span>`).join('')}</div>` : ''}</div></section>
     <section class="health-section"><h2>資料來源</h2><div class="health-sources">${sources.length ? sources.map(sourceCard).join('') : '<div class="card muted">來源健康資料尚未回傳。</div>'}</div></section>
-    <section class="health-section"><div class="head"><div><h2>修復佇列</h2><div class="muted">可直接篩選並複製成修復報告。</div></div><span class="status-pill">${number(payload.repairQueue?.pending)} pending · ${number(payload.repairQueue?.errors)} errors</span></div>
+    <section class="health-section"><div class="head"><div><h2>修復佇列</h2><div class="muted">只列真正可重試項目；來源限制與不適用欄位保留在缺漏分類。</div></div><span class="status-pill">${number(payload.repairQueue?.pending)} pending · ${number(payload.repairQueue?.errors)} errors</span></div>
       <div class="card admin-filter-grid">
         <label>市場<select id="adminGroupFilter"><option value="all">全部市場</option><option value="listed">上市</option><option value="otc">上櫃</option><option value="etf">ETF</option></select></label>
         <label>狀態<select id="adminStatusFilter"><option value="all">全部狀態</option><option value="pending">待修復</option><option value="error">錯誤</option></select></label>
@@ -313,16 +319,16 @@
     const repairs = rows(payload.repairQueue?.items).filter(matchesFilters);
     const jobs = rows(payload.jobs);
     return [
-      '台股智選 v18.0.0 管理後台修復報告',
+      `台股智選 v${payload.version || '20.0.0'} 管理後台修復報告`,
       `產生時間：${timestamp(payload.generatedAt)}`,
       `資料日期：${summary.latestDataDate || payload.health?.dataDate || '—'}`,
       '',
-      `摘要：待修復 ${number(summary.pendingRepairs)}、分析錯誤 ${number(summary.analysisErrors)}、失敗工作 ${number(summary.failedJobs)}、完成分析 ${number(summary.readyAnalyses)}`,
+      `摘要：待修復標的 ${number(summary.pendingRepairs)}、可修復資料項 ${number(summary.actionableMissing)}、分析錯誤 ${number(summary.analysisErrors)}、核心失敗工作 ${number(summary.failedJobs)}、按需查詢異常 ${number(summary.historyLookupIssues)}、本期深度分析 ${number(summary.currentReadyAnalyses)}、v20 模型完成 ${number(summary.v20ModelSymbols)}`,
       '',
       '同步工作：',
       ...jobs.map(job => `- ${jobLabel(job.jobKey)}｜${statusLabel(job.status)}｜${number(job.processed)}/${number(job.total)} (${number(job.progress, 1)}%)｜資料日 ${job.cycleDate || '—'}${job.lastErrorCode ? `｜${errorLabels[job.lastErrorCode] || job.lastErrorCode}` : ''}`),
       '',
-      '缺漏分類：',
+      '缺漏分類（含來源限制、不適用及保留快取；不等於待修復）：',
       ...(missing.length ? missing.map(item => `- ${datasetLabels[item.dataset] || item.dataset || '資料'}｜${classificationLabels[item.classification] || item.classification || '待判定'}｜${number(item.count)} 筆`) : ['- 無']),
       '',
       `修復項目（目前篩選 ${repairs.length} 筆）：`,

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { FINMIND_PROFILES, selectFinmindProfile } from "../src/finmind-profile.js";
 
-const [sync, baseSchema, schema, grants, cron, acceleratedCron, leases, quota, publicHistoryQuota, preserve, repairQueue, clearEtfRepairs, etfDirectionRepair, lateCoverageRepair, clearOldVersionRepairs, trim, config, marketHandler, workflow, exporter, backtest, freeInsights, backtestSchema, hardening, diagnosticPrivacy, adminDashboard, dateReconcile, finmindVault] = await Promise.all([
+const [sync, baseSchema, schema, grants, cron, acceleratedCron, leases, quota, publicHistoryQuota, preserve, repairQueue, clearEtfRepairs, etfDirectionRepair, lateCoverageRepair, clearOldVersionRepairs, trim, config, marketHandler, workflow, exporter, backtest, freeInsights, backtestSchema, hardening, diagnosticPrivacy, adminDashboard, dateReconcile, finmindVault, adminRepair] = await Promise.all([
   readFile(new URL("../supabase/functions/twss-sync-batch/index.ts", import.meta.url), "utf8"),
   readFile(new URL("../supabase/migrations/20260714040000_base_schema.sql", import.meta.url), "utf8"),
   readFile(new URL("../supabase/migrations/20260714090000_add_persistent_stock_backend.sql", import.meta.url), "utf8"),
@@ -31,6 +31,7 @@ const [sync, baseSchema, schema, grants, cron, acceleratedCron, leases, quota, p
   readFile(new URL("../supabase/migrations/20260715205510_add_admin_health_dashboard.sql", import.meta.url), "utf8"),
   readFile(new URL("../supabase/migrations/20260715210000_add_evening_market_date_reconciliation.sql", import.meta.url), "utf8"),
   readFile(new URL("../supabase/migrations/20260715235500_secure_finmind_vault.sql", import.meta.url), "utf8"),
+  readFile(new URL("../supabase/migrations/20260716081755_repair_admin_semantics.sql", import.meta.url), "utf8"),
 ]);
 
 const hardenedBacktest = hardening.match(
@@ -75,6 +76,12 @@ assert.match(sync, /HISTORY_PENDING/, "a full hourly budget must return a struct
 assert.match(sync, /claimLease\(jobKey, owner, 180\)/, "concurrent opens of one symbol must share a distributed lease");
 assert.match(sync, /existing\.length >= 120/, "a partial series must not be mistaken for complete technical history");
 assert.match(sync, /historyComplete === true/, "a confirmed short source history must not be fetched forever");
+assert.match(sync, /allowShortHistory: true/,
+  "a successful short history for a new listing must be persisted instead of reported as an API failure");
+assert.match(sync, /diagnostic\?\.retryable === true/,
+  "only explicitly retryable source gaps may enter the repair queue");
+assert.match(sync, /financialDiagnostics\.some\(\(diagnostic\) => diagnostic\?\.retryable === true\)/,
+  "financial coverage repair must require at least one retryable source");
 assert.match(sync, /mergeLatestOfficialSnapshot/, "on-demand history must merge the latest official daily quote");
 assert.match(sync, /bypassCache: true/, "reserved scheduled calls must not be hidden by an eight-hour memory cache");
 assert.match(sync, /passesPreflight\(stock, group\)/, "liquidity and hard-risk exclusions must run before expensive history requests");
@@ -180,6 +187,14 @@ assert.match(adminDashboard, /revoke all on function public\.twss_admin_operatio
   "anonymous callers must not execute the administrator log RPC");
 assert.doesNotMatch(adminDashboard, /insert into public\.app_admins|@[A-Za-z0-9.-]+/,
   "source migrations must not hard-code an administrator account");
+assert.match(adminRepair, /'version', '20\.0\.0'/,
+  "the administrator report must identify the deployed v20 application");
+assert.match(adminRepair, /historyRows/,
+  "on-demand history jobs must report their actual persisted row count");
+assert.match(adminRepair, /v20ModelSymbols/,
+  "the administrator summary must distinguish v20 model coverage from retained legacy analysis cache");
+assert.match(adminRepair, /sourceDiagnostics,margin,retryable/,
+  "the one-time cleanup must only clear confirmed non-retryable margin gaps");
 
 assert.match(cron, /"group":"listed","limit":2/);
 assert.match(cron, /"group":"otc","limit":2/);

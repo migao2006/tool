@@ -11,6 +11,16 @@ const MAX_LIMIT = 50;
 const MODEL_HORIZONS = Object.freeze({ short: [2, 3, 5, 10], medium: [20, 40, 60] });
 const DEFAULT_HORIZON = Object.freeze({ short: 5, medium: 40 });
 const RANKING_GROUPS = Object.freeze(["listed", "otc", "etf"]);
+const GLOBAL_ALIASES = Object.freeze({
+  nasdaq: ["nasdaq"],
+  sp500: ["sp500"],
+  sox: ["sox"],
+  tsmAdr: ["tsmAdr"],
+  nvda: ["nvda", "nvidia"],
+  vix: ["vix"],
+  usTreasury: ["usTreasury", "us10y"],
+  twdUsd: ["twdUsd", "usdTwd"],
+});
 const SORTS = Object.freeze({
   score_desc: "opportunity_score.desc.nullslast,confidence.desc.nullslast,symbol.asc",
   expected_value_desc: "expected_value.desc.nullslast,opportunity_score.desc.nullslast,symbol.asc",
@@ -108,6 +118,50 @@ function normalizeMarket(row = {}) {
     generatedAt: row.generated_at || null,
     updatedAt: row.updated_at || null,
   };
+}
+
+function globalIndicators(row = {}) {
+  const context = cleanObject(row.globalContext);
+  return Object.values(GLOBAL_ALIASES).flatMap((aliases) => {
+    const value = aliases.map((alias) => context[alias]).find((item) => item && typeof item === "object");
+    return value ? [value] : [];
+  });
+}
+
+function carryForwardGlobal(rows) {
+  const current = rows[0] || normalizeMarket({});
+  if (globalIndicators(current).length >= Object.keys(GLOBAL_ALIASES).length) return current;
+  const previous = rows.slice(1).find((row) => globalIndicators(row).length);
+  if (!previous) return current;
+  const globalDateKeys = new Set(["global", ...Object.values(GLOBAL_ALIASES).flat()]);
+  const priorDates = Object.fromEntries(
+    Object.entries(previous.sourceDates || {}).filter(([key]) => globalDateKeys.has(key)),
+  );
+  current.globalContext = { ...previous.globalContext, ...current.globalContext };
+  current.sourceDates = { ...priorDates, ...current.sourceDates };
+  return current;
+}
+
+async function persistGlobalMarket(liveGlobal, token) {
+  if (!token || !liveGlobal?.indicators?.length) return false;
+  const globalContext = {
+    available: true,
+    dataState: liveGlobal.dataState,
+    dataDate: liveGlobal.dataDate,
+    fetchedAt: liveGlobal.fetchedAt,
+    completeness: liveGlobal.completeness,
+    ...Object.fromEntries(liveGlobal.indicators.map((item) => [item.key, item])),
+  };
+  await backendStoreInternals.request("rpc/twss_v20_persist_global_context", {
+    method: "POST",
+    body: JSON.stringify({
+      p_token: token,
+      p_global_context: globalContext,
+      p_source_dates: { ...liveGlobal.sourceDates, global: liveGlobal.dataDate },
+      p_degraded_sources: arrays(liveGlobal.degradedSources),
+    }),
+  });
+  return true;
 }
 
 function normalizeRanking(row = {}) {
@@ -405,7 +459,8 @@ async function loadMixedDateRankingPage(query, groupDates) {
     hasMore: merged.length > query.offset + query.limit,
     rankingDate: Object.values(groupDates).sort().at(-1) || null,
     groupDates,
-    missingGroups: RANKING_GROUPS.filter((group) => !groupDates[group]),
+    // An empty ETF recommendation set is valid when no ETF passes the hard gate.
+    missingGroups: RANKING_GROUPS.filter((group) => group !== "etf" && !groupDates[group]),
     paginationMode: "offset",
   };
 }
@@ -528,9 +583,9 @@ export async function readV20Market(options = {}) {
   const marketCacheKey = "v20:market";
   try {
     row = await cached(marketCacheKey, MARKET_TTL_MS, async () => {
-      const params = new URLSearchParams({ select: "*", model_version: `eq.${MODEL_VERSION}`, order: "data_date.desc", limit: "1" });
+      const params = new URLSearchParams({ select: "*", model_version: `eq.${MODEL_VERSION}`, order: "data_date.desc", limit: "10" });
       const { data } = await backendStoreInternals.request(`v20_market_context?${params}`);
-      return normalizeMarket(Array.isArray(data) ? data[0] : null);
+      return carryForwardGlobal((Array.isArray(data) ? data : []).map(normalizeMarket));
     });
     if (memoryCache.get(marketCacheKey)?.stale) degraded.push("v20_market_cache_stale");
   } catch {
@@ -544,7 +599,10 @@ export async function readV20Market(options = {}) {
   let liveGlobal = null;
   if (options.refreshGlobal === true) {
     try {
-      liveGlobal = await readV20GlobalMarket({ force: true });
+      liveGlobal = await readV20GlobalMarket({
+        force: true,
+        previous: { indicators: globalIndicators(row) },
+      });
       if (liveGlobal.indicators?.length) {
         row.globalContext = {
           ...row.globalContext,
@@ -552,23 +610,20 @@ export async function readV20Market(options = {}) {
         };
         row.sourceDates = { ...row.sourceDates, ...liveGlobal.sourceDates };
         row.fetchedAt = liveGlobal.fetchedAt || row.fetchedAt;
+        try {
+          await persistGlobalMarket(liveGlobal, options.persistenceToken);
+          degraded = degraded.filter((source) => source !== "international_context");
+          row.degradedSources = arrays(row.degradedSources).filter((source) => source !== "international_context");
+        } catch {
+          degraded.push("global_market_persistence");
+        }
       }
       degraded.push(...arrays(liveGlobal.degradedSources));
     } catch {
       degraded.push("global_market_context");
     }
   }
-  const globalAliases = {
-    nasdaq: ["nasdaq"],
-    sp500: ["sp500"],
-    sox: ["sox"],
-    tsmAdr: ["tsmAdr"],
-    nvda: ["nvda", "nvidia"],
-    vix: ["vix"],
-    usTreasury: ["usTreasury", "us10y"],
-    twdUsd: ["twdUsd", "usdTwd"],
-  };
-  for (const [key, aliases] of Object.entries(globalAliases)) {
+  for (const [key, aliases] of Object.entries(GLOBAL_ALIASES)) {
     if (!aliases.some((alias) => row.globalContext?.[alias])) degraded.push(`global_${key}`);
   }
   return {

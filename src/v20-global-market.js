@@ -179,7 +179,7 @@ export async function readV20GlobalMarket(options = {}) {
     degradedSources.push("alpha-vantage:missing_server_key");
   }
 
-  const indicators = mergeLastGood(fresh, cache?.value);
+  const indicators = mergeLastGood(fresh, options.previous || cache?.value);
   const expectedCount = FINNHUB_QUOTES.length + 2;
   const sourceDates = Object.fromEntries(
     indicators.filter((item) => item.dataDate).map((item) => [item.key, item.dataDate]),

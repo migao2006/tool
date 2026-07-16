@@ -59,8 +59,10 @@ async function request(path, options = {}) {
       headers: {
         accept: "application/json",
         apikey: SUPABASE_PUBLIC_KEY,
+        ...(options.body ? { "content-type": "application/json" } : {}),
         ...(options.headers || {}),
       },
+      body: options.body,
       signal: controller.signal,
       cache: "no-store",
     });

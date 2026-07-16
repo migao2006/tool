@@ -8,6 +8,7 @@ export default {
       request.headers.get("x-twss-internal-key") === internalKey;
     return handleV20(request, (url) => readV20Market({
       refreshGlobal: authorizedRefresh && url.searchParams.get("refresh") === "global",
+      persistenceToken: authorizedRefresh ? internalKey : null,
     }));
   },
 };

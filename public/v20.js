@@ -183,7 +183,7 @@
       const value = keys.map(key => context[key]).find(Boolean);
       return value ? [[label, value]] : [];
     });
-    if (!rows.length) return '<div class="v20-inline-note">國際指標尚未取得官方金鑰或快取，暫不顯示推測值。</div>';
+    if (!rows.length) return '<div class="v20-inline-note">國際指標快取尚未同步；目前保留其他已載入資料，不顯示推測值。</div>';
     return `<div class="v20-global-strip">${rows.map(([label, value]) => `<div><small>${esc(value?.label || (value?.proxy ? `${label}（ETF 代理）` : label))}</small><b>${displayNumber(marketValue(value), 2)}</b><span>${num(marketChange(value)) == null ? '—' : displayPercent(marketChange(value), 2)}</span><time>${esc(first(value?.dataDate, '日期待補'))}</time><em>${esc(first(value?.source, value?.symbol, '來源待補'))}</em></div>`).join('')}</div>`;
   }
 
@@ -207,7 +207,22 @@
     const officialIndices = new Map(safeArray(globalThis.twssV19Benchmarks?.marketIndices).map(item => [String(item.code || ''), item]));
     const reportNews = safeArray(first(v20.dailyReport?.report?.importantNewsAndAnnouncements, v20.dailyReport?.report?.importantNews));
     const news = safeArray(home.importantNews).length ? safeArray(home.importantNews) : reportNews;
-    const state = statusBanner(home, v20.homePhase, v20.homeError);
+    const resolvedSources = new Set([
+      marketValue(officialIndices.get('taiex')) != null && 'taiex_official_index',
+      marketValue(officialIndices.get('tpex')) != null && 'tpex_official_index',
+      marketValue(officialIndices.get('tx')) != null && 'tx_futures',
+    ].filter(Boolean));
+    let visibleDegraded = safeArray(home.degradedSources).filter(source => !resolvedSources.has(source));
+    const globalMissing = visibleDegraded.filter(source => source === 'international_context' || source.startsWith('global_'));
+    if (globalMissing.length > 1) {
+      visibleDegraded = visibleDegraded.filter(source => !globalMissing.includes(source));
+      visibleDegraded.push('international_context');
+    }
+    const state = statusBanner({
+      ...home,
+      dataState: visibleDegraded.length ? home.dataState : 'complete',
+      degradedSources: visibleDegraded,
+    }, v20.homePhase, v20.homeError);
     return `<div class="v20-dashboard">
       ${pageHero('MARKET INTELLIGENCE · v20', '今日重點', '先看結論，再展開需要的細節。', state)}
       <section class="v20-section"><div class="v20-section-title"><div><span>MARKET REGIME</span><h3>今日市場環境</h3></div><strong>${esc(market.regime || '資料不足')}</strong></div>

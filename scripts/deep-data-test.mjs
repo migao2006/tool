@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { deepDataInternals } from "../src/deep-data.js";
+import { buildDeepDataFromStoredSources, deepDataInternals } from "../src/deep-data.js";
 
 assert.equal(deepDataInternals.finmindCooldownMs({ status: 401 }), 60 * 60 * 1_000);
 assert.equal(
@@ -222,5 +222,65 @@ const quarterGap = deepDataInternals.financialSummary([
 ], [], []);
 assert.equal(quarterGap.continuousQuarters, 2);
 assert.equal(quarterGap.ttmOperatingCashFlow, null, "non-consecutive quarters must not form a fake TTM window");
+
+const storedPriceHistory = Array.from({ length: 130 }, (_, index) => ({
+  trade_date: new Date(Date.UTC(2026, 0, index + 1)).toISOString().slice(0, 10),
+  open: 100 + index / 10,
+  high: 101 + index / 10,
+  low: 99 + index / 10,
+  close: 100.5 + index / 10,
+  volume: 1_000 + index,
+  trade_value: 100_000_000 + index,
+  transactions: 500 + index,
+}));
+const originalFetch = globalThis.fetch;
+globalThis.fetch = async () => { throw new Error("stored-source analysis must not access the network"); };
+try {
+  const stored = buildDeepDataFromStoredSources("2330", "股票", "上市", {
+    sourceData: {
+      price_history: storedPriceHistory,
+      revenues: Array.from({ length: 24 }, (_, index) => ({
+        revenue_period: `${2024 + Math.floor(index / 12)}-${String(index % 12 + 1).padStart(2, "0")}`,
+        revenue_year: 2024 + Math.floor(index / 12),
+        revenue_month: index % 12 + 1,
+        revenue: 1_000 + index * 10,
+        available_at: `${2024 + Math.floor(index / 12)}-${String(index % 12 + 1).padStart(2, "0")}-10`,
+      })),
+      financials: periods.map(([date, revenue, netIncome, ocf, capex]) => ({
+        report_date: date,
+        report_period: `${date.slice(0, 4)} Q${Math.ceil(Number(date.slice(5, 7)) / 3)}`,
+        revenue,
+        net_income: netIncome,
+        eps: netIncome / 50,
+        operating_cash_flow: ocf,
+        free_cash_flow: ocf - capex,
+      })),
+      institutional: Array.from({ length: 20 }, (_, index) => ({
+        trade_date: storedPriceHistory.at(-20 + index).trade_date,
+        foreign_net: 100 + index,
+        trust_net: 20,
+        dealer_net: -10,
+      })),
+      margin: Array.from({ length: 20 }, (_, index) => ({
+        trade_date: storedPriceHistory.at(-20 + index).trade_date,
+        margin_balance: 10_000 + index,
+        margin_limit: 100_000,
+        short_balance: 500 + index,
+      })),
+      lending: [],
+    },
+    holdings: { date: "2026-06-26", large400Ratio: 55, retail10Ratio: 10 },
+  });
+  assert.equal(stored.price.sufficient, true);
+  assert.equal(stored.price.rows, 130);
+  assert.equal(stored.revenue.months, 24);
+  assert.equal(stored.financial.period, "2026 Q1");
+  assert.equal(stored.institutional.days, 20);
+  assert.equal(stored.margin.days, 20);
+  assert.equal(stored.sourceDiagnostics.lending.status, "empty-no-history");
+  assert.match(stored.source, /Supabase/);
+} finally {
+  globalThis.fetch = originalFetch;
+}
 
 console.log("Deep-data tests passed: financial semantics, current-quote merge, and alphanumeric ETF symbols");

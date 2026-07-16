@@ -12,12 +12,16 @@
   const DEFAULT_HORIZON = { short: 5, medium: 40 };
   const stateLabels = {
     cache: ['已載入快取資料', 'cache'],
+    cached: ['已載入快取資料', 'cache'],
+    base_ready: ['基礎分析已完成', 'complete'],
+    enriching: ['背景資料補齊中', 'refreshing'],
     refreshing: ['正在取得最新資料', 'refreshing'],
     complete: ['已完成更新', 'complete'],
     partial: ['部分資料不足', 'partial'],
     error: ['API 更新失敗', 'error']
   };
   const num = value => value != null && Number.isFinite(Number(value)) ? Number(value) : null;
+  const dateKey = value => /^\d{4}-\d{2}-\d{2}/.test(String(value || '')) ? String(value).slice(0, 10) : '';
   const displayNumber = (value, digits = 1) => num(value) == null ? '資料不足' : Number(value).toLocaleString('zh-TW', { maximumFractionDigits: digits });
   const displayPercent = (value, digits = 1) => num(value) == null ? '資料不足' : `${Number(value) > 0 ? '+' : ''}${Number(value).toFixed(digits)}%`;
   const probability = value => num(value) == null ? '資料不足' : `${Number(value).toFixed(1)}%`;
@@ -74,6 +78,9 @@
       totalEstimate: cached?.totalEstimate || 0,
       dataDate: cached?.dataDate || null,
       completeness: cached?.completeness || 0,
+      dataCompleteness: cached?.dataCompleteness || cached?.completeness || 0,
+      publicationPhase: cached?.publicationPhase || (cached ? 'cached' : 'refreshing'),
+      enrichmentPending: cached?.enrichmentPending || 0,
       degradedSources: safeArray(cached?.degradedSources),
       phase: cached ? 'cache' : 'refreshing',
       loading: false,
@@ -89,7 +96,7 @@
   }
 
   const cachedHome = readCache('home');
-  const cachedDailyReport = readDailyReportCache();
+  const cachedDailyReport = unwrapDailyReport(cachedHome?.dailyReport) || readDailyReportCache();
   const v20 = {
     home: cachedHome,
     homePhase: cachedHome ? 'cache' : 'refreshing',
@@ -127,11 +134,12 @@
   }
 
   function statusBanner(payload, phase, error = '') {
-    const state = error ? 'error' : phase === 'refreshing' ? 'refreshing' : phase === 'cache' ? 'cache' : payload?.dataState || 'partial';
+    const state = error ? 'error' : phase === 'refreshing' ? 'refreshing' : phase === 'cache' ? 'cache' : payload?.publicationPhase || payload?.dataState || 'partial';
     const [label, className] = stateLabels[state] || stateLabels.partial;
     const date = payload?.dataDate || S.date || '日期待補';
     const degraded = safeArray(payload?.degradedSources);
-    return `<div class="v20-data-status ${className}" role="status"><span class="v20-status-dot"></span><div><b>${label}</b><small>資料日期 ${esc(date)}${degraded.length ? ` · ${degraded.length} 個來源待補` : ''}</small></div>${state === 'refreshing' ? '<span class="spinner" aria-hidden="true"></span>' : ''}</div>`;
+    const pending = num(payload?.enrichmentPending);
+    return `<div class="v20-data-status ${className}" role="status"><span class="v20-status-dot"></span><div><b>${label}</b><small>資料日期 ${esc(date)}${pending > 0 ? ` · 背景待補 ${displayNumber(pending, 0)} 筆` : degraded.length ? ` · ${degraded.length} 個來源待補` : ''}</small></div>${state === 'refreshing' || state === 'enriching' ? '<span class="spinner" aria-hidden="true"></span>' : ''}</div>`;
   }
 
   function pageHero(eyebrow, title, description, status = '') {
@@ -198,7 +206,7 @@
     const risks = safeArray(first(report.mainRisks, report.risks)).slice(0, 3);
     const changes = safeArray(report.watchlistChanges).slice(0, 4);
     if (!wrapped) return `<section class="v20-section"><div class="v20-section-title"><div><span>DAILY AI BRIEF</span><h3>AI 每日報告</h3></div></div><div class="card v20-empty">${v20.dailyPhase === 'refreshing' ? '<span class="spinner"></span> 正在背景讀取最近一次報告，首頁其他內容可先使用。' : '每日報告更新失敗，保留其他已載入內容。'}</div></section>`;
-    return `<section class="v20-section"><div class="v20-section-title"><div><span>DAILY AI BRIEF</span><h3>AI 每日報告</h3></div><small>${esc(meta.dataDate || '日期待補')}</small></div><article class="card v20-daily-report">${statusBanner({ dataState: meta.updateStatus || meta.dataState, dataDate: meta.dataDate, degradedSources: meta.degradedSources }, v20.dailyPhase, v20.dailyError)}<p class="v20-daily-lead">${esc(first(report.oneLine, report.todayInOneSentence, '今日市場結論待補'))}</p><div class="v20-daily-grid"><div><small>市場強弱</small><b>${esc(first(strength.level, strength.label, '資料不足'))}</b><p>${esc(first(strength.explanation, '等待市場廣度資料補齊。'))}</p></div><div><small>法人方向</small><b>${esc(first(institutional.direction, institutional.label, '資料不足'))}</b><p>${esc(first(institutional.explanation, '等待法人資料補齊。'))}</p></div></div>${industries.length ? `<div class="v20-daily-block"><h4>熱門產業</h4><div class="v20-chip-row">${industries.map(item => `<span>${esc(item.industry || item.name || item)}${num(item.averageChangePct) == null ? '' : ` ${displayPercent(item.averageChangePct)}`}</span>`).join('')}</div></div>` : ''}${focus.length ? `<div class="v20-daily-block"><h4>值得關注</h4><div class="v20-report-stocks">${focus.map(item => `<button type="button" data-v20-detail="${esc(item.symbol)}"><b>${esc(item.name || item.symbol)}</b><small>${esc(item.symbol)} · ${esc(first(item.whyNotice, item.advantage, '查看量化分析'))}</small></button>`).join('')}</div></div>` : ''}${risks.length ? `<div class="v20-daily-block"><h4>主要風險</h4><ul>${risks.map(item => `<li><b>${esc(item.title || '風險提醒')}</b> ${esc(item.explanation || item.risk || item)}</li>`).join('')}</ul></div>` : ''}<div class="v20-daily-block"><h4>自選股變化</h4>${changes.length ? `<ul>${changes.map(item => `<li>${esc(typeof item === 'string' ? item : first(item.explanation, item.message, item.title, item.symbol))}</li>`).join('')}</ul>` : '<p class="muted">目前沒有已驗證的重要變化。</p>'}</div></article></section>`;
+    return `<section class="v20-section"><div class="v20-section-title"><div><span>DAILY AI BRIEF</span><h3>AI 每日報告</h3></div><small>${esc(meta.dataDate || '日期待補')}</small></div><article class="card v20-daily-report">${statusBanner({ dataState: meta.updateStatus || meta.dataState, dataDate: meta.dataDate, publicationPhase: meta.publicationPhase, enrichmentPending: meta.enrichmentPending, degradedSources: meta.degradedSources }, v20.dailyPhase, v20.dailyError)}<p class="v20-daily-lead">${esc(first(report.oneLine, report.todayInOneSentence, '今日市場結論待補'))}</p><div class="v20-daily-grid"><div><small>市場強弱</small><b>${esc(first(strength.level, strength.label, '資料不足'))}</b><p>${esc(first(strength.explanation, '等待市場廣度資料補齊。'))}</p></div><div><small>法人方向</small><b>${esc(first(institutional.direction, institutional.label, '資料不足'))}</b><p>${esc(first(institutional.explanation, '等待法人資料補齊。'))}</p></div></div>${industries.length ? `<div class="v20-daily-block"><h4>熱門產業</h4><div class="v20-chip-row">${industries.map(item => `<span>${esc(item.industry || item.name || item)}${num(item.averageChangePct) == null ? '' : ` ${displayPercent(item.averageChangePct)}`}</span>`).join('')}</div></div>` : ''}${focus.length ? `<div class="v20-daily-block"><h4>值得關注</h4><div class="v20-report-stocks">${focus.map(item => `<button type="button" data-v20-detail="${esc(item.symbol)}"><b>${esc(item.name || item.symbol)}</b><small>${esc(item.symbol)} · ${esc(first(item.whyNotice, item.advantage, '查看量化分析'))}</small></button>`).join('')}</div></div>` : ''}${risks.length ? `<div class="v20-daily-block"><h4>主要風險</h4><ul>${risks.map(item => `<li><b>${esc(item.title || '風險提醒')}</b> ${esc(item.explanation || item.risk || item)}</li>`).join('')}</ul></div>` : ''}<div class="v20-daily-block"><h4>自選股變化</h4>${changes.length ? `<ul>${changes.map(item => `<li>${esc(typeof item === 'string' ? item : first(item.explanation, item.message, item.title, item.symbol))}</li>`).join('')}</ul>` : '<p class="muted">目前沒有已驗證的重要變化。</p>'}</div></article></section>`;
   }
 
   function homePageV20() {
@@ -245,7 +253,7 @@
     const page = v20.pages[model];
     const label = model === 'short' ? '短期機會股' : '中期機會股';
     const description = model === 'short' ? '尋找量價、突破、籌碼與事件形成的短波段。' : '尋找成長、產業趨勢、法人布局與中期趨勢。';
-    const status = statusBanner({ dataState: page.phase, dataDate: page.dataDate, completeness: page.completeness, degradedSources: page.degradedSources }, page.phase, page.error);
+    const status = statusBanner({ dataState: page.phase, dataDate: page.dataDate, completeness: page.completeness, dataCompleteness: page.dataCompleteness, publicationPhase: page.publicationPhase, enrichmentPending: page.enrichmentPending, degradedSources: page.degradedSources }, page.phase, page.error);
     return `<div class="v20-ranking-page">${pageHero(model === 'short' ? 'SHORT-TERM MODEL' : 'MID-TERM MODEL', label, description, status)}${rankingFilters(model, page)}
       <div class="v20-results-head"><div><b>${page.items.length} 檔</b><small>資料日期 ${esc(page.dataDate || S.date || '待補')}</small></div><span>分數與風險分開呈現</span></div>
       <div class="v20-card-list">${page.items.map((row, index) => modelCard(row, index + 1)).join('') || `<div class="card v20-empty">${page.loading ? '<span class="spinner"></span> 正在局部更新排行，其他頁面仍可使用。' : '目前沒有通過硬性條件且資料完整的股票。'}</div>`}</div>
@@ -434,6 +442,9 @@
       page.totalEstimate = payload.totalEstimate || page.items.length;
       page.dataDate = payload.dataDate || page.dataDate;
       page.completeness = payload.completeness || 0;
+      page.dataCompleteness = payload.dataCompleteness || page.completeness;
+      page.publicationPhase = payload.publicationPhase || payload.dataState || 'partial';
+      page.enrichmentPending = payload.enrichmentPending || 0;
       page.degradedSources = safeArray(payload.degradedSources);
       page.phase = payload.dataState || 'partial';
       page.loaded = true;
@@ -461,6 +472,13 @@
       v20.home = payload;
       v20.homePhase = payload.dataState || 'partial';
       v20.homeError = '';
+      const atomicReport = unwrapDailyReport(payload.dailyReport);
+      if (atomicReport && dateKey(atomicReport.meta.dataDate) === dateKey(payload.dataDate)) {
+        v20.dailyReport = atomicReport;
+        v20.dailyPhase = atomicReport.meta.publicationPhase || 'base_ready';
+        v20.dailyError = '';
+        try { localStorage.setItem('twss-v19-daily-report-cache', JSON.stringify(payload.dailyReport)); } catch { /* optional */ }
+      }
       writeCache('home', payload);
     } catch (error) {
       v20.homePhase = v20.home ? 'cache' : 'error';
@@ -478,8 +496,18 @@
       const raw = await response.json();
       const wrapped = unwrapDailyReport(raw);
       if (!wrapped) throw new Error('daily_report_invalid');
+      const expectedDate = dateKey(v20.home?.dataDate);
+      const currentDate = dateKey(v20.dailyReport?.meta?.dataDate);
+      if (expectedDate && currentDate === expectedDate) return;
+      wrapped.meta = {
+        ...wrapped.meta,
+        publicationPhase: 'cached',
+        updateStatus: 'cached',
+        cachedFallback: true,
+        expectedDataDate: expectedDate || null,
+      };
       v20.dailyReport = wrapped;
-      v20.dailyPhase = wrapped.meta.updateStatus === 'complete' ? 'complete' : 'partial';
+      v20.dailyPhase = 'cache';
       v20.dailyError = '';
       try { localStorage.setItem('twss-v19-daily-report-cache', JSON.stringify(raw)); } catch { /* optional */ }
     } catch (error) {

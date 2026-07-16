@@ -5,8 +5,10 @@ import {
   ANALYSIS_VERSION,
   buildBenchmarks,
   buildDeepData,
+  buildDeepDataFromStoredSources,
   buildPriceHistory,
   buildTdccSnapshot,
+  deepDataInternals,
 } from "../../../src/deep-data.js";
 // @ts-ignore JavaScript modules are shared with the Vercel runtime.
 import { handleMarketData } from "../../../src/market-data.js";
@@ -14,8 +16,17 @@ import { handleMarketData } from "../../../src/market-data.js";
 import { buildPeerContexts, scoreOpportunity } from "../../../src/opportunity-engine.js";
 // @ts-ignore JavaScript modules are shared with the Vercel runtime.
 import { selectFinmindProfile } from "../../../src/finmind-profile.js";
+// @ts-ignore Pure helpers are shared with the Node regression test.
+import {
+  enrichmentQueueRows,
+  finmindJobCost,
+  hasUniverseDateRegression,
+  normalizeLendingRows,
+  officialHistoryRows,
+} from "./db-first-utils.js";
 
 const VERSION = "16.3";
+const PIPELINE_VERSION = "20-db-first";
 const PROJECT_URL = Deno.env.get("SUPABASE_URL") || "";
 const GROUPS = ["listed", "otc", "etf"] as const;
 type Group = typeof GROUPS[number];
@@ -49,7 +60,7 @@ const taipeiDate = () => new Intl.DateTimeFormat("en-CA", {
   day: "2-digit",
 }).format(new Date());
 
-async function logAdminHealth(mode: "universe" | "deep", result: unknown, group: Group | null = null) {
+async function logAdminHealth(mode: "universe" | "deep" | "enrichment", result: unknown, group: Group | null = null) {
   const row = result && typeof result === "object" && !Array.isArray(result)
     ? result as Record<string, any>
     : {};
@@ -149,6 +160,22 @@ async function upsert(table: string, rows: Record<string, unknown>[], conflict: 
       method: "POST",
       body: normalized,
       prefer: "resolution=merge-duplicates,return=minimal",
+    });
+  }
+}
+
+async function insertIgnore(table: string, rows: Record<string, unknown>[], conflict: string, chunkSize = 200) {
+  if (!rows.length) return;
+  for (let index = 0; index < rows.length; index += chunkSize) {
+    const chunk = rows.slice(index, index + chunkSize);
+    const keys = [...new Set(chunk.flatMap((row) => Object.keys(row)))];
+    const normalized = chunk.map((row) => Object.fromEntries(
+      keys.map((key) => [key, row[key] === undefined ? null : row[key]]),
+    ));
+    await rest(`${table}?on_conflict=${encodeURIComponent(conflict)}`, {
+      method: "POST",
+      body: normalized,
+      prefer: "resolution=ignore-duplicates,return=minimal",
     });
   }
 }
@@ -327,7 +354,8 @@ async function serveOnDemandHistory(url: URL, access: FinmindAccess) {
   if (!/^\d{4,6}[A-Z]?$/i.test(symbol)) return json({ error: "股票代號格式不正確" }, 400);
   const requestedMonths = Math.max(6, Math.min(24, Number(url.searchParams.get("months")) || 18));
   const jobKey = `history_${symbol}`;
-  let [existing, state] = await Promise.all([storedHistory(symbol), getState(jobKey)]);
+  let [existingValue, state] = await Promise.all([storedHistory(symbol), getState(jobKey)]);
+  let existing: Record<string, any>[] = existingValue;
   existing = await mergeLatestOfficialSnapshot(symbol, existing);
   if (existing.length >= 120 || completedHistoryAttempt(state)) {
     console.info("[public-history] database hit", { symbol, rows: existing.length });
@@ -357,7 +385,9 @@ async function serveOnDemandHistory(url: URL, access: FinmindAccess) {
     }, 202);
   }
   try {
-    [existing, state] = await Promise.all([storedHistory(symbol), getState(jobKey)]);
+    const refreshed = await Promise.all([storedHistory(symbol), getState(jobKey)]);
+    existing = refreshed[0];
+    state = refreshed[1];
     existing = await mergeLatestOfficialSnapshot(symbol, existing);
     if (existing.length >= 120 || completedHistoryAttempt(state)) {
       return json(historyPayload(symbol, existing, "Supabase 後端歷史資料庫"));
@@ -511,6 +541,58 @@ function compactDeep(deep: Record<string, any>) {
     etf: deep.etf,
     reused: deep.reused,
     missing: deep.missing,
+    publicationPhase: deep.publicationPhase || "base_ready",
+    dataCompleteness: finite(deep.dataCompleteness) ? Number(deep.dataCompleteness) : null,
+    sourceDates: deep.sourceDates || {},
+  };
+}
+
+async function latestStoredAlignedUniverse() {
+  const groupParams = (group: Group) => {
+    const params = new URLSearchParams();
+    if (group === "etf") params.set("instrument_type", "eq.ETF");
+    else {
+      params.set("instrument_type", "neq.ETF");
+      params.set("market", `eq.${group === "otc" ? "上櫃" : "上市"}`);
+    }
+    return params;
+  };
+  const latestPairs = await Promise.all(GROUPS.map(async (group) => {
+    const params = groupParams(group);
+    params.set("select", "trade_date");
+    params.set("order", "trade_date.desc");
+    params.set("limit", "1");
+    const { data } = await rest(
+      `stock_snapshots?${params}`,
+    );
+    return [group, Array.isArray(data) ? String(data[0]?.trade_date || "") : ""] as const;
+  }));
+  const latestDates = Object.fromEntries(latestPairs) as Record<Group, string>;
+  const uniqueDates = [...new Set(Object.values(latestDates).filter(Boolean))];
+  if (uniqueDates.length !== 1 || GROUPS.some((group) => !latestDates[group])) return null;
+  const dataDate = uniqueDates[0];
+  const count = async (group: Group, eligible: boolean) => {
+    const params = groupParams(group);
+    params.set("select", "symbol");
+    params.set("trade_date", `eq.${dataDate}`);
+    if (eligible) params.set("preliminary_score", "not.is.null");
+    const { response } = await rest(
+      `stock_snapshots?${params}`,
+      { method: "HEAD", count: true },
+    );
+    const raw = response.headers.get("content-range")?.split("/").at(-1);
+    return raw && raw !== "*" ? Number(raw) : 0;
+  };
+  const countPairs = await Promise.all(GROUPS.map(async (group) => [group, await count(group, false)] as const));
+  const eligiblePairs = await Promise.all(GROUPS.map(async (group) => [group, await count(group, true)] as const));
+  const counts = Object.fromEntries(countPairs) as Record<Group, number>;
+  const eligibleCounts = Object.fromEntries(eligiblePairs) as Record<Group, number>;
+  if (GROUPS.some((group) => counts[group] <= 0)) return null;
+  return {
+    dataDate,
+    counts,
+    eligibleCounts,
+    total: GROUPS.reduce((sum, group) => sum + counts[group], 0),
   };
 }
 
@@ -536,6 +618,10 @@ function analysisRepairReasons(deep: Record<string, any>, group: Group) {
 }
 
 async function syncUniverseUnlocked(access: FinmindAccess) {
+  const [previousState, storedAligned] = await Promise.all([
+    getState("universe"),
+    latestStoredAlignedUniverse().catch(() => null),
+  ]);
   await patchState("universe", { status: "running", started_at: now(), last_error: null });
   try {
     // Reserve the two historical-index fallbacks before any FinMind call.  If
@@ -599,13 +685,69 @@ async function syncUniverseUnlocked(access: FinmindAccess) {
     }
     const stocks = [...merged.values()];
     if (stocks.length < 100) throw new Error(`Universe coverage too low: ${stocks.length}`);
-    const contexts = buildPeerContexts(stocks);
+    const contexts = buildPeerContexts(stocks) as Record<string, any>;
     const dataDate = stocksPayload.date || taipeiDate();
     const groupDates = {
       listed: stocksPayload.dates?.price?.twse || dataDate,
       otc: stocksPayload.dates?.price?.tpex || dataDate,
       etf: stocksPayload.dates?.price?.twse || dataDate,
     };
+    if (storedAligned && hasUniverseDateRegression(groupDates, storedAligned.dataDate)) {
+      const restoredGroupDates = Object.fromEntries(
+        GROUPS.map((group) => [group, storedAligned.dataDate]),
+      );
+      const restoredAt = now();
+      await patchState("universe", {
+        status: "success",
+        cycle_date: storedAligned.dataDate,
+        processed_count: storedAligned.total,
+        total_items: storedAligned.total,
+        cursor_offset: 0,
+        last_success_at: previousState?.last_success_at || restoredAt,
+        next_run_at: new Date(Date.now() + 24 * 60 * 60 * 1_000).toISOString(),
+        details: {
+          ...(previousState?.details || {}),
+          counts: storedAligned.counts,
+          eligibleCounts: storedAligned.eligibleCounts,
+          groupDates: restoredGroupDates,
+          publicationPhase: "cached",
+          staleUpstream: {
+            reason: "upstream-date-regression",
+            fetchedGroupDates: groupDates,
+            preservedDataDate: storedAligned.dataDate,
+            observedAt: restoredAt,
+          },
+          pipelineVersion: PIPELINE_VERSION,
+          version: VERSION,
+        },
+      });
+      for (const group of GROUPS) {
+        const currentCache = await cachedProgress(group);
+        const retainedProgress = Math.min(
+          storedAligned.eligibleCounts[group],
+          currentCache.filter((row: Record<string, any>) =>
+            row.analysis_version === ANALYSIS_VERSION && row.status === "ready" &&
+            row.data_date === storedAligned.dataDate).length,
+        );
+        await patchState(`deep_${group}`, {
+          status: retainedProgress >= storedAligned.eligibleCounts[group] ? "success" : "pending",
+          cycle_date: storedAligned.dataDate,
+          cursor_offset: retainedProgress,
+          processed_count: retainedProgress,
+          total_items: storedAligned.eligibleCounts[group],
+          last_error: null,
+        });
+      }
+      return {
+        skipped: true,
+        reason: "upstream-date-regression",
+        dataDate: storedAligned.dataDate,
+        fetchedGroupDates: groupDates,
+        total: storedAligned.total,
+        counts: storedAligned.counts,
+        eligibleCounts: storedAligned.eligibleCounts,
+      };
+    }
     const revenueMap = new Map(
       (revenuePayload.fundamentals || []).map((row: Record<string, any>) => [String(row.symbol), row]),
     );
@@ -667,6 +809,7 @@ async function syncUniverseUnlocked(access: FinmindAccess) {
       })),
     };
     const updatedAt = now();
+    const officialHistories = officialHistoryRows(stocks, stocksPayload.dates || {}, updatedAt, groupOf);
     const masters = stocks.map((stock) => ({
       symbol: String(stock.symbol),
       name: stock.name || String(stock.symbol),
@@ -683,6 +826,7 @@ async function syncUniverseUnlocked(access: FinmindAccess) {
     const snapshots = stocks.map((stock) => {
       const group = groupOf(stock);
       const priceDate = groupDates[group] || dataDate;
+      const actualSourceDates = (officialHistories.sourceDatesBySymbol as Record<string, any>)[String(stock.symbol)] || {};
       const revenueRow = revenueMap.get(String(stock.symbol));
       const dataStatus = group === "etf" ? {
         revenue: "not-applicable",
@@ -742,7 +886,9 @@ async function syncUniverseUnlocked(access: FinmindAccess) {
         peer_context: peerContext,
         raw_data: compactStock({ ...stock, dataStatus, priceDate }),
         source_dates: {
-          price: priceDate,
+          price: actualSourceDates.price || priceDate,
+          institutional: actualSourceDates.institutional || null,
+          margin: actualSourceDates.margin || null,
           revenue: stock.revPeriod || revenuePayload.period || null,
           financial: stock.roePeriod || financialPayload.period || null,
           dataStatus,
@@ -751,7 +897,33 @@ async function syncUniverseUnlocked(access: FinmindAccess) {
         updated_at: updatedAt,
       };
     });
-    await upsert("stock_snapshots", snapshots, "symbol,trade_date", 150);
+    await Promise.all([
+      upsert("stock_snapshots", snapshots, "symbol,trade_date", 150),
+      upsert("stock_price_history", officialHistories.priceRows, "symbol,trade_date", 250),
+      upsert("stock_institutional_flows", officialHistories.institutionalRows, "symbol,trade_date", 250),
+      upsert("stock_margin_history", officialHistories.marginRows, "symbol,trade_date", 250),
+    ]);
+    const enrichmentRows = enrichmentQueueRows({
+      stocks,
+      groupDates,
+      sourceDatesBySymbol: officialHistories.sourceDatesBySymbol,
+      expectedRevenuePeriod: revenuePayload.period || null,
+      expectedFinancialPeriod: financialPayload.period || null,
+      groupForStock: groupOf,
+      isEligible: passesPreflight,
+    });
+    let enrichmentQueueError: string | null = null;
+    await insertIgnore(
+      "stock_enrichment_queue",
+      enrichmentRows,
+      "symbol,data_date,dataset_key",
+      250,
+    ).catch((error) => {
+      // Queue availability is additive.  Keep the official snapshot usable and
+      // expose the enqueue failure in state so the next universe run can retry.
+      enrichmentQueueError = error instanceof Error ? error.message.slice(0, 1000) : String(error).slice(0, 1000);
+      console.error("[enrichment-queue] enqueue failed", { error: enrichmentQueueError });
+    });
     const counts = Object.fromEntries(GROUPS.map((group) => [group, stocks.filter((stock) => groupOf(stock) === group).length]));
     const eligibleCounts = Object.fromEntries(GROUPS.map((group) => [
       group,
@@ -772,6 +944,10 @@ async function syncUniverseUnlocked(access: FinmindAccess) {
         sources: sourceDiagnostics,
         benchmarks: benchmarksPayload,
         finmindBudget: benchmarkBudget,
+        publicationPhase: "cached",
+        enrichmentQueued: enrichmentRows.length,
+        enrichmentQueueError,
+        pipelineVersion: PIPELINE_VERSION,
         version: VERSION,
       },
     });
@@ -851,7 +1027,12 @@ async function cachedProgress(group: Group) {
   return Array.isArray(data) ? data : [];
 }
 
-async function selectedCandidateRows(group: Group, date: string, limit: number) {
+async function selectedCandidateRows(
+  group: Group,
+  date: string,
+  limit: number,
+  options: { ignoreBackoff?: boolean } = {},
+) {
   const [refs, cached] = await Promise.all([candidateRefs(group, date), cachedProgress(group)]);
   const current = new Map(
     cached.filter((row: Record<string, any>) =>
@@ -867,7 +1048,9 @@ async function selectedCandidateRows(group: Group, date: string, limit: number) 
   // New candidates run first; failed candidates are retried after the unseen
   // backlog, oldest failure first.
   const allMissing = refs.filter((row: Record<string, any>) => !current.has(String(row.symbol)));
-  const unseenPool = allMissing.filter((row: Record<string, any>) => !failed.has(String(row.symbol)));
+  const unseenPool = options.ignoreBackoff
+    ? allMissing
+    : allMissing.filter((row: Record<string, any>) => !failed.has(String(row.symbol)));
   // The official current-month cross-section can legitimately publish fewer
   // rows than the tradable company universe (for example 2330 was absent while
   // its per-company FinMind filing was already available).  Reserve half of a
@@ -890,7 +1073,7 @@ async function selectedCandidateRows(group: Group, date: string, limit: number) 
     ...ordinaryUnseen.slice(backfillSlots),
     ...revenueBackfill.slice(backfillSlots),
   ];
-  const dueFailures = allMissing.filter((row: Record<string, any>) => {
+  const dueFailures = (options.ignoreBackoff ? [] : allMissing).filter((row: Record<string, any>) => {
     const failure = failed.get(String(row.symbol));
     return failure && (!failure.next_retry_at || String(failure.next_retry_at) <= now());
   })
@@ -921,7 +1104,8 @@ async function selectedCandidateRows(group: Group, date: string, limit: number) 
     .filter((row: Record<string, any>) => {
       const cachedRow = current.get(String(row.symbol));
       if (!cachedRow) return false;
-      if (cachedRow.last_error && cachedRow.next_retry_at && String(cachedRow.next_retry_at) > now()) return false;
+      if (!options.ignoreBackoff && cachedRow.last_error && cachedRow.next_retry_at &&
+          String(cachedRow.next_retry_at) > now()) return false;
       const fetchedAt = Date.parse(String(cachedRow.fetched_at || cachedRow.updated_at || ""));
       return !Number.isFinite(fetchedAt) || fetchedAt <= Date.now() - 6 * 60 * 60 * 1_000;
     })
@@ -947,7 +1131,7 @@ async function selectedCandidateRows(group: Group, date: string, limit: number) 
     total: refs.length,
     currentCount: currentCandidateCount,
     cycleComplete,
-    waitingRetry: allMissing.length - unseen.length - dueFailures.length,
+    waitingRetry: options.ignoreBackoff ? 0 : allMissing.length - unseen.length - dueFailures.length,
     readySymbols: new Set(current.keys()),
     revenueBackfillPending: revenueBackfill.length,
   };
@@ -966,10 +1150,210 @@ async function selectedCandidateRows(group: Group, date: string, limit: number) 
     total: refs.length,
     currentCount: currentCandidateCount,
     cycleComplete,
-    waitingRetry: allMissing.length - unseen.length - dueFailures.length,
+    waitingRetry: options.ignoreBackoff ? 0 : allMissing.length - unseen.length - dueFailures.length,
     readySymbols: new Set(current.keys()),
     revenueBackfillPending: revenueBackfill.length,
   };
+}
+
+async function loadAnalysisInputs(symbols: string[]) {
+  if (!symbols.length) return new Map<string, Record<string, any>>();
+  const output = new Map<string, Record<string, any>>();
+  // Keep each JSON aggregate comfortably below Edge/PostgREST response limits.
+  // The RPC itself accepts more for administrative use, but the worker never
+  // requests the 10-20MB payload produced by 200 full histories at once.
+  for (let index = 0; index < symbols.length; index += 60) {
+    const { data } = await rest("rpc/twss_analysis_inputs", {
+      method: "POST",
+      body: {
+        p_symbols: symbols.slice(index, index + 60),
+        p_price_limit: 280,
+        p_revenue_limit: 40,
+        p_financial_limit: 12,
+        p_flow_limit: 30,
+      },
+    });
+    for (const row of Array.isArray(data) ? data : []) {
+      output.set(
+        String(row.symbol),
+        row.payload && typeof row.payload === "object" ? row.payload : {},
+      );
+    }
+  }
+  return output;
+}
+
+function analysisGapQueueRows(stock: Record<string, any>, group: Group, deep: Record<string, any>) {
+  const rows: Record<string, unknown>[] = [];
+  const dataDate = String(stock.trade_date || deep.price?.lastDate || "");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dataDate)) return rows;
+  const add = (datasetKey: string, priority: number, reason: string) => rows.push({
+    symbol: String(stock.symbol),
+    data_date: dataDate,
+    group_name: group,
+    dataset_key: datasetKey,
+    priority,
+    status: "pending",
+    attempt_count: 0,
+    max_attempts: 12,
+    next_retry_at: null,
+    source_date: null,
+    details: { reason, phase: "background-enrichment" },
+    error_kind: null,
+    last_error: null,
+  });
+  if (Number(deep.price?.rows || 0) < 120) add("price", 110, "price-history-below-120-days");
+  if (group !== "etf") {
+    if (Number(deep.revenue?.continuousMonths || 0) < 24) add("revenue", 90, "revenue-history-below-24-months");
+    if (Number(deep.financial?.continuousQuarters || 0) < 8 ||
+        Number(deep.financial?.sourceCoverage?.incomeRows || 0) <= 0 ||
+        Number(deep.financial?.sourceCoverage?.balanceRows || 0) <= 0 ||
+        Number(deep.financial?.sourceCoverage?.cashflowRows || 0) <= 0) {
+      add("financial", 85, "financial-history-or-source-coverage-gap");
+    }
+    if (Number(deep.institutional?.days || 0) < 20) add("institutional", 100, "institutional-history-below-20-days");
+    if (Number(deep.margin?.days || 0) < 20) add("margin", 95, "margin-history-below-20-days");
+  }
+  return rows;
+}
+
+function persistenceRows(
+  stock: Record<string, any>,
+  group: Group,
+  deep: Record<string, any>,
+  result: Record<string, any>,
+) {
+  const updatedAt = now();
+  const dataDate = stock.trade_date || deep.price?.lastDate || taipeiDate();
+  const deepRevenueIsCurrent = finite(deep.revenue?.revenue) &&
+    (!stock.revPeriod || !deep.revenue?.period || deep.revenue.period >= stock.revPeriod);
+  const cacheStock = {
+    ...stock,
+    revenue: deepRevenueIsCurrent ? deep.revenue.revenue : stock.revenue,
+    revenueUnit: "TWD",
+    rev: deepRevenueIsCurrent ? deep.revenue.yoy : stock.rev,
+    revMom: deepRevenueIsCurrent ? deep.revenue.mom : stock.revMom,
+    revYtd: deepRevenueIsCurrent ? deep.revenue.ytdYoy : stock.revYtd,
+    revAcceleration: deepRevenueIsCurrent ? deep.revenue.acceleration : stock.revAcceleration,
+    revPeriod: deepRevenueIsCurrent ? deep.revenue.period : stock.revPeriod,
+  };
+  deep.publicationPhase = deep.missing?.length ? "enriching" : "base_ready";
+  deep.dataCompleteness = result.confidence || 0;
+  deep.sourceDates = {
+    ...(stock.source_dates || {}),
+    price: deep.price?.lastDate || stock.source_dates?.price || dataDate,
+    revenue: deep.revenue?.period || stock.source_dates?.revenue || null,
+    financial: deep.financial?.period || stock.source_dates?.financial || null,
+    institutional: deep.institutional?.date || stock.source_dates?.institutional || null,
+    margin: deep.margin?.date || stock.source_dates?.margin || null,
+    lending: deep.lending?.date || null,
+  };
+  const repairReasons = analysisRepairReasons(deep, group);
+  return {
+    cache: {
+      symbol: String(stock.symbol),
+      group_name: group,
+      data_date: dataDate,
+      analysis_version: ANALYSIS_VERSION,
+      score: result.score,
+      confidence: result.confidence || 0,
+      official: Boolean(result.official),
+      tier: result.tier,
+      stock: compactStock(cacheStock),
+      analysis: compactDeep(deep),
+      result,
+      status: "ready",
+      needs_repair: repairReasons.length > 0,
+      repair_reasons: repairReasons,
+      last_error: null,
+      attempt_count: 0,
+      next_retry_at: null,
+      error_kind: null,
+      last_attempt_at: updatedAt,
+      fetched_at: deep.fetchedAt || updatedAt,
+      updated_at: updatedAt,
+    },
+    score: {
+      symbol: String(stock.symbol),
+      score_date: dataDate,
+      model_version: VERSION,
+      group_name: group,
+      score: result.score,
+      confidence: result.confidence || 0,
+      official: Boolean(result.official),
+      tier: result.tier,
+      categories: result.categories || [],
+      risk: result.risk || {},
+      result,
+    },
+  };
+}
+
+async function analyzeDatabaseRows(
+  rows: Record<string, any>[],
+  group: Group,
+  universe: Record<string, any>,
+  cachedAnalyses: Map<string, Record<string, any>>,
+) {
+  const symbols = rows.map((row) => String(row.symbol));
+  const inputs = await loadAnalysisInputs(symbols);
+  const expectedRevenuePeriod = universe?.details?.sources?.revenue?.period || null;
+  const expectedFinancialPeriod = universe?.details?.sources?.financial?.period || null;
+  const benchmarks = universe?.details?.benchmarks || { listed: [], otc: [], coverage: {} };
+  const cacheRows: Record<string, unknown>[] = [];
+  const scoreRows: Record<string, unknown>[] = [];
+  const gapRows: Record<string, unknown>[] = [];
+  const successes: string[] = [];
+  const failures: { symbol: string; error: string }[] = [];
+
+  for (const row of rows) {
+    const stock = {
+      ...(row.raw_data || {}),
+      symbol: String(row.symbol),
+      trade_date: row.trade_date,
+      source_dates: row.source_dates || {},
+    };
+    try {
+      const deep = await Promise.resolve(buildDeepDataFromStoredSources(
+        stock.symbol,
+        row.instrument_type || stock.instrumentType || "stock",
+        row.market || stock.market || "listed",
+        {
+          sourceData: inputs.get(stock.symbol) || {},
+          currentQuote: stock,
+          benchmarks,
+          holdings: row.peer_context?.holdings,
+          reuse: cachedAnalyses.get(stock.symbol),
+          expectedRevenuePeriod: expectedRevenuePeriod || stock.revPeriod,
+          expectedFinancialPeriod: expectedFinancialPeriod || stock.roePeriod,
+        },
+      ));
+      const result = scoreOpportunity({
+        stock,
+        deep,
+        risk: stock.risk || {},
+        context: row.peer_context || {},
+      });
+      const persisted = persistenceRows(stock, group, deep, result);
+      cacheRows.push(persisted.cache);
+      scoreRows.push(persisted.score);
+      gapRows.push(...analysisGapQueueRows(stock, group, deep));
+      successes.push(stock.symbol);
+    } catch (error) {
+      failures.push({
+        symbol: stock.symbol,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      await persistFailure(stock, group, error).catch(() => undefined);
+    }
+  }
+
+  await Promise.all([
+    upsert("stock_analysis_cache", cacheRows, "symbol", 200),
+    upsert("opportunity_score_history", scoreRows, "symbol,score_date,model_version", 200),
+    insertIgnore("stock_enrichment_queue", gapRows, "symbol,data_date,dataset_key", 250),
+  ]);
+  return { successes, failures, gapRows: gapRows.length };
 }
 
 async function persistDeep(stock: Record<string, any>, group: Group, deep: Record<string, any>, result: Record<string, any>) {
@@ -1176,7 +1560,10 @@ async function persistFailure(stock: Record<string, any>, group: Group, error: u
   }], "symbol");
 }
 
-async function syncDeepUnlocked(group: Group, requestedLimit: number, access: FinmindAccess) {
+// Retained temporarily as a private rollback implementation.  No HTTP mode or
+// scheduled job calls it; live `mode=deep` is wired only to the DB-first worker
+// below.  On-demand history and enrichment remain the only provider callers.
+async function syncDeepProviderLegacyUnlocked(group: Group, requestedLimit: number, access: FinmindAccess) {
   const jobKey = `deep_${group}`;
   let universe = await getState("universe");
   if (universe?.status === "running" ||
@@ -1419,8 +1806,553 @@ async function syncDeepUnlocked(group: Group, requestedLimit: number, access: Fi
   };
 }
 
+async function syncDeepDatabaseUnlocked(group: Group, requestedLimit: number, access: FinmindAccess) {
+  const jobKey = `deep_${group}`;
+  let universe = await getState("universe");
+  if (universe?.status === "running" ||
+      (universe?.lease_until && Date.parse(String(universe.lease_until)) > Date.now())) {
+    return { skipped: true, reason: "universe-refresh-running", group };
+  }
+  if (!universe?.cycle_date) {
+    await syncUniverse(access);
+    universe = await getState("universe");
+  }
+  const limit = Math.max(1, Math.min(250, Number(requestedLimit) || 200));
+  const date = universe?.details?.groupDates?.[group] || universe?.cycle_date;
+  if (!date) throw new Error("Universe date is unavailable");
+  const state = await getState(jobKey);
+  const selection = await selectedCandidateRows(group, date, limit, { ignoreBackoff: true });
+  const rows = selection.rows;
+  const { total, currentCount, cycleComplete, waitingRetry = 0, revenueBackfillPending = 0 } = selection;
+  const cycleNumber = Number(state?.cycle_number) || 0;
+  await patchState(jobKey, {
+    status: "running",
+    started_at: now(),
+    cycle_date: date,
+    cursor_offset: currentCount,
+    processed_count: currentCount,
+    total_items: total,
+    cycle_number: cycleNumber,
+    last_error: null,
+    details: {
+      ...(state?.details || {}),
+      publicationPhase: "cached",
+      finmindCalls: 0,
+      pipelineVersion: PIPELINE_VERSION,
+    },
+  });
+
+  if (!rows.length) {
+    const completionKey = `${date}:${ANALYSIS_VERSION}`;
+    const completedNow = currentCount === total && total > 0 && state?.details?.completedCycleKey !== completionKey;
+    const rankingFinalization = completedNow
+      ? await finalizeRankingCycle(group, date, total)
+      : null;
+    const baseCompletedAt = completedNow ? now() : state?.details?.baseCompletedAt || null;
+    await patchState(jobKey, {
+      status: "success",
+      last_success_at: now(),
+      cursor_offset: currentCount,
+      processed_count: currentCount,
+      next_run_at: new Date(Date.now() + 2 * 60 * 1_000).toISOString(),
+      cycle_number: cycleNumber + (completedNow ? 1 : 0),
+      details: {
+        ...(state?.details || {}),
+        ...(completedNow ? { completedCycleKey: completionKey, completedCycleAt: baseCompletedAt } : {}),
+        ...(completedNow ? { rankingFinalization } : {}),
+        publicationPhase: currentCount === total && total > 0 ? "base_ready" : "cached",
+        baseCompletedAt,
+        finmindCalls: 0,
+        message: waitingRetry ? "Waiting for retry backoff" : "No candidates",
+        waitingRetry,
+        revenueBackfillPending,
+        remaining: Math.max(0, total - currentCount),
+        pipelineVersion: PIPELINE_VERSION,
+        version: VERSION,
+      },
+    });
+    return {
+      group,
+      date,
+      total,
+      processed: 0,
+      verified: currentCount,
+      remaining: Math.max(0, total - currentCount),
+      publicationPhase: currentCount === total && total > 0 ? "base_ready" : "cached",
+      finmindCalls: 0,
+    };
+  }
+
+  const symbols = rows.map((row: Record<string, any>) => String(row.symbol));
+  const { data: cachedRows } = await rest(
+    `stock_analysis_cache?select=symbol,analysis&symbol=in.(${symbols.join(",")})`,
+  );
+  const cache = new Map<string, Record<string, any>>(
+    (Array.isArray(cachedRows) ? cachedRows : []).map((row: Record<string, any>) => [
+      String(row.symbol),
+      row.analysis || {},
+    ]),
+  );
+  const { successes, failures, gapRows } = await analyzeDatabaseRows(rows, group, universe, cache);
+  const persisted = new Set(successes);
+  const newlyPersisted = rows.filter((row: Record<string, any>) =>
+    persisted.has(String(row.symbol)) && !selection.readySymbols?.has(String(row.symbol))).length;
+  const processed = Math.min(total, currentCount + newlyPersisted);
+  const completionKey = `${date}:${ANALYSIS_VERSION}`;
+  const completedNow = processed === total && total > 0 && state?.details?.completedCycleKey !== completionKey;
+  const rankingFinalization = completedNow
+    ? await finalizeRankingCycle(group, date, total)
+    : null;
+  const baseCompletedAt = completedNow ? now() : state?.details?.baseCompletedAt || null;
+  const revenueBackfillSelected = group === "etf" ? [] : rows
+    .filter((row: Record<string, any>) => !finite(row.raw_data?.revenue))
+    .map((row: Record<string, any>) => String(row.symbol));
+  await patchState(jobKey, {
+    status: failures.length ? "partial" : "success",
+    cursor_offset: processed,
+    processed_count: processed,
+    cycle_number: cycleNumber + (completedNow ? 1 : 0),
+    last_symbol: rows.at(-1)?.symbol || null,
+    last_error: failures.length
+      ? failures.map((item) => `${item.symbol}: ${item.error}`).join(" | ").slice(0, 2000)
+      : null,
+    last_success_at: successes.length ? now() : state?.last_success_at || null,
+    next_run_at: new Date(Date.now() + 2 * 60 * 1_000).toISOString(),
+    details: {
+      ...(state?.details || {}),
+      ...(completedNow ? { completedCycleKey: completionKey, completedCycleAt: baseCompletedAt } : {}),
+      ...(completedNow ? { rankingFinalization } : {}),
+      publicationPhase: completedNow ? "base_ready" : "cached",
+      baseCompletedAt,
+      successes,
+      failures,
+      batchSize: rows.length,
+      batchLimit: limit,
+      finmindCalls: 0,
+      verified: processed,
+      remaining: Math.max(0, total - processed),
+      waitingRetry,
+      revenueBackfillPending,
+      revenueBackfillSelected,
+      enrichmentQueuedFromAnalysis: gapRows,
+      refreshCycle: cycleComplete,
+      pipelineVersion: PIPELINE_VERSION,
+      version: VERSION,
+    },
+  });
+  return {
+    group,
+    date,
+    total,
+    processed: rows.length,
+    verified: processed,
+    remaining: Math.max(0, total - processed),
+    publicationPhase: completedNow ? "base_ready" : "cached",
+    finmindCalls: 0,
+    successes,
+    failures,
+    revenueBackfillPending,
+    revenueBackfillSelected,
+  };
+}
+
 async function syncDeep(group: Group, requestedLimit: number, access: FinmindAccess) {
-  return withLease(`deep_${group}`, () => syncDeepUnlocked(group, requestedLimit, access));
+  return withLease(`deep_${group}`, () => syncDeepDatabaseUnlocked(group, requestedLimit, access));
+}
+
+function monthsAgo(months: number) {
+  const date = new Date(`${taipeiDate()}T00:00:00Z`);
+  date.setUTCMonth(date.getUTCMonth() - months);
+  return date.toISOString().slice(0, 10);
+}
+
+async function fetchFinmindDataset(
+  dataset: string,
+  symbol: string,
+  startDate: string,
+  endDate: string,
+  access: FinmindAccess,
+) {
+  const params = new URLSearchParams({
+    dataset,
+    data_id: symbol,
+    start_date: startDate,
+    end_date: endDate,
+  });
+  const headers: Record<string, string> = { accept: "application/json" };
+  if (access.token) headers.authorization = `Bearer ${access.token}`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 35_000);
+  try {
+    const response = await fetch(`https://api.finmindtrade.com/api/v4/data?${params}`, {
+      headers,
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      const error = new Error(`FinMind ${dataset} HTTP ${response.status}`) as Error & {
+        status?: number;
+        retryAfter?: number;
+      };
+      error.status = response.status;
+      error.retryAfter = Number(response.headers.get("retry-after")) || 0;
+      throw error;
+    }
+    const payload = await response.json();
+    if (Number(payload?.status) !== 200 || !Array.isArray(payload?.data)) {
+      const error = new Error(String(payload?.msg || `${dataset} unavailable`)) as Error & { status?: number };
+      error.status = Number(payload?.status) || 502;
+      throw error;
+    }
+    return payload.data as Record<string, any>[];
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function persistEnrichmentJob(job: Record<string, any>, access: FinmindAccess) {
+  const symbol = String(job.symbol);
+  const datasetKey = String(job.dataset_key);
+  const endDate = taipeiDate();
+  const updatedAt = now();
+  if (datasetKey === "price") {
+    const raw = await fetchFinmindDataset("TaiwanStockPrice", symbol, monthsAgo(18), endDate, access);
+    const history = deepDataInternals.normalizePrice(raw).slice(-280);
+    await upsert("stock_price_history", history.map((row: Record<string, any>) => ({
+      symbol,
+      trade_date: row.date,
+      open: row.open,
+      high: row.high,
+      low: row.low,
+      close: row.close,
+      volume: row.volume,
+      trade_value: row.value,
+      transactions: finite(row.transactions) ? Math.round(Number(row.transactions)) : null,
+      source: "FinMind TaiwanStockPrice background enrichment",
+      updated_at: updatedAt,
+    })), "symbol,trade_date");
+    return { sourceDate: history.at(-1)?.date || null, rows: history.length };
+  }
+  if (datasetKey === "revenue") {
+    const raw = await fetchFinmindDataset("TaiwanStockMonthRevenue", symbol, monthsAgo(48), endDate, access);
+    const history = deepDataInternals.normalizeRevenue(raw).slice(-40);
+    await upsert("stock_monthly_revenues", history.map((row: Record<string, any>) => ({
+      symbol,
+      revenue_period: row.period,
+      revenue_year: row.year,
+      revenue_month: row.month,
+      revenue: row.revenue,
+      mom: row.mom,
+      yoy: row.yoy,
+      available_at: row.availableAt || null,
+      source: "FinMind TaiwanStockMonthRevenue background enrichment",
+      updated_at: updatedAt,
+    })), "symbol,revenue_period");
+    return { sourceDate: history.at(-1)?.availableAt || null, rows: history.length, period: history.at(-1)?.period || null };
+  }
+  if (datasetKey === "financial") {
+    const [income, balance, cashflow] = await Promise.all([
+      fetchFinmindDataset("TaiwanStockFinancialStatements", symbol, monthsAgo(52), endDate, access),
+      fetchFinmindDataset("TaiwanStockBalanceSheet", symbol, monthsAgo(52), endDate, access),
+      fetchFinmindDataset("TaiwanStockCashFlowsStatement", symbol, monthsAgo(52), endDate, access),
+    ]);
+    const financial = deepDataInternals.financialSummary(income, balance, cashflow);
+    const history = (financial.history || []).slice(-12);
+    await upsert("stock_quarterly_financials", history.map((row: Record<string, any>) => ({
+      symbol,
+      report_period: row.period,
+      report_date: row.date,
+      available_at: row.availableAt || null,
+      revenue: row.revenue,
+      net_income: row.netIncome,
+      eps: row.eps,
+      gross_margin: row.grossMargin,
+      operating_margin: row.operatingMargin,
+      net_margin: row.netMargin,
+      roe: row.roe,
+      operating_cash_flow: row.operatingCashFlow,
+      free_cash_flow: row.freeCashFlow,
+      cash_conversion: row.cashConversion,
+      inventory: row.inventory,
+      receivables: row.receivables,
+      debt_ratio: row.debtRatio,
+      current_ratio: row.currentRatio,
+      interest_coverage: row.interestCoverage,
+      non_operating_ratio: row.nonOperatingRatio,
+      source: "FinMind financial statements background enrichment",
+      updated_at: updatedAt,
+    })), "symbol,report_period");
+    return {
+      sourceDate: history.at(-1)?.date || null,
+      rows: history.length,
+      sourceRows: { income: income.length, balance: balance.length, cashflow: cashflow.length },
+    };
+  }
+  if (datasetKey === "institutional") {
+    const raw = await fetchFinmindDataset(
+      "TaiwanStockInstitutionalInvestorsBuySell",
+      symbol,
+      monthsAgo(3),
+      endDate,
+      access,
+    );
+    const prices = await storedHistory(symbol, 120);
+    const summary = deepDataInternals.institutionalSummary(raw, prices);
+    const history = summary.history || [];
+    await upsert("stock_institutional_flows", history.map((row: Record<string, any>) => ({
+      symbol,
+      trade_date: row.date,
+      foreign_net: row.foreign,
+      trust_net: row.trust,
+      dealer_net: row.dealer,
+      institutional_net: row.inst,
+      volume_intensity: row.intensity,
+      source: "FinMind institutional investors background enrichment",
+      updated_at: updatedAt,
+    })), "symbol,trade_date");
+    return { sourceDate: history.at(-1)?.date || null, rows: history.length };
+  }
+  if (datasetKey === "margin") {
+    const raw = await fetchFinmindDataset(
+      "TaiwanStockMarginPurchaseShortSale",
+      symbol,
+      monthsAgo(3),
+      endDate,
+      access,
+    );
+    const summary = deepDataInternals.marginSummary(raw);
+    const history = summary.history || [];
+    await upsert("stock_margin_history", history.map((row: Record<string, any>) => ({
+      symbol,
+      trade_date: row.date,
+      margin_balance: row.marginBalance,
+      margin_limit: row.marginLimit,
+      short_balance: row.shortBalance,
+      source: "FinMind margin and short sale background enrichment",
+      updated_at: updatedAt,
+    })), "symbol,trade_date");
+    return { sourceDate: history.at(-1)?.date || null, rows: history.length };
+  }
+  if (datasetKey === "lending") {
+    const raw = await fetchFinmindDataset(
+      "TaiwanStockSecuritiesLending",
+      symbol,
+      monthsAgo(3),
+      endDate,
+      access,
+    );
+    const history = normalizeLendingRows(symbol, raw, updatedAt);
+    await upsert("stock_lending_history", history, "symbol,trade_date");
+    return { sourceDate: history.at(-1)?.trade_date || null, rows: history.length };
+  }
+  throw new Error(`Unsupported enrichment dataset: ${datasetKey}`);
+}
+
+async function completeEnrichment(job: Record<string, any>, owner: string, result: Record<string, any>) {
+  const { data } = await rest("rpc/twss_complete_enrichment", {
+    method: "POST",
+    body: {
+      p_id: job.id,
+      p_owner: owner,
+      p_source_date: result.sourceDate || null,
+      p_details: { ...result, pipelineVersion: PIPELINE_VERSION },
+    },
+  });
+  if (data !== true) throw new Error(`Enrichment lease lost for ${job.symbol}/${job.dataset_key}`);
+}
+
+async function failEnrichment(job: Record<string, any>, owner: string, error: unknown) {
+  const status = Number((error as any)?.status) || 0;
+  const errorKind = [401, 402, 403, 429].includes(status)
+    ? "rate-limit"
+    : status >= 500 || (error as any)?.name === "AbortError"
+      ? "upstream-temporary"
+      : "source-or-network";
+  const attempt = Math.max(1, Number(job.attempt_count) || 1);
+  const retryAfterSeconds = errorKind === "rate-limit"
+    ? Math.max(3_600, Number((error as any)?.retryAfter) || 0)
+    : Math.min(21_600, 300 * (2 ** Math.min(6, attempt - 1)));
+  return rest("rpc/twss_fail_enrichment", {
+    method: "POST",
+    body: {
+      p_id: job.id,
+      p_owner: owner,
+      p_error_kind: errorKind,
+      p_last_error: (error instanceof Error ? error.message : String(error)).slice(0, 1000),
+      p_retry_after_seconds: retryAfterSeconds,
+    },
+  });
+}
+
+async function releaseEnrichment(jobs: Record<string, any>[], owner: string, retryAfterSeconds: number) {
+  if (!jobs.length) return 0;
+  const { data } = await rest("rpc/twss_release_enrichment", {
+    method: "POST",
+    body: {
+      p_ids: jobs.map((job) => job.id),
+      p_owner: owner,
+      p_retry_after_seconds: Math.max(60, Math.round(retryAfterSeconds)),
+    },
+  });
+  return Number(data) || 0;
+}
+
+async function rescoreEnriched(jobs: Record<string, any>[]) {
+  if (!jobs.length) return [];
+  const universe = await getState("universe");
+  const buckets = new Map<string, Record<string, any>[]>();
+  for (const job of jobs) {
+    const key = `${job.group_name}:${job.data_date}`;
+    if (!buckets.has(key)) buckets.set(key, []);
+    buckets.get(key)!.push(job);
+  }
+  const refreshed: Record<string, unknown>[] = [];
+  for (const [key, bucket] of buckets) {
+    const [groupName, dataDate] = key.split(":") as [Group, string];
+    const symbols = [...new Set(bucket.map((job) => String(job.symbol)))];
+    const params = filtersFor(groupName, dataDate);
+    params.set("symbol", `in.(${symbols.join(",")})`);
+    params.set("limit", String(symbols.length));
+    const { data } = await rest(`stock_snapshots?${params}`);
+    const rows = Array.isArray(data) ? data : [];
+    if (!rows.length) continue;
+    const { data: cachedRows } = await rest(
+      `stock_analysis_cache?select=symbol,analysis&symbol=in.(${symbols.join(",")})`,
+    );
+    const cache = new Map<string, Record<string, any>>(
+      (Array.isArray(cachedRows) ? cachedRows : []).map((row: Record<string, any>) => [
+        String(row.symbol),
+        row.analysis || {},
+      ]),
+    );
+    const result = await analyzeDatabaseRows(rows, groupName, universe || {}, cache);
+    const state = await getState(`deep_${groupName}`);
+    const ranking = await finalizeRankingCycle(groupName, dataDate, Number(state?.total_items) || rows.length);
+    refreshed.push({ group: groupName, date: dataDate, symbols: result.successes.length, ranking });
+  }
+  return refreshed;
+}
+
+async function syncEnrichment(requestedLimit: number, access: FinmindAccess) {
+  const owner = crypto.randomUUID();
+  const limit = Math.max(1, Math.min(50, Number(requestedLimit) || 50));
+  await insertIgnore("stock_sync_state", [{
+    job_key: "enrichment",
+    group_name: "enrichment",
+    status: "pending",
+    details: { pipelineVersion: PIPELINE_VERSION },
+  }], "job_key").catch(() => undefined);
+  await patchState("enrichment", {
+    status: "running",
+    started_at: now(),
+    last_error: null,
+  });
+  const { data } = await rest("rpc/twss_claim_enrichment_batch", {
+    method: "POST",
+    body: {
+      p_owner: owner,
+      p_limit: limit,
+      p_lease_seconds: 420,
+      p_dataset_keys: null,
+    },
+  });
+  const claimed = Array.isArray(data) ? data : [];
+  if (!claimed.length) {
+    await patchState("enrichment", {
+      status: "success",
+      last_success_at: now(),
+      next_run_at: new Date(Date.now() + 5 * 60 * 1_000).toISOString(),
+      details: { message: "No due enrichment jobs", pipelineVersion: PIPELINE_VERSION },
+    });
+    return { claimed: 0, processed: 0, successes: [], failures: [] };
+  }
+
+  const budget = await reserveFinmindBatch(
+    access,
+    claimed.map((job: Record<string, any>) => finmindJobCost(job.dataset_key)),
+    0,
+    access.profile.companyClaimCap,
+    { job: "enrichment", requestedItems: claimed.length },
+  );
+  const allowedCount = Math.max(0, Number(budget.items) || 0);
+  const allowed = claimed.slice(0, allowedCount);
+  const unbudgeted = claimed.slice(allowedCount);
+  const retrySeconds = budget.retryAfterAt
+    ? Math.max(60, Math.ceil((Date.parse(String(budget.retryAfterAt)) - Date.now()) / 1_000))
+    : 300;
+  await releaseEnrichment(unbudgeted, owner, retrySeconds);
+  if (!allowed.length) {
+    await patchState("enrichment", {
+      status: "pending",
+      next_run_at: budget.retryAfterAt || new Date(Date.now() + retrySeconds * 1_000).toISOString(),
+      details: { message: "Waiting for FinMind rolling-hour budget", budget, pipelineVersion: PIPELINE_VERSION },
+    });
+    return { claimed: claimed.length, processed: 0, released: unbudgeted.length, budget };
+  }
+
+  const successes: Record<string, any>[] = [];
+  const failures: Record<string, any>[] = [];
+  let stoppedAt = allowed.length;
+  for (let index = 0; index < allowed.length; index += 1) {
+    const job = allowed[index];
+    try {
+      const result = await persistEnrichmentJob(job, access);
+      await completeEnrichment(job, owner, result);
+      successes.push(job);
+    } catch (error) {
+      failures.push({
+        id: job.id,
+        symbol: job.symbol,
+        dataset: job.dataset_key,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      await failEnrichment(job, owner, error).catch(() => undefined);
+      if (finmindProviderPaused(error)) {
+        stoppedAt = index + 1;
+        break;
+      }
+    }
+  }
+  const stopped = allowed.slice(stoppedAt);
+  await releaseEnrichment(stopped, owner, 3_600);
+  let rescored: unknown = [];
+  let rescoreError: string | null = null;
+  try {
+    rescored = await rescoreEnriched(successes);
+  } catch (error) {
+    rescoreError = error instanceof Error ? error.message.slice(0, 1000) : String(error).slice(0, 1000);
+  }
+  const processed = successes.length + failures.length;
+  await patchState("enrichment", {
+    status: failures.length || rescoreError ? "partial" : "success",
+    processed_count: processed,
+    total_items: claimed.length,
+    last_symbol: [...successes, ...failures].at(-1)?.symbol || null,
+    last_error: failures.length
+      ? failures.map((item) => `${item.symbol}/${item.dataset}: ${item.error}`).join(" | ").slice(0, 2000)
+      : rescoreError,
+    last_success_at: successes.length ? now() : null,
+    next_run_at: new Date(Date.now() + 5 * 60 * 1_000).toISOString(),
+    details: {
+      successes: successes.length,
+      failures,
+      released: unbudgeted.length + stopped.length,
+      budget,
+      rescored,
+      rescoreError,
+      publicationPhase: "enriching",
+      pipelineVersion: PIPELINE_VERSION,
+    },
+  });
+  return {
+    claimed: claimed.length,
+    processed,
+    successes: successes.map((job) => ({ symbol: job.symbol, dataset: job.dataset_key })),
+    failures,
+    released: unbudgeted.length + stopped.length,
+    budget,
+    rescored,
+    rescoreError,
+  };
 }
 
 Deno.serve(async (req: Request) => {
@@ -1441,7 +2373,7 @@ Deno.serve(async (req: Request) => {
     }
   }
   if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
-  let adminLogContext: { mode: "universe" | "deep"; group: Group | null } = {
+  let adminLogContext: { mode: "universe" | "deep" | "enrichment"; group: Group | null } = {
     mode: "deep",
     group: null,
   };
@@ -1451,10 +2383,20 @@ Deno.serve(async (req: Request) => {
     // Resolve once per invocation.  The token is passed only in memory to the
     // provider client and is never included in logs, state, or responses.
     const finmindAccess = await resolveFinmindAccess();
-    const mode = body.mode === "universe" ? "universe" : "deep";
+    const mode = body.mode === "universe"
+      ? "universe"
+      : ["enrichment", "enrich"].includes(String(body.mode || ""))
+        ? "enrichment"
+        : "deep";
     if (mode === "universe") {
       adminLogContext = { mode, group: null };
       const result = await syncUniverse(finmindAccess);
+      await logAdminHealth(mode, result);
+      return json({ ok: true, version: VERSION, mode, result });
+    }
+    if (mode === "enrichment") {
+      adminLogContext = { mode, group: null };
+      const result = await syncEnrichment(body.limit, finmindAccess);
       await logAdminHealth(mode, result);
       return json({ ok: true, version: VERSION, mode, result });
     }

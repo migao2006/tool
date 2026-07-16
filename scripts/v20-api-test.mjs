@@ -3,12 +3,14 @@ import { readFile } from "node:fs/promises";
 
 const originalFetch = globalThis.fetch;
 const originalInternalKey = process.env.TWSS_V20_INTERNAL_KEY;
+const originalServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+process.env.SUPABASE_SERVICE_ROLE_KEY = "test-service-role-key";
 const calls = [];
 
 const rankingRows = [1, 2, 3].map((rank) => ({
   symbol: `233${rank - 1}`,
   name: `測試股票 ${rank}`,
-  ranking_date: "2026-07-15",
+  ranking_date: "2026-07-16",
   model_key: "short",
   horizon_days: 5,
   model_version: "20.0",
@@ -36,9 +38,20 @@ globalThis.fetch = async (input, init = {}) => {
   if (url.hostname !== "lfkdkdyaatdlizryiyon.supabase.co") {
     throw new Error(`unexpected external request: ${url.hostname}`);
   }
+  if (url.pathname.endsWith("/stock_sync_state")) {
+    return Response.json([{ details: {
+      publicationPhase: "enriching",
+      publishedDataDate: "2026-07-16",
+      baseCompletedAt: "2026-07-16T09:20:00Z",
+      enrichmentCompletedAt: null,
+      enrichmentPending: 523,
+      sourceDates: { universe: "2026-07-16", listed: "2026-07-16", otc: "2026-07-16", etf: "2026-07-16" },
+      dataCompleteness: 87.5,
+    } }]);
+  }
   if (url.pathname.endsWith("/v20_ranking_snapshots")) {
     if (url.searchParams.get("select") === "ranking_date") {
-      return Response.json([{ ranking_date: "2026-07-15" }]);
+      return Response.json([{ ranking_date: "2026-07-16" }]);
     }
     const after = Number(String(url.searchParams.get("rank_position") || "gt.0").replace("gt.", ""));
     const offset = Number(url.searchParams.get("offset") || 0);
@@ -85,10 +98,19 @@ try {
   const first = await firstResponse.json();
   assert.equal(first.items.length, 2);
   assert.ok(first.nextCursor);
-  for (const key of ["dataState", "dataDate", "sourceDates", "fetchedAt", "completeness", "degradedSources"]) {
+  for (const key of [
+    "dataState", "dataDate", "sourceDates", "fetchedAt", "completeness", "degradedSources",
+    "publicationPhase", "publishedDataDate", "baseCompletedAt", "enrichmentCompletedAt", "enrichmentPending", "dataCompleteness",
+  ]) {
     assert.ok(Object.hasOwn(first, key), `missing response metadata: ${key}`);
   }
+  assert.equal(first.dataDate, "2026-07-16");
+  assert.equal(first.publicationPhase, "enriching");
+  assert.equal(first.enrichmentPending, 523);
+  assert.equal(first.dataCompleteness, 87.5);
   const pageCall = calls.find((call) => call.url.searchParams.get("select") === "*");
+  assert.equal(pageCall.url.searchParams.get("ranking_date"), "eq.2026-07-16",
+    "all public ranking models must use the atomic publication pointer");
   assert.equal(pageCall.url.searchParams.get("order"), "rank_position.asc,symbol.asc");
   assert.equal(pageCall.url.searchParams.has("offset"), false);
   assert.equal(pageCall.init.headers?.Prefer, undefined, "page reads must not request exact counts");
@@ -130,11 +152,10 @@ try {
   ));
   assert.equal(filteredResponse.status, 200);
   const dateCalls = calls.filter((call) => call.url.searchParams.get("select") === "ranking_date");
-  assert.ok(dateCalls.length > 0);
-  assert.ok(dateCalls.every((call) => !call.url.searchParams.has("industry") &&
-    !call.url.searchParams.has("strategy_key") && !call.url.searchParams.has("or")),
-  "latest cycle discovery must ignore content filters so a dropped stock cannot fall back to an older day");
+  assert.equal(dateCalls.length, 0,
+    "the atomic publication pointer removes per-filter latest-date discovery");
   const filteredPageCall = calls.find((call) => call.url.searchParams.get("select") === "*");
+  assert.equal(filteredPageCall.url.searchParams.get("ranking_date"), "eq.2026-07-16");
   assert.equal(filteredPageCall.url.searchParams.get("industry"), "eq.半導體業");
   assert.equal(filteredPageCall.url.searchParams.get("strategy_key"), "eq.momentum_breakout");
   assert.ok(filteredPageCall.url.searchParams.has("or"));
@@ -142,6 +163,13 @@ try {
   backend.v20BackendInternals.clearCache();
   calls.length = 0;
   const home = await backend.readV20Home();
+  assert.equal(home.dataDate, "2026-07-16");
+  assert.equal(home.publicationPhase, "enriching");
+  assert.equal(home.dailyReport.dataDate, home.dataDate,
+    "the base daily report must switch with the same atomic publication date");
+  assert.equal(home.dailyReport.source, "v20-atomic-base-report");
+  assert.equal(home.dailyReport.cachedFallback, false);
+  assert.ok(home.dailyReport.report.oneLine);
   assert.equal(Object.hasOwn(home, "updateJobs"), false,
     "v20 public home must not expose legacy operational job status");
 
@@ -171,20 +199,27 @@ try {
   assert.match(ui, /載入更多新聞與公告/);
   assert.match(ui, /twss-v19-daily-report-cache/);
   assert.match(ui, /\/data\/daily-report\.json/);
+  assert.match(ui, /payload\.dailyReport/);
+  assert.match(ui, /publicationPhase: 'cached'/,
+    "the legacy static report must be labelled as a cached fallback");
+  assert.match(ui, /dateKey\(atomicReport\.meta\.dataDate\) === dateKey\(payload\.dataDate\)/,
+    "the UI must reject a report that does not match the published home date");
   assert.match(ui, /AI 每日報告/);
   assert.match(ui, /twssV19Benchmarks\?\.marketIndices/);
   assert.match(smart, /globalThis\.twssV19Benchmarks\s*=\s*value/);
   assert.match(ui, /不會儲存資金、成本或交易紀錄/);
   assert.doesNotMatch(ui, /localStorage\.setItem\([^\n]*(?:capital|cost|position)/i);
-  assert.match(sw, /twss-v20\.0\.3/);
-  assert.match(sw, /v20\.js\?v=20\.0\.3/);
+  assert.match(sw, /twss-v20\.0\.4/);
+  assert.match(sw, /v20\.js\?v=20\.0\.4/);
   assert.match(generator, /read\("public\/v20\.js"\)/);
   assert.match(generator, /path==="\/v20\.js"/);
-  assert.equal(JSON.parse(manifest).start_url.includes("v=20.0.3"), true);
+  assert.equal(JSON.parse(manifest).start_url.includes("v=20.0.4"), true);
 
   console.log("v20 API/UI contract: passed");
 } finally {
   globalThis.fetch = originalFetch;
   if (originalInternalKey === undefined) delete process.env.TWSS_V20_INTERNAL_KEY;
   else process.env.TWSS_V20_INTERNAL_KEY = originalInternalKey;
+  if (originalServiceKey === undefined) delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+  else process.env.SUPABASE_SERVICE_ROLE_KEY = originalServiceKey;
 }

@@ -13,13 +13,19 @@ import {
   buildMarketContext,
   V20_MODEL_VERSION,
 } from "../supabase/functions/_shared/v20-model.js";
+import {
+  enrichmentFingerprint,
+  normalizeEnrichmentSummary,
+  publicationPhaseFor,
+  resolveReadySourceCycle,
+} from "../supabase/functions/twss-v20-model/publication-state.js";
 
-const latest = { listed: "2026-07-16", otc: "2026-07-15", etf: "2026-07-14" };
+const latest = { listed: "2026-07-16", otc: "2026-07-16", etf: "2026-07-16" };
 const key = groupDateCycleKey(latest, V20_MODEL_VERSION);
 assert.equal(
   key,
-  "20.0|listed=2026-07-16|otc=2026-07-15|etf=2026-07-14",
-  "the cycle key must preserve each market group's real date",
+  "20.0|listed=2026-07-16|otc=2026-07-16|etf=2026-07-16",
+  "a publication cycle must use one point-in-time date",
 );
 assert.equal(V20_MODEL_VERSION, "20.0");
 assert.deepEqual(V20_WORKER_GROUPS, ["listed", "otc", "etf"]);
@@ -32,14 +38,14 @@ const started = reconcileWorkerCycle({
 started.groups.listed.cursor = "2330";
 started.groups.listed.processed = 12;
 
-const newer = { listed: "2026-07-17", otc: "2026-07-16", etf: "2026-07-15" };
+const newer = { listed: "2026-07-17", otc: "2026-07-17", etf: "2026-07-17" };
 const retained = reconcileWorkerCycle({
   previous: started,
   latestGroupDates: newer,
   totals: { listed: 1_000, otc: 800, etf: 300 },
   modelVersion: V20_MODEL_VERSION,
 });
-assert.deepEqual(retained.groupDates, latest, "an unfinished mixed-date cycle must not be starved by newer data");
+assert.deepEqual(retained.groupDates, latest, "an unfinished same-date cycle must not be starved by newer data");
 assert.equal(retained.groups.listed.cursor, "2330", "each group must keep its own keyset cursor");
 assert.equal(retained.groups.otc.cursor, "");
 
@@ -97,6 +103,55 @@ const queue = Array.from({ length: 30 }, (_, index) => ({ ...task, key: `${task.
 assert.equal(selectRetryTasks(queue, 40, false).selected.length, 10, "retries cannot consume the whole live batch");
 assert.equal(selectRetryTasks(queue, 5, false).selected.length, 1);
 
+const deepStates = Object.fromEntries(V20_WORKER_GROUPS.map((group) => [group, {
+  status: "success",
+  cycle_date: "2026-07-16",
+  details: { completedCycleKey: "2026-07-16:16.3-ultimate-data-audit" },
+}]));
+const readySource = resolveReadySourceCycle({
+  universe: {
+    status: "success",
+    cycle_date: "2026-07-16",
+    details: { groupDates: latest },
+  },
+  deepStates,
+});
+assert.equal(readySource.ready, true);
+assert.equal(readySource.sourceDate, "2026-07-16");
+
+const mixedSource = resolveReadySourceCycle({
+  universe: {
+    status: "success",
+    cycle_date: "2026-07-16",
+    details: { groupDates: { ...latest, otc: "2026-07-15" } },
+  },
+  deepStates,
+});
+assert.equal(mixedSource.ready, false, "mixed exchange dates must never start a model cycle");
+assert.equal(mixedSource.reason, "source_dates_not_aligned");
+
+const partialSource = resolveReadySourceCycle({
+  universe: {
+    status: "success",
+    cycle_date: "2026-07-16",
+    details: { groupDates: latest },
+  },
+  deepStates: { ...deepStates, otc: { ...deepStates.otc, details: {} } },
+});
+assert.equal(partialSource.ready, false, "all three explicit completion keys are required");
+assert.deepEqual(partialSource.missingGroups, ["otc"]);
+
+const enriching = normalizeEnrichmentSummary({ total: 1_023, success: 500, pending: 500, running: 23 });
+assert.equal(enriching.unresolved, 523);
+assert.equal(publicationPhaseFor(enriching), "enriching");
+assert.equal(publicationPhaseFor({ available: false }), "base_ready");
+assert.equal(publicationPhaseFor({ total: 1_023, success: 1_023, complete: true }), "complete");
+assert.notEqual(
+  enrichmentFingerprint(enriching),
+  enrichmentFingerprint({ total: 1_023, success: 501, pending: 499, running: 23 }),
+  "same-date enrichment progress must trigger an idempotent re-score",
+);
+
 const regimes = [
   buildMarketContext([{ market: "listed", change_pct: 10, volume: 1 }], "2026-07-16", { available: true, score: 100 }).regime,
   buildMarketContext([], "2026-07-16", { available: false, score: 0 }).regime,
@@ -111,10 +166,16 @@ const [workerSource, migration] = await Promise.all([
   readFile(new URL("../supabase/functions/twss-v20-model/index.ts", import.meta.url), "utf8"),
   readFile(new URL("../supabase/migrations/20260716021553_add_v20_quant_models.sql", import.meta.url), "utf8"),
 ]);
-assert.match(workerSource, /latestGroupDates\(\)/);
-assert.match(workerSource, /group_name=eq\.\$\{group\}/);
-assert.doesNotMatch(workerSource, /async function latestDataDate/);
-assert.match(workerSource, /for \(const dataDate of cycle\.involvedDates\)/);
+assert.doesNotMatch(workerSource, /latestGroupDates\(\)/);
+assert.match(workerSource, /loadSourceReadiness\(\)/);
+assert.match(workerSource, /resolveReadySourceCycle/);
+assert.match(workerSource, /Math\.min\(500,/);
+assert.match(workerSource, /TWSS_V20_BATCH_LIMIT/);
+assert.match(workerSource, /refreshRankings\(sourceDate\)/);
+assert.doesNotMatch(workerSource, /for \(const dataDate of cycle\.involvedDates\)/);
+assert.match(workerSource, /publicationPhase/);
+assert.match(workerSource, /baseCompletedAt/);
+assert.match(workerSource, /enrichmentCompletedAt/);
 assert.match(workerSource, /x-twss-sync-token/);
 assert.match(workerSource, /resolution=merge-duplicates/);
 assert.match(migration, /'strong_bull', 'bull', 'sideways', 'bear', 'strong_bear'/);

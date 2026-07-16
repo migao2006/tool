@@ -49,12 +49,15 @@
     deep_listed: '上市深度分析',
     deep_otc: '上櫃深度分析',
     deep_etf: 'ETF 深度分析',
+    v20_model: 'v20 兩階段模型',
+    enrichment: '背景資料補齊',
     v19_rankings: 'v19 排行榜快照',
     v19_news: '新聞與公告同步'
   })[value] || value || '未命名工作';
   const statusLabel = value => ({
     success: '完成', ready: '完成', final: '完成', healthy: '正常', running: '執行中',
-    pending: '等待中', partial: '部分完成', building: '建立中', error: '錯誤', failed: '失敗'
+    pending: '等待中', partial: '部分完成', building: '建立中', error: '錯誤', failed: '失敗',
+    cached: '快取資料', base_ready: '基礎分析已發布', enriching: '背景補齊中', complete: '全部完成'
   })[value] || value || '未知';
   const statusClass = value => ['success', 'ready', 'final', 'healthy'].includes(String(value))
     ? 'ok' : ['error', 'failed', 'critical'].includes(String(value)) ? 'bad' : '';
@@ -265,6 +268,9 @@
     const timeline = rows(payload.timeline);
     const quota = payload.apiQuota || {};
     const groupQuota = rows(quota.byJob);
+    const enrichment = payload.enrichmentQueue || {};
+    const enrichmentByDataset = rows(enrichment.byDataset);
+    const publication = payload.publication || payload.baseAnalysis || {};
     const overall = String(health.overallStatus || '').toLowerCase();
     setHeader(`登入者 ${payload.admin?.username || '管理員'} · 更新 ${timestamp(payload.generatedAt)}`, 'ok');
     app.innerHTML = `<section class="admin-toolbar card">
@@ -281,9 +287,12 @@
       ${metric('本期深度分析', `${number(summary.currentReadyAnalyses)} 檔`)}
       ${metric('保留分析快取', `${number(summary.readyAnalyses)} 檔`)}
       ${metric('v20 模型完成', `${number(summary.v20ModelSymbols)} 檔`)}
+      ${metric('基礎分析階段', statusLabel(publication.phase || publication.publicationPhase || '—'))}
+      ${metric('背景待補齊', `${number(enrichment.pending)} 筆`)}
       ${metric('最新資料日', summary.latestDataDate || health.dataDate || '—')}
     </section>
     <section class="health-section"><h2>同步工作</h2><div class="admin-job-list">${jobs.length ? jobs.map(jobCard).join('') : '<div class="card muted">尚無同步工作日誌。</div>'}</div></section>
+    <section class="health-section"><h2>兩階段發布與背景補齊</h2><div class="card"><div class="grid three">${metric('發布階段', statusLabel(publication.phase || publication.publicationPhase || '—'))}${metric('基礎分析完成', timestamp(publication.baseCompletedAt))}${metric('補齊完成', timestamp(publication.enrichmentCompletedAt))}${metric('待處理', `${number(enrichment.pending)} 筆`)}${metric('執行中', `${number(enrichment.running)} 筆`)}${metric('失敗', `${number(enrichment.error)} 筆`)}</div>${enrichmentByDataset.length ? `<div class="rules admin-quota-tags">${enrichmentByDataset.map(item => `<span>${escapeHtml(datasetLabels[item.key || item.dataset] || item.key || item.dataset || '資料')} ${number(item.pending ?? item.value)} 筆</span>`).join('')}</div>` : ''}</div></section>
     <section class="health-section"><h2>API 使用量</h2><div class="card"><div class="grid three">${metric('近 60 分鐘', `${number(quota.usedLast60Minutes)} 單位`)}${metric('預約紀錄', `${number(quota.reservationCount)} 筆`)}${metric('最早釋放', timestamp(quota.nextReleaseAt))}</div>${groupQuota.length ? `<div class="rules admin-quota-tags">${groupQuota.map(item => `<span>${escapeHtml(jobLabel(item.key))} ${number(item.value)} 單位</span>`).join('')}</div>` : ''}</div></section>
     <section class="health-section"><h2>資料來源</h2><div class="health-sources">${sources.length ? sources.map(sourceCard).join('') : '<div class="card muted">來源健康資料尚未回傳。</div>'}</div></section>
     <section class="health-section"><div class="head"><div><h2>修復佇列</h2><div class="muted">只列真正可重試項目；來源限制與不適用欄位保留在缺漏分類。</div></div><span class="status-pill">${number(payload.repairQueue?.pending)} pending · ${number(payload.repairQueue?.errors)} errors</span></div>
@@ -318,12 +327,15 @@
     const missing = rows(payload.missingData?.summary);
     const repairs = rows(payload.repairQueue?.items).filter(matchesFilters);
     const jobs = rows(payload.jobs);
+    const enrichment = payload.enrichmentQueue || {};
+    const publication = payload.publication || payload.baseAnalysis || {};
     return [
       `台股智選 v${payload.version || '20.0.0'} 管理後台修復報告`,
       `產生時間：${timestamp(payload.generatedAt)}`,
       `資料日期：${summary.latestDataDate || payload.health?.dataDate || '—'}`,
       '',
       `摘要：待修復標的 ${number(summary.pendingRepairs)}、可修復資料項 ${number(summary.actionableMissing)}、分析錯誤 ${number(summary.analysisErrors)}、核心失敗工作 ${number(summary.failedJobs)}、按需查詢異常 ${number(summary.historyLookupIssues)}、本期深度分析 ${number(summary.currentReadyAnalyses)}、v20 模型完成 ${number(summary.v20ModelSymbols)}`,
+      `兩階段發布：${statusLabel(publication.phase || publication.publicationPhase || '—')}｜基礎完成 ${timestamp(publication.baseCompletedAt)}｜待補齊 ${number(enrichment.pending)}｜執行中 ${number(enrichment.running)}｜失敗 ${number(enrichment.error)}`,
       '',
       '同步工作：',
       ...jobs.map(job => `- ${jobLabel(job.jobKey)}｜${statusLabel(job.status)}｜${number(job.processed)}/${number(job.total)} (${number(job.progress, 1)}%)｜資料日 ${job.cycleDate || '—'}${job.lastErrorCode ? `｜${errorLabels[job.lastErrorCode] || job.lastErrorCode}` : ''}`),

@@ -1445,6 +1445,295 @@ function etfDirectionFlags({ name = "", type = "", note = "", benchmark = "" } =
   };
 }
 
+function storedFinancialSummary(rows) {
+  const normalized = rows.map((row) => {
+    const date = isoDate(row.report_date ?? row.reportDate ?? row.date);
+    return {
+      date,
+      period: clean(row.report_period ?? row.reportPeriod) ||
+        (/^\d{4}-\d{2}-\d{2}$/.test(date) ? `${date.slice(0, 4)} Q${quarterFromDate(date)}` : ""),
+      availableAt: isoDate(row.available_at ?? row.availableAt),
+      revenue: number(row.revenue),
+      revenueStatus: finite(row.revenue) ? "available" : "source-not-returned",
+      revenueBasis: finite(row.revenue) ? "stored-financial-summary" : null,
+      netIncome: number(row.net_income ?? row.netIncome),
+      eps: number(row.eps),
+      grossMargin: number(row.gross_margin ?? row.grossMargin),
+      operatingMargin: number(row.operating_margin ?? row.operatingMargin),
+      netMargin: number(row.net_margin ?? row.netMargin),
+      roe: number(row.roe),
+      operatingCashFlow: number(row.operating_cash_flow ?? row.operatingCashFlow),
+      freeCashFlow: number(row.free_cash_flow ?? row.freeCashFlow),
+      cashConversion: number(row.cash_conversion ?? row.cashConversion),
+      inventory: number(row.inventory),
+      receivables: number(row.receivables),
+      debtRatio: number(row.debt_ratio ?? row.debtRatio),
+      currentRatio: number(row.current_ratio ?? row.currentRatio),
+      interestCoverage: number(row.interest_coverage ?? row.interestCoverage),
+      nonOperatingRatio: number(row.non_operating_ratio ?? row.nonOperatingRatio),
+    };
+  }).filter((row) => /^\d{4}-\d{2}-\d{2}$/.test(row.date))
+    .sort((left, right) => left.date.localeCompare(right.date))
+    .slice(-12);
+  if (!normalized.length) return {
+    quarters: 0,
+    continuousQuarters: 0,
+    sourceCoverage: { incomeRows: 0, balanceRows: 0, cashflowRows: 0 },
+  };
+  const ordinal = (row) => Number(row.date.slice(0, 4)) * 4 + quarterFromDate(row.date) - 1;
+  let continuousQuarters = 1;
+  for (let index = normalized.length - 1; index > 0; index -= 1) {
+    if (ordinal(normalized[index]) - ordinal(normalized[index - 1]) !== 1) break;
+    continuousQuarters += 1;
+  }
+  const latest = normalized.at(-1);
+  const yearAgo = normalized.find((row) => ordinal(row) === ordinal(latest) - 4) || {};
+  const growth = (current, previous) => finite(current) && finite(previous) && Number(previous) !== 0
+    ? round((Number(current) / Math.abs(Number(previous)) - 1) * 100)
+    : null;
+  const trailing = continuousQuarters >= 4 ? normalized.slice(-4) : [];
+  const completeCash = trailing.length === 4 && trailing.every((row) =>
+    finite(row.netIncome) && finite(row.operatingCashFlow));
+  const ttmNetIncome = completeCash ? sum(trailing.map((row) => row.netIncome)) : null;
+  const ttmOperatingCashFlow = completeCash ? sum(trailing.map((row) => row.operatingCashFlow)) : null;
+  const completeFcf = trailing.length === 4 && trailing.every((row) => finite(row.freeCashFlow));
+  const ttmFreeCashFlow = completeFcf ? sum(trailing.map((row) => row.freeCashFlow)) : null;
+  const ttmCashConversion = completeCash && ttmNetIncome > 0
+    ? round(ttmOperatingCashFlow / ttmNetIncome)
+    : null;
+  const incomeRowCount = normalized.filter((row) => [
+    row.revenue, row.netIncome, row.eps, row.grossMargin, row.operatingMargin, row.netMargin,
+  ].some(finite)).length;
+  const balanceRowCount = normalized.filter((row) => [
+    row.inventory, row.receivables, row.debtRatio, row.currentRatio,
+  ].some(finite)).length;
+  const cashflowRowCount = normalized.filter((row) => [
+    row.operatingCashFlow, row.freeCashFlow, row.cashConversion,
+  ].some(finite)).length;
+  return {
+    quarters: normalized.length,
+    continuousQuarters,
+    sourceCoverage: {
+      incomeRows: incomeRowCount,
+      balanceRows: balanceRowCount,
+      cashflowRows: cashflowRowCount,
+    },
+    period: latest.period,
+    availableAt: latest.availableAt,
+    revenue: latest.revenue,
+    revenueStatus: latest.revenueStatus,
+    revenueBasis: latest.revenueBasis,
+    eps: latest.eps,
+    epsYoy: growth(latest.eps, yearAgo.eps),
+    revenueYoy: growth(latest.revenue, yearAgo.revenue),
+    grossMargin: latest.grossMargin,
+    grossMarginYoyChange: finite(latest.grossMargin) && finite(yearAgo.grossMargin)
+      ? round(latest.grossMargin - yearAgo.grossMargin)
+      : null,
+    operatingMargin: latest.operatingMargin,
+    operatingMarginYoyChange: finite(latest.operatingMargin) && finite(yearAgo.operatingMargin)
+      ? round(latest.operatingMargin - yearAgo.operatingMargin)
+      : null,
+    netMargin: latest.netMargin,
+    roe: latest.roe,
+    operatingCashFlow: ttmOperatingCashFlow ?? latest.operatingCashFlow,
+    freeCashFlow: ttmFreeCashFlow ?? latest.freeCashFlow,
+    cashConversion: completeCash ? ttmCashConversion : latest.cashConversion,
+    cashConversionBasis: completeCash
+      ? ttmNetIncome > 0 ? "TTM" : "TTM-nonpositive-net-income"
+      : finite(latest.cashConversion) ? "latest-quarter" : "insufficient-positive-income",
+    ttmNetIncome,
+    ttmOperatingCashFlow,
+    ttmFreeCashFlow,
+    latestQuarterOperatingCashFlow: latest.operatingCashFlow,
+    latestQuarterFreeCashFlow: latest.freeCashFlow,
+    latestQuarterCashConversion: latest.cashConversion,
+    inventoryYoy: growth(latest.inventory, yearAgo.inventory),
+    receivablesYoy: growth(latest.receivables, yearAgo.receivables),
+    debtRatio: latest.debtRatio,
+    currentRatio: latest.currentRatio,
+    interestCoverage: latest.interestCoverage,
+    nonOperatingRatio: latest.nonOperatingRatio,
+    history: normalized,
+  };
+}
+
+function storedInstitutionalRows(rows) {
+  const definitions = [
+    ["foreign_net", "foreignNet", "Foreign_Investor"],
+    ["trust_net", "trustNet", "Investment_Trust"],
+    ["dealer_net", "dealerNet", "Dealer"],
+  ];
+  return rows.flatMap((row) => definitions.map(([snake, camel, name]) => {
+    const netLots = number(row[snake] ?? row[camel]);
+    const shares = finite(netLots) ? Number(netLots) * 1_000 : 0;
+    return {
+      date: row.trade_date ?? row.tradeDate ?? row.date,
+      name,
+      buy: Math.max(0, shares),
+      sell: Math.max(0, -shares),
+    };
+  }));
+}
+
+/**
+ * Builds the same deterministic analysis shape as `buildDeepData` exclusively
+ * from rows already persisted in Supabase.  It performs no fetches and is the
+ * publication-critical path used before slower provider enrichment.
+ */
+export function buildDeepDataFromStoredSources(
+  symbol,
+  instrumentType = "股票",
+  market = "上市",
+  options = {},
+) {
+  if (!VALID_SYMBOL.test(symbol)) throw new Error("股票代號格式不正確");
+  const sourceData = options.sourceData && typeof options.sourceData === "object"
+    ? options.sourceData
+    : {};
+  const rows = (snake, camel = snake) => {
+    const value = sourceData[snake] ?? sourceData[camel];
+    return Array.isArray(value) ? value : [];
+  };
+  const isEtf = instrumentType === "ETF" || ETF_SYMBOL.test(symbol);
+  const priceRows = rows("price_history", "priceHistory").map((row) => ({
+    date: row.trade_date ?? row.tradeDate ?? row.date,
+    open: row.open,
+    max: row.high ?? row.max,
+    min: row.low ?? row.min,
+    close: row.close,
+    Trading_Volume: finite(row.volume) ? Number(row.volume) * 1_000 : null,
+    Trading_money: row.trade_value ?? row.tradeValue ?? row.value,
+    Trading_turnover: row.transactions,
+  }));
+  const currentQuote = options.currentQuote || sourceData.current_quote || sourceData.currentQuote;
+  const prices = mergeCurrentQuote(normalizePrice(priceRows), currentQuote).slice(-280);
+  const benchmarks = options.benchmarks || sourceData.benchmarks || { listed: [], otc: [], coverage: {} };
+  const benchmark = market === "上櫃" ? benchmarks.otc || [] : benchmarks.listed || [];
+  const diagnostic = (key, label, count, retryable = true) => ({
+    label,
+    status: count > 0 ? "ok" : "empty-no-history",
+    rows: count,
+    retryable: count > 0 ? false : retryable,
+    storage: key,
+  });
+  const output = {
+    analysisVersion: ANALYSIS_VERSION,
+    symbol,
+    instrumentType: isEtf ? "ETF" : "股票",
+    market,
+    source: "Supabase 已保存歷史／TWSE／TPEx／TDCC（缺口由背景工作補齊）",
+    fetchedAt: options.fetchedAt || sourceData.fetched_at || sourceData.fetchedAt || new Date().toISOString(),
+    price: priceSummary(prices, benchmark),
+    priceHistory: prices,
+    benchmarkCoverage: benchmarks.coverage || sourceData.benchmark_coverage || {},
+    sourceDiagnostics: {
+      price: diagnostic("stock_price_history", "Supabase stock_price_history", priceRows.length),
+      benchmark: diagnostic("market_benchmark", "Stored market benchmark", benchmark.length, false),
+    },
+    sourceDates: sourceData.source_dates || sourceData.sourceDates || {},
+    missing: [],
+  };
+  if (!output.price.sufficient) output.missing.push(`歷史價量僅 ${output.price.rows || 0} 日（未滿 120 日）`);
+  if (isEtf) {
+    output.etf = sourceData.etf_profile || sourceData.etfProfile || sourceData.etf || options.reuse?.etf || null;
+    output.sourceDiagnostics.profile = diagnostic("etf_profile", "Stored ETF profile", output.etf ? 1 : 0, false);
+    if (!output.etf) output.missing.push("ETF 基金基本資料");
+    if (!finite(output.etf?.premiumDiscount)) output.missing.push("淨值折溢價");
+    output.missing.push("追蹤誤差", "經理費與內扣費用", "成分股集中度");
+    return output;
+  }
+
+  const revenueRows = rows("revenues", "revenueHistory");
+  const normalizedRevenue = normalizeRevenue(revenueRows.map((row) => ({
+    date: row.available_at ?? row.availableAt ?? `${(row.revenue_period ?? row.revenuePeriod) || ""}-10`,
+    create_time: row.available_at ?? row.availableAt,
+    revenue_year: row.revenue_year ?? row.revenueYear,
+    revenue_month: row.revenue_month ?? row.revenueMonth,
+    revenue: row.revenue,
+  })));
+  const storedFinancials = rows("financials", "financialHistory");
+  const storedInstitutional = rows("institutional", "institutionalHistory");
+  const storedMargin = rows("margin", "marginHistory");
+  const storedLending = rows("lending", "lendingHistory");
+  const reuseCompatible = options.reuse?.analysisVersion === ANALYSIS_VERSION;
+  output.revenue = normalizedRevenue.length
+    ? revenueSummary(normalizedRevenue, prices)
+    : reuseCompatible && options.reuse?.revenue?.period
+      ? refreshRevenueReaction(options.reuse.revenue, prices)
+      : { months: 0 };
+  output.revenueHistory = normalizedRevenue.slice(-40);
+  output.financial = storedFinancials.length
+    ? storedFinancialSummary(storedFinancials)
+    : reuseCompatible && options.reuse?.financial?.period
+      ? options.reuse.financial
+      : storedFinancialSummary([]);
+  output.institutional = institutionalSummary(storedInstitutionalRows(storedInstitutional), prices);
+  output.margin = marginSummary(storedMargin.map((row) => ({
+    date: row.trade_date ?? row.tradeDate ?? row.date,
+    MarginPurchaseTodayBalance: row.margin_balance ?? row.marginBalance,
+    MarginPurchaseLimit: row.margin_limit ?? row.marginLimit,
+    ShortSaleTodayBalance: row.short_balance ?? row.shortBalance,
+  })));
+  output.lending = lendingSummary(storedLending.map((row) => {
+    const value = row.lending_value ?? row.lendingValue ?? row.value;
+    return finite(value)
+      ? { date: row.trade_date ?? row.tradeDate ?? row.date, lending_balance: value }
+      : {
+        ...(row.raw_data && typeof row.raw_data === "object" ? row.raw_data : {}),
+        date: row.trade_date ?? row.tradeDate ?? row.date,
+      };
+  }));
+  output.holdings = options.holdings || sourceData.holdings || options.reuse?.holdings || null;
+  output.reused = {
+    revenue: normalizedRevenue.length === 0 && Boolean(reuseCompatible && options.reuse?.revenue?.period),
+    financial: storedFinancials.length === 0 && Boolean(reuseCompatible && options.reuse?.financial?.period),
+  };
+  Object.assign(output.sourceDiagnostics, {
+    holdings: diagnostic("holdings", "Stored TDCC holdings", output.holdings ? 1 : 0, false),
+    revenue: diagnostic("stock_monthly_revenues", "Supabase stock_monthly_revenues", normalizedRevenue.length),
+    income: diagnostic("stock_quarterly_financials", "Stored income summary", output.financial?.sourceCoverage?.incomeRows || 0),
+    balance: diagnostic("stock_quarterly_financials", "Stored balance summary", output.financial?.sourceCoverage?.balanceRows || 0),
+    cashflow: diagnostic("stock_quarterly_financials", "Stored cash-flow summary", output.financial?.sourceCoverage?.cashflowRows || 0),
+    institutional: diagnostic("stock_institutional_flows", "Supabase stock_institutional_flows", storedInstitutional.length),
+    margin: diagnostic("stock_margin_history", "Supabase stock_margin_history", storedMargin.length),
+    lending: diagnostic("stock_lending_history", "Supabase stock_lending_history", storedLending.length),
+  });
+  if (options.expectedRevenuePeriod &&
+      (!output.revenue?.period || output.revenue.period < options.expectedRevenuePeriod)) {
+    output.sourceDiagnostics.revenue = {
+      ...output.sourceDiagnostics.revenue,
+      status: "stale-source-period",
+      expectedPeriod: options.expectedRevenuePeriod,
+      actualPeriod: output.revenue?.period || null,
+      retryable: true,
+    };
+    output.missing.push(`最新月營收期別落後（來源 ${output.revenue?.period || "無"}／應為 ${options.expectedRevenuePeriod}）`);
+  }
+  if (options.expectedFinancialPeriod &&
+      (!output.financial?.period || output.financial.period < options.expectedFinancialPeriod)) {
+    for (const key of ["income", "balance", "cashflow"]) {
+      output.sourceDiagnostics[key] = {
+        ...output.sourceDiagnostics[key],
+        status: "stale-source-period",
+        expectedPeriod: options.expectedFinancialPeriod,
+        actualPeriod: output.financial?.period || null,
+        retryable: true,
+      };
+    }
+    output.missing.push(`最新財報期別落後（來源 ${output.financial?.period || "無"}／應為 ${options.expectedFinancialPeriod}）`);
+  }
+  if (!finite(output.financial?.revenue)) output.missing.push("最新季營業額");
+  [
+    [output.revenue.months >= 24, "24～36 個月月營收"],
+    [output.financial.quarters >= 8, "8～12 季財報"],
+    [output.institutional.days >= 20, "20 日法人歷史"],
+    [output.margin.days >= 20, "20 日融資融券歷史"],
+    [Boolean(output.holdings), "集保大戶／散戶結構"],
+  ].forEach(([available, label]) => { if (!available) output.missing.push(label); });
+  return output;
+}
+
 export async function buildDeepData(symbol, instrumentType = "股票", market = "上市", options = {}) {
   if (!VALID_SYMBOL.test(symbol)) throw new Error("股票代號格式不正確");
   const isEtf = instrumentType === "ETF" || ETF_SYMBOL.test(symbol);

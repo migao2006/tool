@@ -7,6 +7,7 @@ const MODEL_VERSION = "20.0";
 const PAGE_TTL_MS = 30_000;
 const MARKET_TTL_MS = 60_000;
 const STOCK_TTL_MS = 30_000;
+const PUBLICATION_TTL_MS = 2_000;
 const MAX_LIMIT = 50;
 const MODEL_HORIZONS = Object.freeze({ short: [2, 3, 5, 10], medium: [20, 40, 60] });
 const DEFAULT_HORIZON = Object.freeze({ short: 5, medium: 40 });
@@ -29,6 +30,9 @@ const SORTS = Object.freeze({
   change_desc: "rank_delta.desc.nullslast,opportunity_score.desc.nullslast,symbol.asc",
 });
 const memoryCache = new Map();
+const serverEnv = globalThis.process?.env || {};
+const marketServiceKey = String(serverEnv.SUPABASE_SERVICE_ROLE_KEY || "").trim();
+const PUBLICATION_PHASES = new Set(["cached", "base_ready", "enriching", "complete"]);
 
 const finite = (value) => value != null && Number.isFinite(Number(value));
 const numeric = (value) => finite(value) ? Number(value) : null;
@@ -69,19 +73,79 @@ async function cached(key, ttl, loader) {
   return pending;
 }
 
+function normalizePublication(details = {}) {
+  const publishedDataDate = isoDate(details.publishedDataDate);
+  const phase = PUBLICATION_PHASES.has(details.publicationPhase)
+    ? details.publicationPhase
+    : publishedDataDate ? "base_ready" : "cached";
+  return {
+    publicationPhase: phase,
+    publishedDataDate,
+    baseCompletedAt: details.baseCompletedAt || null,
+    enrichmentCompletedAt: details.enrichmentCompletedAt || null,
+    enrichmentPending: Math.max(0, Number(details.enrichmentPending) || 0),
+    sourceDates: cleanObject(details.sourceDates),
+    dataCompleteness: finite(details.dataCompleteness) ? Number(clamp(details.dataCompleteness).toFixed(2)) : 0,
+    publishedAt: details.publishedAt || details.completedCycleAt || null,
+  };
+}
+
+async function loadPublicationState() {
+  return cached("v20:publication", PUBLICATION_TTL_MS, async () => {
+    const result = marketServiceKey
+      ? await backendStoreInternals.request(
+        "stock_sync_state?select=details&job_key=eq.v20_model&limit=1",
+        {
+          headers: {
+            apikey: marketServiceKey,
+            ...(!marketServiceKey.startsWith("sb_secret_")
+              ? { authorization: `Bearer ${marketServiceKey}` }
+              : {}),
+          },
+        },
+      )
+      : await backendStoreInternals.request("rpc/twss_v20_publication_state", {
+        method: "POST",
+        body: "{}",
+      });
+    const details = marketServiceKey
+      ? Array.isArray(result.data) ? cleanObject(result.data[0]?.details) : {}
+      : cleanObject(result.data);
+    return normalizePublication(details);
+  }).catch(() => normalizePublication({}));
+}
+
 function sourceDatesFromRows(rows) {
   return Object.assign({}, ...rows.map((row) => cleanObject(row?.source_dates || row?.sourceDates)));
 }
 
-function publicMeta({ dataState, dataDate, sourceDates = {}, fetchedAt = null, completeness = 0, degraded = [] }) {
+function publicMeta({
+  dataState,
+  dataDate,
+  sourceDates = {},
+  fetchedAt = null,
+  completeness = 0,
+  degraded = [],
+  publication = {},
+}) {
+  const published = normalizePublication(publication);
+  const normalizedCompleteness = finite(completeness) ? Number(clamp(completeness).toFixed(2)) : 0;
   return {
     version: API_VERSION,
     modelVersion: MODEL_VERSION,
     dataState,
-    dataDate: isoDate(dataDate),
-    sourceDates: cleanObject(sourceDates),
+    dataDate: isoDate(dataDate) || published.publishedDataDate,
+    publishedDataDate: published.publishedDataDate,
+    sourceDates: { ...published.sourceDates, ...cleanObject(sourceDates) },
     fetchedAt: fetchedAt || null,
-    completeness: finite(completeness) ? Number(clamp(completeness).toFixed(2)) : 0,
+    completeness: normalizedCompleteness,
+    publicationPhase: published.publicationPhase,
+    baseCompletedAt: published.baseCompletedAt,
+    enrichmentCompletedAt: published.enrichmentCompletedAt,
+    enrichmentPending: published.enrichmentPending,
+    dataCompleteness: published.publishedDataDate
+      ? published.dataCompleteness
+      : normalizedCompleteness,
     degradedSources: unique(degraded),
   };
 }
@@ -515,8 +579,12 @@ async function v19References(model, horizon, limit) {
   }
 }
 
-export async function readV20Rankings(url) {
-  const query = parseV20RankingQuery(url.searchParams);
+export async function readV20Rankings(url, options = {}) {
+  const parsedQuery = parseV20RankingQuery(url.searchParams);
+  const publication = options.publication || await loadPublicationState();
+  const query = !parsedQuery.rankingDate && publication.publishedDataDate
+    ? { ...parsedQuery, rankingDate: publication.publishedDataDate }
+    : parsedQuery;
   const groupDateKey = JSON.stringify(query.groupDates || {});
   const cacheKey = `v20:rank:${fingerprint(query)}:${query.rankingDate || "latest"}:${groupDateKey}:${query.afterRank}:${query.offset}:${query.limit}`;
   let page;
@@ -540,6 +608,7 @@ export async function readV20Rankings(url) {
   }
   const dates = page.items.map((row) => row.dataDate).filter(Boolean).sort();
   const sourceDates = {
+    ...publication.sourceDates,
     ...sourceDatesFromRows(page.items),
     ...Object.fromEntries(Object.entries(page.groupDates || {}).map(([group, date]) => [`ranking_${group}`, date])),
   };
@@ -550,7 +619,15 @@ export async function readV20Rankings(url) {
     : 0;
   const dataState = page.items.some((row) => !row.legacyReference) ? (degraded.length ? "partial" : "complete") : "partial";
   return {
-    ...publicMeta({ dataState, dataDate: page.rankingDate || dates.at(-1), sourceDates, fetchedAt: fetched, completeness, degraded }),
+    ...publicMeta({
+      dataState,
+      dataDate: page.rankingDate || dates.at(-1),
+      sourceDates,
+      fetchedAt: fetched,
+      completeness,
+      degraded,
+      publication,
+    }),
     model: query.model,
     horizon: query.horizon,
     items: page.items,
@@ -580,10 +657,12 @@ export async function readV20Rankings(url) {
 export async function readV20Market(options = {}) {
   let row = null;
   let degraded = [];
-  const marketCacheKey = "v20:market";
+  const publication = options.publication || await loadPublicationState();
+  const marketCacheKey = `v20:market:${publication.publishedDataDate || "latest"}`;
   try {
     row = await cached(marketCacheKey, MARKET_TTL_MS, async () => {
       const params = new URLSearchParams({ select: "*", model_version: `eq.${MODEL_VERSION}`, order: "data_date.desc", limit: "10" });
+      if (publication.publishedDataDate) params.set("data_date", `lte.${publication.publishedDataDate}`);
       const { data } = await backendStoreInternals.request(`v20_market_context?${params}`);
       return carryForwardGlobal((Array.isArray(data) ? data : []).map(normalizeMarket));
     });
@@ -634,6 +713,7 @@ export async function readV20Market(options = {}) {
       fetchedAt: row.fetchedAt || row.updatedAt,
       completeness: row.completeness || 0,
       degraded,
+      publication,
     }),
     market: row,
     globalRefresh: liveGlobal,
@@ -644,11 +724,86 @@ function rankingUrl(model, horizon, limit = 10) {
   return new URL(`https://internal.invalid/api/v20/rankings?model=${model}&horizon=${horizon}&limit=${limit}`);
 }
 
+function buildAtomicDailyReport(meta, market, short, medium, legacy) {
+  const regimeLabels = {
+    strong_bull: "強勢多頭",
+    bull: "偏多",
+    sideways: "震盪",
+    bear: "偏空",
+    strong_bear: "強勢空頭",
+  };
+  const regime = regimeLabels[market?.market?.regimeKey] || market?.market?.regime || "資料整理中";
+  const breadth = cleanObject(market?.market?.breadth?.all);
+  const institutional = cleanObject(market?.market?.institutional);
+  const institutionalNet = numeric(institutional.net);
+  const focusRows = arrays(short?.items, medium?.items)
+    .filter((row, index, all) => row?.symbol && all.findIndex((item) => item?.symbol === row.symbol) === index)
+    .slice(0, 8);
+  const industries = new Map();
+  for (const row of focusRows) {
+    const industry = row.industry || "未分類";
+    const current = industries.get(industry) || { industry, count: 0, score: 0 };
+    current.count += 1;
+    current.score += numeric(row.opportunityScore) || 0;
+    industries.set(industry, current);
+  }
+  const hotIndustries = [...industries.values()]
+    .map((item) => ({ ...item, averageScore: Number((item.score / item.count).toFixed(1)) }))
+    .sort((left, right) => right.count - left.count || right.averageScore - left.averageScore)
+    .slice(0, 5);
+  const top = focusRows[0];
+  const oneLine = top
+    ? `市場環境${regime}；${top.name || top.symbol}目前量化條件相對突出，仍應留意風險與失效條件。`
+    : `市場環境${regime}；目前沒有通過完整條件的主要推薦。`;
+  const riskItems = unique(focusRows.flatMap((row) => arrays(row.risks)).slice(0, 8));
+  const news = arrays(legacy?.news).slice(0, 20);
+  const watchStocks = focusRows.map((row) => ({
+    symbol: row.symbol,
+    name: row.name,
+    whyNotice: row.summary || row.recommendedAction || "通過同日量化條件",
+    opportunityScore: row.opportunityScore,
+    riskScore: row.riskScore,
+  }));
+  const mainRisks = riskItems.length
+    ? riskItems.map((risk) => ({ title: "量化風險", explanation: risk }))
+    : [{ title: "資料仍可能補齊", explanation: "背景資料完成後，分數與排序可能同日再次更新。" }];
+  return {
+    ...meta,
+    updateStatus: meta.publicationPhase,
+    generatedAt: meta.fetchedAt || new Date().toISOString(),
+    source: "v20-atomic-base-report",
+    cachedFallback: false,
+    report: {
+      oneLine,
+      marketStrength: {
+        level: regime,
+        explanation: finite(breadth.advanceRatio)
+          ? `上漲家數比率約 ${Number(breadth.advanceRatio).toFixed(1)}%，市場強弱依同日官方資料計算。`
+          : "市場廣度仍在補齊，先以已發布的同日資料判斷。",
+      },
+      institutionalDirection: {
+        direction: institutionalNet == null ? "資料不足" : institutionalNet > 0 ? "偏買方" : institutionalNet < 0 ? "偏賣方" : "中性",
+        explanation: institutionalNet == null
+          ? "法人資料尚未完整。"
+          : `三大法人同日合計淨額為 ${institutionalNet.toLocaleString("zh-TW")}，不代表股價一定同方向變動。`,
+      },
+      hotIndustries,
+      watchStocks,
+      opportunityStocks: watchStocks,
+      mainRisks,
+      risks: mainRisks,
+      importantNewsAndAnnouncements: news,
+      watchlistChanges: [],
+    },
+  };
+}
+
 export async function readV20Home() {
+  const publication = await loadPublicationState();
   const [market, short, medium, legacy] = await Promise.all([
-    readV20Market(),
-    readV20Rankings(rankingUrl("short", 5, 10)),
-    readV20Rankings(rankingUrl("medium", 40, 10)),
+    readV20Market({ publication }),
+    readV20Rankings(rankingUrl("short", 5, 10), { publication }),
+    readV20Rankings(rankingUrl("medium", 40, 10), { publication }),
     cached("v20:legacy-home", PAGE_TTL_MS, readV19Home).catch(() => null),
   ]);
   const degraded = unique([
@@ -660,24 +815,39 @@ export async function readV20Home() {
   const dates = [market.dataDate, short.dataDate, medium.dataDate, legacy?.dataDate].filter(Boolean).sort();
   const completeness = [market.completeness, short.completeness, medium.completeness]
     .filter(finite).reduce((sum, value, _index, values) => sum + Number(value) / values.length, 0);
-  return {
-    ...publicMeta({
+  const meta = publicMeta({
       dataState: short.items.length || medium.items.length ? (degraded.length ? "partial" : "complete") : "error",
-      dataDate: dates.at(-1),
+      dataDate: publication.publishedDataDate || dates.at(-1),
       sourceDates: { ...market.sourceDates, ...short.sourceDates, ...medium.sourceDates },
       fetchedAt: [market.fetchedAt, short.fetchedAt, medium.fetchedAt].filter(Boolean).sort().at(-1) || null,
       completeness,
       degraded,
-    }),
+      publication,
+    });
+  return {
+    ...meta,
     market: market.market,
     shortTop: short.items.slice(0, 5),
     mediumTop: medium.items.slice(0, 5),
     importantNews: arrays(legacy?.news).slice(0, 20),
     fastestRisers: arrays(legacy?.fastestRisers).slice(0, 5),
+    dailyReport: buildAtomicDailyReport(meta, market, short, medium, legacy),
   };
 }
 
-async function loadSignals(symbol) {
+async function loadSignals(symbol, dataDate = null) {
+  if (dataDate) {
+    const params = new URLSearchParams({
+      select: "*",
+      symbol: `eq.${symbol}`,
+      signal_date: `eq.${dataDate}`,
+      model_version: `eq.${MODEL_VERSION}`,
+      order: "model_key.asc,horizon_days.asc",
+      limit: "20",
+    });
+    const { data } = await backendStoreInternals.request(`v20_model_signals?${params}`);
+    return (Array.isArray(data) ? data : []).map(normalizeRanking);
+  }
   const params = new URLSearchParams({
     p_symbol: symbol,
     p_model_version: MODEL_VERSION,
@@ -695,13 +865,15 @@ async function loadSignals(symbol) {
 export async function readV20Stock(symbol) {
   const normalized = String(symbol || "").trim().toUpperCase();
   if (!/^[0-9]{4,6}[A-Z]?$/.test(normalized)) throw new V20PublicError("invalid_symbol");
+  const publication = await loadPublicationState();
+  const signalCacheKey = `v20:stock:${normalized}:${publication.publishedDataDate || "latest"}`;
   const [legacyResult, signalsResult] = await Promise.allSettled([
     readV19Stock(normalized),
-    cached(`v20:stock:${normalized}`, STOCK_TTL_MS, () => loadSignals(normalized)),
+    cached(signalCacheKey, STOCK_TTL_MS, () => loadSignals(normalized, publication.publishedDataDate)),
   ]);
   const legacy = legacyResult.status === "fulfilled" ? legacyResult.value : null;
   const signals = signalsResult.status === "fulfilled" ? signalsResult.value : [];
-  const signalCacheStale = memoryCache.get(`v20:stock:${normalized}`)?.stale === true;
+  const signalCacheStale = memoryCache.get(signalCacheKey)?.stale === true;
   const degraded = [
     ...(legacy?.degraded || (legacy ? [] : ["v19_stock_detail"])),
     ...(signalsResult.status === "rejected" ? ["v20_model_signals"] : []),
@@ -722,6 +894,7 @@ export async function readV20Stock(symbol) {
       fetchedAt: signals.map((row) => row.updatedAt).filter(Boolean).sort().at(-1) || legacy?.fetchedAt || null,
       completeness,
       degraded,
+      publication,
     }),
     symbol: normalized,
     tradeDate: legacy?.tradeDate || isoDate(legacy?.stock?.priceDate),
@@ -797,5 +970,7 @@ export const v20BackendInternals = {
   encodeCursor,
   decodeCursor,
   publicMeta,
+  normalizePublication,
+  loadPublicationState,
   clearCache() { memoryCache.clear(); },
 };

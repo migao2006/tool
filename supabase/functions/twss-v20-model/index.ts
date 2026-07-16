@@ -16,6 +16,13 @@ import {
   V20_WORKER_GROUPS,
   workerTaskKey,
 } from "../_shared/v20-worker-state.js";
+// @ts-ignore Pure publication guards are exercised by Node behavioral tests.
+import {
+  enrichmentFingerprint,
+  normalizeEnrichmentSummary,
+  publicationPhaseFor,
+  resolveReadySourceCycle,
+} from "./publication-state.js";
 
 const PROJECT_URL = Deno.env.get("SUPABASE_URL") || "";
 const JOB_KEY = "v20_model";
@@ -127,18 +134,32 @@ async function getState() {
   return Array.isArray(data) ? data[0] || null : null;
 }
 
-async function latestGroupDates() {
-  const pairs = await Promise.all(V20_WORKER_GROUPS.map(async (group) => {
-    const { data } = await rest(
-      "stock_analysis_cache?select=data_date" +
-        `&group_name=eq.${group}&status=eq.ready&data_date=not.is.null` +
-        "&order=data_date.desc&limit=1",
-    );
-    const dataDate = Array.isArray(data) ? data[0]?.data_date : null;
-    if (!dataDate) throw new Error(`No ready point-in-time cache is available for ${group}`);
-    return [group, String(dataDate)];
-  }));
-  return Object.fromEntries(pairs);
+async function loadSourceReadiness() {
+  const jobs = ["universe", ...V20_WORKER_GROUPS.map((group) => `deep_${group}`)];
+  const { data } = await rest(
+    "stock_sync_state?select=job_key,status,cycle_date,processed_count,total_items,details" +
+      `&job_key=in.(${jobs.join(",")})`,
+  );
+  const states = Object.fromEntries((Array.isArray(data) ? data : []).map((row) => [row.job_key, row]));
+  return resolveReadySourceCycle({
+    universe: states.universe,
+    deepStates: Object.fromEntries(V20_WORKER_GROUPS.map((group) => [group, states[`deep_${group}`]])),
+  });
+}
+
+async function loadEnrichmentSummary(dataDate: string) {
+  try {
+    const { data } = await rest("rpc/twss_enrichment_summary", {
+      method: "POST",
+      body: { p_data_date: dataDate },
+    });
+    const value = Array.isArray(data) ? data[0] || {} : data || {};
+    return normalizeEnrichmentSummary(value);
+  } catch {
+    // The additive queue migration may deploy after this function.  Base
+    // publication remains available and advertises base_ready until then.
+    return normalizeEnrichmentSummary({ available: false });
+  }
 }
 
 async function countReady(group: string, dataDate: string) {
@@ -182,6 +203,19 @@ async function fetchAll(path: string, pageSize = 800, maximum = 5_000) {
     if (rows.length < pageSize) break;
   }
   return output;
+}
+
+async function cycleCompleteness(dataDate: string) {
+  const rows = await fetchAll(
+    "v20_model_signals?select=completeness" +
+      `&signal_date=eq.${encodeURIComponent(dataDate)}` +
+      `&model_version=eq.${encodeURIComponent(V20_MODEL_VERSION)}`,
+    1_000,
+    10_000,
+  );
+  const values = rows.map((row) => Number(row.completeness)).filter(Number.isFinite);
+  if (!values.length) return 0;
+  return Number((values.reduce((sum, value) => sum + value, 0) / values.length).toFixed(2));
 }
 
 async function loadMarketContext(dataDate: string) {
@@ -339,17 +373,51 @@ Deno.serve(async (request: Request) => {
 
   try {
     const body = await request.json().catch(() => ({}));
-    const limit = Math.max(5, Math.min(100, Number(body?.limit) || 40));
+    const configuredLimit = Number(Deno.env.get("TWSS_V20_BATCH_LIMIT")) || 250;
+    const limit = Math.max(5, Math.min(500, Number(body?.limit) || configuredLimit));
     const force = body?.force === true;
-    const [state, latestDates] = await Promise.all([getState(), latestGroupDates()]);
-    const latestKey = groupDateCycleKey(latestDates, V20_MODEL_VERSION);
+    const [state, readiness] = await Promise.all([getState(), loadSourceReadiness()]);
     const priorDetails = state?.details && typeof state.details === "object" ? state.details : {};
-    if (!force && String(priorDetails.completedCycleKey || "") === latestKey) {
-      const asOfDate = String([...Object.values(latestDates)].sort().at(-1) || "");
+    if (!readiness.ready || !readiness.sourceDate) {
+      await patchState({
+        status: "pending",
+        next_run_at: new Date(Date.now() + 2 * 60_000).toISOString(),
+        last_error: null,
+        details: {
+          ...priorDetails,
+          publicationPhase: priorDetails.publishedDataDate ? "cached" : "cached",
+          targetSourceDates: readiness.sourceDates,
+          sourceReadiness: {
+            reason: readiness.reason,
+            missingGroups: readiness.missingGroups,
+            completionKeys: readiness.completionKeys,
+          },
+        },
+      });
+      return json({
+        status: "pending",
+        reason: readiness.reason,
+        missingGroups: readiness.missingGroups,
+        sourceDates: readiness.sourceDates,
+        completionKeys: readiness.completionKeys,
+        publicationPhase: priorDetails.publishedDataDate ? "cached" : "cached",
+        publishedDataDate: priorDetails.publishedDataDate || null,
+        modelVersion: V20_MODEL_VERSION,
+      }, 202);
+    }
+
+    const sourceDate = String(readiness.sourceDate);
+    const sourceDates = Object.fromEntries(V20_WORKER_GROUPS.map((group) => [group, sourceDate]));
+    const sourceKey = groupDateCycleKey(sourceDates, V20_MODEL_VERSION);
+    const enrichment = await loadEnrichmentSummary(sourceDate);
+    const currentEnrichmentFingerprint = enrichmentFingerprint(enrichment);
+    const publishedEnrichmentFingerprint = String(priorDetails.enrichmentFingerprint || "");
+    if (!force && String(priorDetails.completedCycleKey || "") === sourceKey &&
+      publishedEnrichmentFingerprint === currentEnrichmentFingerprint) {
       let outcomeEvaluation: unknown = null;
       let maintenanceError: string | null = null;
       try {
-        outcomeEvaluation = await evaluateMaturedSignals(asOfDate);
+        outcomeEvaluation = await evaluateMaturedSignals(sourceDate);
       } catch (error) {
         maintenanceError = (error instanceof Error ? error.message : String(error)).slice(0, 500);
       }
@@ -366,38 +434,68 @@ Deno.serve(async (request: Request) => {
       return json({
         status: maintenanceError ? "partial" : "maintenance",
         reason: "cycle_complete_outcome_maintenance",
-        groupDates: latestDates,
+        groupDates: sourceDates,
         modelVersion: V20_MODEL_VERSION,
         completedStatus: priorDetails.completedCycleStatus || "success",
+        publicationPhase: priorDetails.publicationPhase || publicationPhaseFor(enrichment),
+        baseCompletedAt: priorDetails.baseCompletedAt || null,
+        enrichmentCompletedAt: priorDetails.enrichmentCompletedAt || null,
+        enrichmentPending: enrichment.unresolved,
+        sourceDates: priorDetails.sourceDates || { ...sourceDates, universe: sourceDate },
+        dataCompleteness: Number(priorDetails.dataCompleteness) || 0,
         outcomeEvaluation,
         maintenanceError,
       });
     }
 
-    const previousCycle = priorDetails.workerCycle && typeof priorDetails.workerCycle === "object"
+    const storedCycle = priorDetails.workerCycle && typeof priorDetails.workerCycle === "object"
       ? priorDetails.workerCycle
       : null;
-    let targetDates = latestDates;
-    if (!force && previousCycle?.completed !== true) {
+    let previousCycle = null;
+    if (!force && storedCycle?.completed !== true) {
       try {
-        if (groupDateCycleKey(previousCycle.groupDates, V20_MODEL_VERSION) === previousCycle.cycleKey) {
-          targetDates = previousCycle.groupDates;
-        }
+        if (groupDateCycleKey(storedCycle.groupDates, V20_MODEL_VERSION) === sourceKey &&
+          storedCycle.cycleKey === sourceKey) previousCycle = storedCycle;
       } catch {}
     }
     const totalPairs = await Promise.all(V20_WORKER_GROUPS.map(async (group) => [
       group,
-      await countReady(group, targetDates[group]),
+      await countReady(group, sourceDate),
     ]));
     const totals = Object.fromEntries(totalPairs);
+    const emptyGroups = V20_WORKER_GROUPS.filter((group) => Number(totals[group] || 0) <= 0);
+    if (emptyGroups.length) {
+      await patchState({
+        status: "pending",
+        next_run_at: new Date(Date.now() + 2 * 60_000).toISOString(),
+        last_error: null,
+        details: {
+          ...priorDetails,
+          publicationPhase: priorDetails.publishedDataDate ? "cached" : "cached",
+          targetDataDate: sourceDate,
+          targetSourceDates: { ...sourceDates, universe: sourceDate },
+          sourceReadiness: { reason: "ready_cache_empty", missingGroups: emptyGroups },
+        },
+      });
+      return json({
+        status: "pending",
+        reason: "ready_cache_empty",
+        missingGroups: emptyGroups,
+        groupDates: sourceDates,
+        publicationPhase: priorDetails.publishedDataDate ? "cached" : "cached",
+        publishedDataDate: priorDetails.publishedDataDate || null,
+      }, 202);
+    }
     const cycle: any = reconcileWorkerCycle({
       previous: previousCycle,
-      latestGroupDates: latestDates,
+      latestGroupDates: sourceDates,
       totals,
       modelVersion: V20_MODEL_VERSION,
-      force,
+      force: force || !previousCycle,
     } as any);
-    const cycleDate = [...Object.values(cycle.groupDates)].sort().at(-1);
+    cycle.enrichmentFingerprint = previousCycle?.enrichmentFingerprint || currentEnrichmentFingerprint;
+    cycle.enrichmentSummary = previousCycle?.enrichmentSummary || enrichment;
+    const cycleDate = sourceDate;
     const processedBefore = V20_WORKER_GROUPS.reduce(
       (sum, group) => sum + Number(cycle.groups[group]?.processed || 0),
       0,
@@ -416,6 +514,16 @@ Deno.serve(async (request: Request) => {
         ...priorDetails,
         modelVersion: V20_MODEL_VERSION,
         batchLimit: limit,
+        publicationPhase: String(priorDetails.publishedDataDate || "") === sourceDate
+          ? publicationPhaseFor(enrichment)
+          : "cached",
+        targetDataDate: sourceDate,
+        targetSourceDates: { ...sourceDates, universe: sourceDate },
+        sourceReadiness: {
+          reason: readiness.reason,
+          missingGroups: [],
+          completionKeys: readiness.completionKeys,
+        },
         retryPolicy: { maxAttempts: 3, maxQueue: 300, retryShare: "25%-capped-at-10" },
         probabilityPolicy: "walk-forward-or-deterministic-quant-bootstrap",
         workerCycle: cycle,
@@ -559,17 +667,17 @@ Deno.serve(async (request: Request) => {
     const maintenanceErrors: string[] = [];
     let outcomeEvaluation: unknown = null;
     if (readyToRefresh) {
-      for (const dataDate of cycle.involvedDates) {
-        try {
-          ranking.push(await refreshRankings(dataDate));
-        } catch (error) {
-          rankingErrors.push(`${dataDate}: ${error instanceof Error ? error.message : String(error)}`.slice(0, 300));
-        }
+      try {
+        // This RPC replaces one same-date snapshot inside a transaction.  The
+        // public pointer below only advances after it succeeds, so home and
+        // both ranking models cannot observe a half-published cycle.
+        ranking.push(await refreshRankings(sourceDate));
+      } catch (error) {
+        rankingErrors.push(`${sourceDate}: ${error instanceof Error ? error.message : String(error)}`.slice(0, 300));
       }
       if (rankingErrors.length === 0) {
-        const asOfDate = [...cycle.involvedDates].sort().at(-1) || cycleDate;
         try {
-          outcomeEvaluation = await evaluateMaturedSignals(asOfDate);
+          outcomeEvaluation = await evaluateMaturedSignals(sourceDate);
         } catch (error) {
           maintenanceErrors.push(
             `outcome_evaluation: ${error instanceof Error ? error.message : String(error)}`.slice(0, 300),
@@ -586,10 +694,27 @@ Deno.serve(async (request: Request) => {
       (sum, group) => sum + Number(cycle.groups[group]?.processed || 0),
       0,
     );
+    const targetEnrichment = normalizeEnrichmentSummary(cycle.enrichmentSummary || enrichment);
+    const publishedCompleteness = complete
+      ? await cycleCompleteness(sourceDate).catch(() => Number(priorDetails.dataCompleteness) || 0)
+      : Number(priorDetails.dataCompleteness) || 0;
     const details: Record<string, unknown> = {
       ...priorDetails,
       modelVersion: V20_MODEL_VERSION,
       batchLimit: limit,
+      publicationPhase: String(priorDetails.publishedDataDate || "") === sourceDate
+        ? publicationPhaseFor(enrichment)
+        : "cached",
+      enrichmentPending: String(priorDetails.publishedDataDate || "") === sourceDate
+        ? enrichment.unresolved
+        : Number(priorDetails.enrichmentPending) || 0,
+      targetDataDate: sourceDate,
+      targetSourceDates: { ...sourceDates, universe: sourceDate },
+      sourceReadiness: {
+        reason: readiness.reason,
+        missingGroups: [],
+        completionKeys: readiness.completionKeys,
+      },
       retryPolicy: { maxAttempts: 3, maxQueue: 300, retryShare: "25%-capped-at-10" },
       probabilityPolicy: "walk-forward-or-deterministic-quant-bootstrap",
       writtenSignals,
@@ -600,13 +725,28 @@ Deno.serve(async (request: Request) => {
       workerCycle: cycle,
     };
     if (complete) {
+      const publishedAt = now();
+      const samePublishedDate = String(priorDetails.publishedDataDate || "") === sourceDate;
+      const publicationPhase = publicationPhaseFor(targetEnrichment);
       details.completedCycleKey = cycle.cycleKey;
       details.completedCycleStatus = status;
-      details.completedCycleAt = now();
-    } else if (details.completedCycleKey === cycle.cycleKey) {
-      delete details.completedCycleKey;
-      delete details.completedCycleStatus;
-      delete details.completedCycleAt;
+      details.completedCycleAt = publishedAt;
+      details.publishedCycleKey = cycle.cycleKey;
+      details.publishedDataDate = sourceDate;
+      details.publicationPhase = publicationPhase;
+      details.baseCompletedAt = samePublishedDate && priorDetails.baseCompletedAt
+        ? priorDetails.baseCompletedAt
+        : publishedAt;
+      details.enrichmentCompletedAt = publicationPhase === "complete"
+        ? samePublishedDate && priorDetails.enrichmentCompletedAt
+          ? priorDetails.enrichmentCompletedAt
+          : publishedAt
+        : null;
+      details.enrichmentPending = targetEnrichment.unresolved;
+      details.enrichmentFingerprint = String(cycle.enrichmentFingerprint || currentEnrichmentFingerprint);
+      details.sourceDates = { ...sourceDates, universe: sourceDate };
+      details.dataCompleteness = publishedCompleteness;
+      details.publishedAt = publishedAt;
     }
     const terminalError = compactError(failures, cycle.deadLetters, rankingErrors, maintenanceErrors);
 
@@ -618,7 +758,7 @@ Deno.serve(async (request: Request) => {
       last_symbol: complete ? null : String(freshTasks.at(-1)?.key || retryTasks.at(-1)?.key || "") || null,
       last_error: terminalError,
       last_success_at: writtenSignals || writtenUniverse ? now() : state?.last_success_at || null,
-      next_run_at: complete ? null : new Date(Date.now() + 5 * 60_000).toISOString(),
+      next_run_at: complete ? null : new Date(Date.now() + 2 * 60_000).toISOString(),
       cycle_number: Number(state?.cycle_number || 0) + (complete ? 1 : 0),
       details,
     });
@@ -638,6 +778,12 @@ Deno.serve(async (request: Request) => {
       deadLetters: cycle.deadLetters.length,
       failures: failures.length,
       complete,
+      publicationPhase: details.publicationPhase,
+      baseCompletedAt: details.baseCompletedAt || null,
+      enrichmentCompletedAt: details.enrichmentCompletedAt || null,
+      enrichmentPending: details.enrichmentPending,
+      sourceDates: details.sourceDates || priorDetails.sourceDates || { ...sourceDates, universe: sourceDate },
+      dataCompleteness: details.dataCompleteness || 0,
       ranking,
       outcomeEvaluation,
       maintenanceErrors,

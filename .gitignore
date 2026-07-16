@@ -21,3 +21,6 @@ supabase/.branches/
 *.p12
 *.pfx
 *credentials*.json
+
+.vercel
+.env*

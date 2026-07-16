@@ -30,6 +30,7 @@ const calls = [];
 const complete = await readV20GlobalMarket({
   env: { FINNHUB_API_KEY: "server-finnhub", ALPHA_VANTAGE_API_KEY: "server-alpha" },
   now: new Date("2026-07-16T02:00:00Z"),
+  waitImpl: async () => {},
   fetchImpl: async (input) => {
     const url = new URL(input);
     calls.push(url);

@@ -133,6 +133,7 @@ function mergeLastGood(current, previous) {
 export async function readV20GlobalMarket(options = {}) {
   const env = options.env || globalThis.process?.env || {};
   const fetchImpl = options.fetchImpl || globalThis.fetch;
+  const waitImpl = options.waitImpl || ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
   const now = options.now instanceof Date ? options.now : new Date();
   if (typeof fetchImpl !== "function") throw new TypeError("fetch implementation is required");
   if (!options.force && cache?.expiresAt > now.getTime()) return cache.value;
@@ -153,19 +154,30 @@ export async function readV20GlobalMarket(options = {}) {
     degradedSources.push("finnhub:missing_server_key");
   }
 
-  if (alphaKey) {
-    tasks.push({ source: "alpha-vantage:us10y", promise: readTreasuryYield(alphaKey, fetchImpl) });
-    tasks.push({ source: "alpha-vantage:usdTwd", promise: readUsdTwd(alphaKey, fetchImpl) });
-  } else {
-    degradedSources.push("alpha-vantage:missing_server_key");
-  }
-
   const settled = await Promise.allSettled(tasks.map((task) => task.promise));
   const fresh = [];
   settled.forEach((result, index) => {
     if (result.status === "fulfilled") fresh.push(result.value);
     else degradedSources.push(`${tasks[index].source}:update_failed`);
   });
+
+  if (alphaKey) {
+    const alphaTasks = [
+      ["alpha-vantage:us10y", () => readTreasuryYield(alphaKey, fetchImpl)],
+      ["alpha-vantage:usdTwd", () => readUsdTwd(alphaKey, fetchImpl)],
+    ];
+    for (let index = 0; index < alphaTasks.length; index += 1) {
+      const [source, load] = alphaTasks[index];
+      try {
+        fresh.push(await load());
+      } catch {
+        degradedSources.push(`${source}:update_failed`);
+      }
+      if (index < alphaTasks.length - 1) await waitImpl(1_200);
+    }
+  } else {
+    degradedSources.push("alpha-vantage:missing_server_key");
+  }
 
   const indicators = mergeLastGood(fresh, cache?.value);
   const expectedCount = FINNHUB_QUOTES.length + 2;

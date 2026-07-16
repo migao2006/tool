@@ -165,4 +165,4 @@ assert.match(patchSource, /LEGACY_AI_LOCAL_STORAGE_KEYS/);
 assert.doesNotMatch(patchSource, /Object\.keys\(localStorage\)|localStorage\.clear\(/,
   "legacy cleanup must never scan or clear unrelated user storage");
 
-console.log("Snapshot pipeline tests passed: 25 mature-date gating, 45-day readiness, next-open runtime, final-cycle readiness, official open, and v20.0.4 cache busting");
+console.log("Snapshot pipeline tests passed: 25 mature-date gating, 45-day readiness, next-open runtime, final-cycle readiness, official open, and v20.0.5 cache busting");

@@ -9,7 +9,7 @@ const FINNHUB_QUOTES = Object.freeze([
   { key: "sox", label: "SOX（SOXX ETF 代理）", symbol: "SOXX", proxy: true },
   { key: "tsmAdr", label: "台積電 ADR", symbol: "TSM", proxy: false },
   { key: "nvidia", label: "NVIDIA", symbol: "NVDA", proxy: false },
-  { key: "vix", label: "VIX", symbol: "^VIX", proxy: false },
+  { key: "vix", label: "VIX（VIXY ETF 代理）", symbol: "VIXY", proxy: true },
 ]);
 
 let cache = null;

@@ -53,6 +53,8 @@ assert.equal(complete.dataState, "complete");
 assert.equal(complete.completeness, 100);
 assert.equal(complete.indicators.length, 8);
 assert.equal(complete.indicators.find((item) => item.key === "sp500").proxy, true);
+assert.equal(complete.indicators.find((item) => item.key === "vix").proxy, true);
+assert.equal(v20GlobalMarketInternals.FINNHUB_QUOTES.find((item) => item.key === "vix").symbol, "VIXY");
 assert.equal(complete.indicators.find((item) => item.key === "us10y").value, 4.23);
 assert.equal(complete.indicators.find((item) => item.key === "usdTwd").value, 29.65);
 assert.ok(calls.every((url) => url.searchParams.has(url.hostname === "finnhub.io" ? "token" : "apikey")));

@@ -544,7 +544,7 @@ export async function readV20Market(options = {}) {
   let liveGlobal = null;
   if (options.refreshGlobal === true) {
     try {
-      liveGlobal = await readV20GlobalMarket();
+      liveGlobal = await readV20GlobalMarket({ force: true });
       if (liveGlobal.indicators?.length) {
         row.globalContext = {
           ...row.globalContext,

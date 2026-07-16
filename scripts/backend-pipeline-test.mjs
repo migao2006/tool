@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { FINMIND_PROFILES, selectFinmindProfile } from "../src/finmind-profile.js";
 
-const [sync, baseSchema, schema, grants, cron, acceleratedCron, leases, quota, publicHistoryQuota, preserve, repairQueue, clearEtfRepairs, etfDirectionRepair, lateCoverageRepair, clearOldVersionRepairs, trim, config, marketHandler, workflow, exporter, backtest, freeInsights, backtestSchema, hardening, diagnosticPrivacy, adminDashboard, dateReconcile, finmindVault, adminRepair] = await Promise.all([
+const [sync, baseSchema, schema, grants, cron, acceleratedCron, leases, quota, publicHistoryQuota, preserve, repairQueue, clearEtfRepairs, etfDirectionRepair, lateCoverageRepair, clearOldVersionRepairs, trim, config, marketHandler, workflow, exporter, backtest, freeInsights, backtestSchema, hardening, diagnosticPrivacy, adminDashboard, dateReconcile, finmindVault, adminRepair, dualFinmindPool] = await Promise.all([
   readFile(new URL("../supabase/functions/twss-sync-batch/index.ts", import.meta.url), "utf8"),
   readFile(new URL("../supabase/migrations/20260714040000_base_schema.sql", import.meta.url), "utf8"),
   readFile(new URL("../supabase/migrations/20260714090000_add_persistent_stock_backend.sql", import.meta.url), "utf8"),
@@ -32,6 +32,7 @@ const [sync, baseSchema, schema, grants, cron, acceleratedCron, leases, quota, p
   readFile(new URL("../supabase/migrations/20260715210000_add_evening_market_date_reconciliation.sql", import.meta.url), "utf8"),
   readFile(new URL("../supabase/migrations/20260715235500_secure_finmind_vault.sql", import.meta.url), "utf8"),
   readFile(new URL("../supabase/migrations/20260716081755_repair_admin_semantics.sql", import.meta.url), "utf8"),
+  readFile(new URL("../supabase/migrations/20260716123450_add_dual_finmind_token_pool.sql", import.meta.url), "utf8"),
 ]);
 
 const hardenedBacktest = hardening.match(
@@ -89,11 +90,20 @@ assert.match(sync, /missingRevenueParams\.set\("raw_data->>revenue", "is\.null"\
 assert.match(sync, /const backfillSlots = group === "etf" \? 0 : Math\.max\(1, Math\.ceil\(limit \/ 2\)\)/, "company batches must reserve half their slots for missing-revenue repair");
 assert.match(sync, /access\.profile\.companyClaimCap/, "company reservations must use the selected 300\/600 profile");
 assert.match(sync, /rpc\/twss_finmind_token/, "the worker must support a service-role Vault fallback");
+assert.match(sync, /rpc\/twss_finmind_tokens/, "the worker must resolve both server-only FinMind credentials from Vault");
+assert.match(sync, /FINMIND_TOKEN_SECONDARY/, "the secondary credential must also support an Edge Function secret override");
+assert.match(sync, /p_source: access\.quotaSource/, "each FinMind credential must reserve an independent rolling-hour ledger");
+assert.match(sync, /finmind-secondary-token-unavailable/, "a missing secondary credential must skip instead of reusing primary quota");
 assert.match(sync, /finmindToken: access\.token/, "the Vault credential must stay in memory and be passed directly to the provider client");
 assert.match(sync, /if \(finmindProviderPaused\(error\)\) break/,
   "a global FinMind auth or quota error must stop the remaining symbol batch");
 assert.doesNotMatch(sync, /console\.(?:log|info|warn|error)\([^\n]*finmindAccess\.token/i,
   "the resolved FinMind credential must never be logged");
+assert.match(dualFinmindPool, /finmind_api_token_secondary/);
+assert.match(dualFinmindPool, /finmind_primary[\s\S]*finmind_secondary/);
+assert.match(dualFinmindPool, /twss-enrichment-primary-weekday/);
+assert.match(dualFinmindPool, /twss-enrichment-secondary-weekday/);
+assert.match(dualFinmindPool, /revoke all on function public\.twss_finmind_tokens\(\)[\s\S]*from public, anon, authenticated/);
 assert.doesNotMatch(sync.match(/function compactDeep[\s\S]*?\n}/)?.[0] || "", /priceHistory:/, "rank caches must not duplicate price history");
 assert.match(sync, /row\[key\] === undefined \? null : row\[key\]/, "bulk rows must preserve missing values as null");
 assert.match(sync, /for \(const row of rows\)/, "a failed symbol must not cancel sibling symbols");

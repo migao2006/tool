@@ -30,9 +30,13 @@ const PIPELINE_VERSION = "20-db-first";
 const PROJECT_URL = Deno.env.get("SUPABASE_URL") || "";
 const GROUPS = ["listed", "otc", "etf"] as const;
 type Group = typeof GROUPS[number];
+type FinmindPool = "primary" | "secondary";
 type FinmindAccess = {
   token: string;
   profile: ReturnType<typeof selectFinmindProfile>;
+  pool: FinmindPool;
+  quotaSource: "finmind_primary" | "finmind_secondary";
+  available: boolean;
 };
 
 function adminKey() {
@@ -117,22 +121,39 @@ async function rest(path: string, options: {
   return { data: text ? JSON.parse(text) : null, response };
 }
 
-async function resolveFinmindAccess(): Promise<FinmindAccess> {
-  let token = "";
+async function resolveFinmindAccess(pool: FinmindPool = "primary"): Promise<FinmindAccess> {
+  let primary = "";
+  let secondary = "";
   try {
-    token = String(Deno.env.get("FINMIND_TOKEN") || "").trim();
+    primary = String(Deno.env.get("FINMIND_TOKEN") || "").trim();
+    secondary = String(Deno.env.get("FINMIND_TOKEN_SECONDARY") || "").trim();
   } catch {}
-  if (!token) {
+  if (!primary || (pool === "secondary" && !secondary)) {
     try {
-      const { data } = await rest("rpc/twss_finmind_token", { method: "POST", body: {} });
-      token = typeof data === "string" ? data.trim() : "";
+      const { data } = await rest("rpc/twss_finmind_tokens", { method: "POST", body: {} });
+      if (data && typeof data === "object") {
+        primary ||= String((data as Record<string, unknown>).primary || "").trim();
+        secondary ||= String((data as Record<string, unknown>).secondary || "").trim();
+      }
     } catch {
       // Keep the public 300/hour profile available while the optional Vault
-      // fallback is being provisioned.  Never log the RPC result or token.
-      token = "";
+      // fallback is being provisioned. Never log the RPC result or tokens.
+      if (!primary) {
+        try {
+          const { data } = await rest("rpc/twss_finmind_token", { method: "POST", body: {} });
+          primary = typeof data === "string" ? data.trim() : "";
+        } catch {}
+      }
     }
   }
-  return { token, profile: selectFinmindProfile(token) };
+  const token = pool === "secondary" ? secondary : primary;
+  return {
+    token,
+    profile: selectFinmindProfile(token),
+    pool,
+    quotaSource: pool === "secondary" ? "finmind_secondary" : "finmind_primary",
+    available: pool === "primary" || Boolean(token),
+  };
 }
 
 async function verifyRequest(req: Request) {
@@ -272,12 +293,17 @@ async function reserveFinmindBatch(
   const { data } = await rest("rpc/twss_reserve_api_batch", {
     method: "POST",
     body: {
-      p_source: "finmind",
+      p_source: access.quotaSource,
       p_item_costs: itemCosts,
       p_overhead: Math.max(0, Math.round(overhead)),
       p_hourly_limit: access.profile.hourlyLimit,
       p_claim_cap: Math.max(0, Math.round(claimCap)),
-      p_metadata: { version: VERSION, finmindProfile: access.profile.id, ...metadata },
+      p_metadata: {
+        version: VERSION,
+        finmindProfile: access.profile.id,
+        finmindPool: access.pool,
+        ...metadata,
+      },
     },
   });
   return data && typeof data === "object" ? data : {
@@ -2233,6 +2259,16 @@ async function rescoreEnriched(jobs: Record<string, any>[]) {
 }
 
 async function syncEnrichment(requestedLimit: number, access: FinmindAccess) {
+  if (!access.available) {
+    return {
+      skipped: true,
+      reason: "finmind-secondary-token-unavailable",
+      pool: access.pool,
+      processed: 0,
+      successes: [],
+      failures: [],
+    };
+  }
   const owner = crypto.randomUUID();
   const limit = Math.max(1, Math.min(50, Number(requestedLimit) || 50));
   await insertIgnore("stock_sync_state", [{
@@ -2382,12 +2418,15 @@ Deno.serve(async (req: Request) => {
     const body = await req.json().catch(() => ({}));
     // Resolve once per invocation.  The token is passed only in memory to the
     // provider client and is never included in logs, state, or responses.
-    const finmindAccess = await resolveFinmindAccess();
     const mode = body.mode === "universe"
       ? "universe"
       : ["enrichment", "enrich"].includes(String(body.mode || ""))
         ? "enrichment"
         : "deep";
+    const requestedPool: FinmindPool = mode === "enrichment" && body.pool === "secondary"
+      ? "secondary"
+      : "primary";
+    const finmindAccess = await resolveFinmindAccess(requestedPool);
     if (mode === "universe") {
       adminLogContext = { mode, group: null };
       const result = await syncUniverse(finmindAccess);

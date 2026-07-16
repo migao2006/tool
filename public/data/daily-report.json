@@ -2,200 +2,200 @@
   "version": "19.0",
   "reportVersion": "19.2-daily-report-v1",
   "mode": "live",
-  "dataDate": "2026-07-15",
+  "dataDate": "2026-07-16",
   "sourceDates": {
     "market": {
-      "listed": "2026-07-15",
-      "otc": "2026-07-15",
-      "etf": "2026-07-15"
+      "listed": "2026-07-16",
+      "otc": "2026-07-16",
+      "etf": "2026-07-16"
     },
-    "rankings": "2026-07-15",
+    "rankings": "2026-07-16",
     "news": "2026-07-15"
   },
   "dateStatus": "aligned",
-  "generatedAt": "2026-07-16T01:44:21.718Z",
+  "generatedAt": "2026-07-16T15:52:45.028Z",
   "source": "existing-v19-rankings-stock-snapshots-and-news",
   "updateStatus": "complete",
   "report": {
-    "oneLine": "市場買盤較有優勢，電子通路業相對活躍。",
-    "todayInOneSentence": "市場買盤較有優勢，電子通路業相對活躍。",
+    "oneLine": "市場多空拉鋸，運動休閒相對活躍。",
+    "todayInOneSentence": "市場多空拉鋸，運動休閒相對活躍。",
     "marketStrength": {
-      "level": "偏強",
-      "score": 76.9,
-      "up": 1461,
-      "down": 285,
-      "flat": 114,
-      "breadthPct": 78.5,
-      "averageChangePct": 1.66,
-      "sampleSize": 1860,
-      "explanation": "全市場有 1461 檔上漲、285 檔下跌，平均漲跌 +1.66%。買盤較有優勢，但仍要避開短線漲幅過大的股票。"
+      "level": "震盪",
+      "score": 36.5,
+      "up": 627,
+      "down": 1116,
+      "flat": 188,
+      "breadthPct": 32.5,
+      "averageChangePct": -0.57,
+      "sampleSize": 1931,
+      "explanation": "全市場有 627 檔上漲、1116 檔下跌，平均漲跌 -0.57%。多空力量接近，適合逐檔確認基本面與風險。"
     },
     "institutionalDirection": {
-      "direction": "偏買方",
-      "total": 659590,
-      "foreign": 527217,
-      "trust": 24924,
-      "dealer": 107446,
-      "sampleSize": 2140,
-      "explanation": "三大法人合計為買超659,590 張；這代表短線資金態度，不等於股價一定會同方向變動。"
+      "direction": "偏賣方",
+      "total": -358329,
+      "foreign": -8251,
+      "trust": -22946,
+      "dealer": -327126,
+      "sampleSize": 2213,
+      "explanation": "三大法人合計為賣超358,329 張；這代表短線資金態度，不等於股價一定會同方向變動。"
     },
     "hotIndustries": [
       {
-        "industry": "電子通路業",
-        "stockCount": 21,
-        "averageChangePct": 2.93,
-        "breadthPct": 90.5,
+        "industry": "運動休閒",
+        "stockCount": 27,
+        "averageChangePct": 1.46,
+        "breadthPct": 51.9,
         "representatives": [
           {
-            "symbol": "3028",
-            "name": "增你強",
+            "symbol": "9921",
+            "name": "巨大",
             "changePct": 10
           },
           {
-            "symbol": "3055",
-            "name": "蔚華科",
-            "changePct": 9.97
+            "symbol": "9914",
+            "name": "美利達",
+            "changePct": 9.92
           },
           {
-            "symbol": "3033",
-            "name": "威健",
-            "changePct": 9.88
+            "symbol": "8933",
+            "name": "愛地雅",
+            "changePct": 9.82
           }
         ],
-        "explanation": "電子通路業平均上漲2.93%，多數股票同步走強。"
+        "explanation": "運動休閒平均上漲1.46%，個股表現分歧。"
       },
       {
-        "industry": "半導體業",
-        "stockCount": 90,
-        "averageChangePct": 3.37,
-        "breadthPct": 77.8,
+        "industry": "建材營造",
+        "stockCount": 87,
+        "averageChangePct": 0.86,
+        "breadthPct": 62.8,
         "representatives": [
           {
-            "symbol": "2434",
-            "name": "統懋",
+            "symbol": "2527",
+            "name": "宏璟",
             "changePct": 9.99
           },
           {
-            "symbol": "6770",
-            "name": "力積電",
-            "changePct": 9.97
+            "symbol": "1439",
+            "name": "雋揚",
+            "changePct": 6.65
           },
           {
-            "symbol": "6451",
-            "name": "訊芯-KY",
-            "changePct": 9.97
+            "symbol": "2923",
+            "name": "鼎固-KY",
+            "changePct": 5.75
           }
         ],
-        "explanation": "半導體業平均上漲3.37%，多數股票同步走強。"
+        "explanation": "建材營造平均上漲0.86%，多數股票同步走強。"
       },
       {
-        "industry": "化學工業",
-        "stockCount": 28,
-        "averageChangePct": 2.46,
-        "breadthPct": 89.3,
+        "industry": "橡膠工業",
+        "stockCount": 11,
+        "averageChangePct": 0.65,
+        "breadthPct": 63.6,
         "representatives": [
           {
-            "symbol": "4764",
-            "name": "雙鍵",
-            "changePct": 9.95
+            "symbol": "2104",
+            "name": "國際中橡",
+            "changePct": 4.72
           },
           {
-            "symbol": "1718",
-            "name": "中纖",
-            "changePct": 7.19
+            "symbol": "2106",
+            "name": "建大",
+            "changePct": 3.39
           },
           {
-            "symbol": "1727",
-            "name": "中華化",
-            "changePct": 6.95
+            "symbol": "2105",
+            "name": "正新",
+            "changePct": 2.13
           }
         ],
-        "explanation": "化學工業平均上漲2.46%，多數股票同步走強。"
-      },
-      {
-        "industry": "生技醫療業",
-        "stockCount": 61,
-        "averageChangePct": 2.06,
-        "breadthPct": 95.1,
-        "representatives": [
-          {
-            "symbol": "6446",
-            "name": "藥華藥",
-            "changePct": 10
-          },
-          {
-            "symbol": "6598",
-            "name": "ABC-KY",
-            "changePct": 9.87
-          },
-          {
-            "symbol": "6949",
-            "name": "沛爾生醫-創",
-            "changePct": 9.63
-          }
-        ],
-        "explanation": "生技醫療業平均上漲2.06%，多數股票同步走強。"
+        "explanation": "橡膠工業平均上漲0.65%，多數股票同步走強。"
       },
       {
         "industry": "塑膠工業",
-        "stockCount": 21,
-        "averageChangePct": 2.19,
-        "breadthPct": 90.5,
+        "stockCount": 24,
+        "averageChangePct": 0.53,
+        "breadthPct": 66.7,
         "representatives": [
           {
-            "symbol": "1303",
-            "name": "南亞",
-            "changePct": 8.33
+            "symbol": "4304",
+            "name": "勝昱",
+            "changePct": 2.56
           },
           {
-            "symbol": "1326",
-            "name": "台化",
-            "changePct": 5.67
+            "symbol": "1312",
+            "name": "國喬",
+            "changePct": 2.28
           },
           {
-            "symbol": "1325",
-            "name": "恆大",
-            "changePct": 4.52
+            "symbol": "1314",
+            "name": "中石化",
+            "changePct": 2.26
           }
         ],
-        "explanation": "塑膠工業平均上漲2.19%，多數股票同步走強。"
+        "explanation": "塑膠工業平均上漲0.53%，多數股票同步走強。"
+      },
+      {
+        "industry": "食品工業",
+        "stockCount": 33,
+        "averageChangePct": 0.53,
+        "breadthPct": 57.6,
+        "representatives": [
+          {
+            "symbol": "1232",
+            "name": "大統益",
+            "changePct": 6.58
+          },
+          {
+            "symbol": "1231",
+            "name": "聯華食",
+            "changePct": 4.2
+          },
+          {
+            "symbol": "1218",
+            "name": "泰山",
+            "changePct": 2.77
+          }
+        ],
+        "explanation": "食品工業平均上漲0.53%，個股表現分歧。"
       }
     ],
     "watchStocks": [
       {
-        "symbol": "0056",
-        "name": "元大高股息",
+        "symbol": "0050",
+        "name": "元大台灣50",
         "market": "上市",
         "industry": "ETF",
-        "aiScore": 89,
+        "aiScore": 81,
         "confidence": 93,
-        "changePct": 2.42,
+        "changePct": 0.09,
+        "riskScore": 0,
+        "whyNotice": "近期股價與成交量表現較強，市場買盤比先前積極。",
+        "advantage": "近期股價與成交量表現較強，市場買盤比先前積極。",
+        "risk": "分析分數可能隨新資料更新，仍需分散風險並自行判斷。"
+      },
+      {
+        "symbol": "00646",
+        "name": "元大S&P500",
+        "market": "上市",
+        "industry": "ETF",
+        "aiScore": 81,
+        "confidence": 93,
+        "changePct": 0.39,
         "riskScore": 0,
         "whyNotice": "AI 綜合分數位於市場前段，值得列入研究清單。",
         "advantage": "AI 綜合分數位於市場前段，值得列入研究清單。",
         "risk": "分析分數可能隨新資料更新，仍需分散風險並自行判斷。"
       },
       {
-        "symbol": "8415",
-        "name": "大國鋼",
-        "market": "上櫃",
-        "industry": "未分類",
-        "aiScore": 87,
-        "confidence": 100,
-        "changePct": 2.23,
-        "riskScore": 0,
-        "whyNotice": "最近公布的營運數據有改善，基本面值得繼續追蹤。",
-        "advantage": "最近公布的營運數據有改善，基本面值得繼續追蹤。",
-        "risk": "分析分數可能隨新資料更新，仍需分散風險並自行判斷。"
-      },
-      {
-        "symbol": "00888",
-        "name": "永豐台灣ESG",
-        "market": "上櫃",
+        "symbol": "00713",
+        "name": "元大台灣高息低波",
+        "market": "上市",
         "industry": "ETF",
-        "aiScore": 86,
-        "confidence": 74,
-        "changePct": 3.47,
+        "aiScore": 81,
+        "confidence": 93,
+        "changePct": 0.49,
         "riskScore": 0,
         "whyNotice": "AI 綜合分數位於市場前段，值得列入研究清單。",
         "advantage": "AI 綜合分數位於市場前段，值得列入研究清單。",
@@ -204,39 +204,39 @@
     ],
     "opportunityStocks": [
       {
-        "symbol": "0056",
-        "name": "元大高股息",
+        "symbol": "0050",
+        "name": "元大台灣50",
         "market": "上市",
         "industry": "ETF",
-        "aiScore": 89,
+        "aiScore": 81,
         "confidence": 93,
-        "changePct": 2.42,
+        "changePct": 0.09,
+        "riskScore": 0,
+        "whyNotice": "近期股價與成交量表現較強，市場買盤比先前積極。",
+        "advantage": "近期股價與成交量表現較強，市場買盤比先前積極。",
+        "risk": "分析分數可能隨新資料更新，仍需分散風險並自行判斷。"
+      },
+      {
+        "symbol": "00646",
+        "name": "元大S&P500",
+        "market": "上市",
+        "industry": "ETF",
+        "aiScore": 81,
+        "confidence": 93,
+        "changePct": 0.39,
         "riskScore": 0,
         "whyNotice": "AI 綜合分數位於市場前段，值得列入研究清單。",
         "advantage": "AI 綜合分數位於市場前段，值得列入研究清單。",
         "risk": "分析分數可能隨新資料更新，仍需分散風險並自行判斷。"
       },
       {
-        "symbol": "8415",
-        "name": "大國鋼",
-        "market": "上櫃",
-        "industry": "未分類",
-        "aiScore": 87,
-        "confidence": 100,
-        "changePct": 2.23,
-        "riskScore": 0,
-        "whyNotice": "最近公布的營運數據有改善，基本面值得繼續追蹤。",
-        "advantage": "最近公布的營運數據有改善，基本面值得繼續追蹤。",
-        "risk": "分析分數可能隨新資料更新，仍需分散風險並自行判斷。"
-      },
-      {
-        "symbol": "00888",
-        "name": "永豐台灣ESG",
-        "market": "上櫃",
+        "symbol": "00713",
+        "name": "元大台灣高息低波",
+        "market": "上市",
         "industry": "ETF",
-        "aiScore": 86,
-        "confidence": 74,
-        "changePct": 3.47,
+        "aiScore": 81,
+        "confidence": 93,
+        "changePct": 0.49,
         "riskScore": 0,
         "whyNotice": "AI 綜合分數位於市場前段，值得列入研究清單。",
         "advantage": "AI 綜合分數位於市場前段，值得列入研究清單。",
@@ -245,52 +245,13 @@
     ],
     "riskStocks": [
       {
-        "symbol": "8383",
-        "name": "千附",
-        "market": "上櫃",
-        "industry": "未分類",
-        "aiScore": 61,
-        "confidence": 70,
-        "changePct": null,
-        "riskScore": 16,
-        "whyNotice": "最近公布的營運數據有改善，基本面值得繼續追蹤。",
-        "advantage": "最近公布的營運數據有改善，基本面值得繼續追蹤。",
-        "risk": "分析分數可能隨新資料更新，仍需分散風險並自行判斷。"
-      },
-      {
-        "symbol": "6949",
-        "name": "沛爾生醫-創",
-        "market": "上市",
-        "industry": "生技醫療業",
-        "aiScore": 60,
-        "confidence": 98,
-        "changePct": 9.63,
-        "riskScore": 13,
-        "whyNotice": "最近公布的營運數據有改善，基本面值得繼續追蹤。",
-        "advantage": "最近公布的營運數據有改善，基本面值得繼續追蹤。",
-        "risk": "短線已明顯上漲，追高時容易遇到價格快速回落。"
-      },
-      {
-        "symbol": "8046",
-        "name": "南電",
-        "market": "上市",
-        "industry": "電子零組件業",
-        "aiScore": 65,
-        "confidence": 100,
-        "changePct": 9.69,
-        "riskScore": 11,
-        "whyNotice": "最近公布的營運數據有改善，基本面值得繼續追蹤。",
-        "advantage": "最近公布的營運數據有改善，基本面值得繼續追蹤。",
-        "risk": "短線已明顯上漲，追高時容易遇到價格快速回落。"
-      },
-      {
         "symbol": "00631L",
         "name": "元大台灣50正2",
         "market": "上市",
         "industry": "ETF",
-        "aiScore": 66,
+        "aiScore": 61,
         "confidence": 93,
-        "changePct": 3.23,
+        "changePct": 0.41,
         "riskScore": 10,
         "whyNotice": "近期股價與成交量表現較強，市場買盤比先前積極。",
         "advantage": "近期股價與成交量表現較強，市場買盤比先前積極。",
@@ -301,38 +262,77 @@
         "name": "元大台灣50反1",
         "market": "上市",
         "industry": "ETF",
-        "aiScore": 63,
+        "aiScore": 60,
         "confidence": 93,
-        "changePct": -1.93,
+        "changePct": -0.1,
         "riskScore": 10,
         "whyNotice": "近期股價與成交量表現較強，市場買盤比先前積極。",
         "advantage": "近期股價與成交量表現較強，市場買盤比先前積極。",
         "risk": "分析分數可能隨新資料更新，仍需分散風險並自行判斷。"
       },
       {
-        "symbol": "00637L",
-        "name": "元大滬深300正2",
+        "symbol": "2615",
+        "name": "萬海",
         "market": "上市",
-        "industry": "ETF",
-        "aiScore": 65,
-        "confidence": 93,
-        "changePct": 4.42,
-        "riskScore": 10,
-        "whyNotice": "目前不利訊號較多，先觀察風險是否改善。",
-        "advantage": "目前不利訊號較多，先觀察風險是否改善。",
+        "industry": "航運業",
+        "aiScore": 61,
+        "confidence": 100,
+        "changePct": -1.22,
+        "riskScore": 9,
+        "whyNotice": "最近公布的營運數據有改善，基本面值得繼續追蹤。",
+        "advantage": "最近公布的營運數據有改善，基本面值得繼續追蹤。",
         "risk": "分析分數可能隨新資料更新，仍需分散風險並自行判斷。"
+      },
+      {
+        "symbol": "1444",
+        "name": "力麗",
+        "market": "上市",
+        "industry": "紡織纖維",
+        "aiScore": 60,
+        "confidence": 98,
+        "changePct": -7.55,
+        "riskScore": 8,
+        "whyNotice": "近期股價與成交量表現較強，市場買盤比先前積極。",
+        "advantage": "近期股價與成交量表現較強，市場買盤比先前積極。",
+        "risk": "今日跌幅較大，應先確認是否有基本面或消息面的負面變化。"
+      },
+      {
+        "symbol": "6165",
+        "name": "浪凡",
+        "market": "上市",
+        "industry": "數位雲端",
+        "aiScore": 60,
+        "confidence": 100,
+        "changePct": 0,
+        "riskScore": 8,
+        "whyNotice": "最近公布的營運數據有改善，基本面值得繼續追蹤。",
+        "advantage": "最近公布的營運數據有改善，基本面值得繼續追蹤。",
+        "risk": "分析分數可能隨新資料更新，仍需分散風險並自行判斷。"
+      },
+      {
+        "symbol": "8150",
+        "name": "南茂",
+        "market": "上市",
+        "industry": "半導體業",
+        "aiScore": 61,
+        "confidence": 100,
+        "changePct": 7.46,
+        "riskScore": 8,
+        "whyNotice": "最近公布的營運數據有改善，基本面值得繼續追蹤。",
+        "advantage": "最近公布的營運數據有改善，基本面值得繼續追蹤。",
+        "risk": "短線已明顯上漲，追高時容易遇到價格快速回落。"
       }
     ],
     "risks": [
       {
         "title": "短線波動放大",
-        "explanation": "共有 131 檔股票單日漲跌超過 6%，追價前應先確認成交量與消息來源。"
+        "explanation": "共有 106 檔股票單日漲跌超過 6%，追價前應先確認成交量與消息來源。"
       }
     ],
     "mainRisks": [
       {
         "title": "短線波動放大",
-        "explanation": "共有 131 檔股票單日漲跌超過 6%，追價前應先確認成交量與消息來源。"
+        "explanation": "共有 106 檔股票單日漲跌超過 6%，追價前應先確認成交量與消息來源。"
       }
     ],
     "news": [
@@ -351,6 +351,48 @@
         "sentiment": "中性"
       },
       {
+        "id": "6b5f4c49-fe28-4e03-a6b6-262b1baa1013",
+        "title": "公告本公司115年06月份自結報表之負債比率、流動\n比率、速動比率、現金餘額及銀行融資情形、應收款項、預\n估未來三個月現金收支",
+        "summary": "1.事實發生日:115/07/15 2.公司名稱:安瑞科技股份有限公司 3.與公司關係(請輸入本公司或子公司):本公司 4.相互持股比例:不適用 5.發生緣由:依櫃買中心之證櫃監字第11402012171號函辦理。 6.因應措施:依主管機關規定公告。…",
+        "source": "tpex-mops",
+        "category": "第53款",
+        "symbols": [
+          "3664"
+        ],
+        "publishedAt": "2026-07-15T13:15:41+00:00",
+        "url": "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap04_O",
+        "impact": "目前無法只靠標題判定影響，建議閱讀公告原文。",
+        "sentiment": "中性"
+      },
+      {
+        "id": "1f14f72a-5231-4dc3-b5cd-4566d155d540",
+        "title": "公告本公司內部稽核主管異動",
+        "summary": "1.人員變動別（請輸入發言人、代理發言人、重要營運主管 (如:執行長、營運長、行銷長及策略長等)、財務主管、會計 主管、公司治理主管、資訊安全長、研發主管、內部稽核主管或訴訟及非 訟代理人）:內部稽核主管 2.發生變動日期:115/07/15 3.舊任者姓名、級職及簡歷:劉良泰/本公司稽核主管 4.新任者姓名、級職及簡…",
+        "source": "tpex-mops",
+        "category": "第8款",
+        "symbols": [
+          "3115"
+        ],
+        "publishedAt": "2026-07-15T12:57:10+00:00",
+        "url": "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap04_O",
+        "impact": "目前無法只靠標題判定影響，建議閱讀公告原文。",
+        "sentiment": "中性"
+      },
+      {
+        "id": "f785d935-bde1-48b8-9dc3-4ae52360f479",
+        "title": "公告旭軟電子科技股份有限公司國內第二次有擔保(例：第一次有擔保)轉(交)換公司債(簡稱：旭軟二，代碼：33902)停止受理轉交換等相關事項。",
+        "summary": "內容：本公司國內第二次有擔保轉換公司債發行及轉換辦法規定辦理。<br>(一)停止受理轉交換之事由：辦理配股配息作業事宜。<br>(其他事項敘明：)<br>(二)停止受理轉交換登記起訖日期：115年07月23日至115年08月17日止。…",
+        "source": "tpex-mops",
+        "category": "第53款",
+        "symbols": [
+          "3390"
+        ],
+        "publishedAt": "2026-07-15T12:45:29+00:00",
+        "url": "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap04_O",
+        "impact": "目前無法只靠標題判定影響，建議閱讀公告原文。",
+        "sentiment": "中性"
+      },
+      {
         "id": "b474fa13-5edf-41da-9667-a7a286ae55c8",
         "title": "本公司研發之B10 L-BPA注射液術前輔助治療局部晚期口腔癌之\n第一及第二期學術研究用人體臨床試驗，通過台灣衛生福利部食品\n藥物管理署(TFDA)新藥臨床試驗(IND)審查",
         "summary": "1.事實發生日:115/07/15 2.研發新藥名稱或代號:B10 L-BPA注射液 3.用途:評估硼中子捕獲治療(BNCT)作為術前輔助治療局部晚期口腔癌的安全性和有效性 4.預計進行之所有研發階段:第一及第二期臨床試驗 5.目前進行中之研發階段(請說明目前之研發階段係屬提出申請/通過核准/ 不通過核准，若未通過者，…",
@@ -361,6 +403,20 @@
         ],
         "publishedAt": "2026-07-15T12:20:16+00:00",
         "url": "https://openapi.twse.com.tw/v1/opendata/t187ap04_L",
+        "impact": "內容偏正面，但仍要觀察是否已反映在股價。",
+        "sentiment": "正面"
+      },
+      {
+        "id": "470afefa-13d2-4818-89d2-fe7d952f04b9",
+        "title": "公告本公司現金股利發放現金訂定\n除息基準日、發放日及國內第二次有擔保轉換\n公司債停止轉換期間",
+        "summary": "1.董事會、股東會決議或公司決定日期:115/07/15 2.除權、息類別（請填入「除權」、「除息」或「除權息」）:除息 3.發放普通股股利種類及金額:每股配發現金股利新台幣0.19906365元， 共計新台幣15,791,652元。…",
+        "source": "tpex-mops",
+        "category": "第14款",
+        "symbols": [
+          "3390"
+        ],
+        "publishedAt": "2026-07-15T12:14:19+00:00",
+        "url": "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap04_O",
         "impact": "內容偏正面，但仍要觀察是否已反映在股價。",
         "sentiment": "正面"
       },
@@ -388,62 +444,6 @@
           "4569"
         ],
         "publishedAt": "2026-07-15T11:37:10+00:00",
-        "url": "https://openapi.twse.com.tw/v1/opendata/t187ap04_L",
-        "impact": "內容偏正面，但仍要觀察是否已反映在股價。",
-        "sentiment": "正面"
-      },
-      {
-        "id": "5c5cd8fe-183e-4ff4-b525-c536bfed91c5",
-        "title": "公告本公司決議現金股利配息基準日(補充說明\n115/07/03及115/07/06 公告)",
-        "summary": "1.董事會、股東會決議或公司決定日期:115/07/15 2.除權、息類別（請填入「除權」、「除息」或「除權息」）:除息 3.普通股發放股利種類及金額: 普通股現金股利，每股10元，總計新台幣1,273,299,330元 4.除權（息）交易日:115/07/31 5.最後過戶日:115/08/03 6.停止過戶起始日期…",
-        "source": "twse-mops",
-        "category": "第14款",
-        "symbols": [
-          "6472"
-        ],
-        "publishedAt": "2026-07-15T11:14:43+00:00",
-        "url": "https://openapi.twse.com.tw/v1/opendata/t187ap04_L",
-        "impact": "內容偏正面，但仍要觀察是否已反映在股價。",
-        "sentiment": "正面"
-      },
-      {
-        "id": "9a703111-d2de-4987-ac3d-9616e2d1986d",
-        "title": "澄清媒體報導：本公司承攬陸軍採購案晶片原產地確為法國\n，已依法申請履約爭議調解（調解案號：調1150235號）",
-        "summary": "1.事實發生日:115/07/15 2.公司名稱:雷虎科技股份有限公司 3.與公司關係(請輸入本公司或子公司):本公司 4.相互持股比例:不適用 5.發生緣由:本公司就承攬陸軍後勤指揮部「沉浸式訓練型無人機採購案」 （下稱本採購案）之驗收爭議，說明如下： （一）事實：晶片原產地確為法國 本採購案所用飛行控制晶片為意法半…",
-        "source": "twse-mops",
-        "category": "第51款",
-        "symbols": [
-          "8033"
-        ],
-        "publishedAt": "2026-07-15T11:02:16+00:00",
-        "url": "https://openapi.twse.com.tw/v1/opendata/t187ap04_L",
-        "impact": "目前無法只靠標題判定影響，建議閱讀公告原文。",
-        "sentiment": "中性"
-      },
-      {
-        "id": "4e1b8ed5-069e-42ba-a94d-368b91172710",
-        "title": "代子公司合作金庫證券股份有限公司公告\n新任總經理資格業經金管會核准",
-        "summary": "1.董事會決議日期或發生變動日期:115/07/15 2.人員別（請輸入董事長或總經理）:總經理 3.舊任者姓名:不適用 4.舊任者簡歷:不適用 5.新任者姓名:吳春敏 6.新任者簡歷:合作金庫證券股份有限公司總經理 7.異動情形（請輸入「辭職」、「解任」、「任期屆滿」、「職務調整」、「資遣」、 「退休」、「逝世」或「…",
-        "source": "twse-mops",
-        "category": "第6款",
-        "symbols": [
-          "5880"
-        ],
-        "publishedAt": "2026-07-15T10:57:15+00:00",
-        "url": "https://openapi.twse.com.tw/v1/opendata/t187ap04_L",
-        "impact": "內容偏正面，但仍要觀察是否已反映在股價。",
-        "sentiment": "正面"
-      },
-      {
-        "id": "e05b9193-5c65-45d5-b8c6-49dc2e28f355",
-        "title": "代子公司光鉅控股股份有限公司公告，簽署對日本熊本市\n半導體設備服務公司之投資意向書",
-        "summary": "1.事實發生日:115/07/15 2.公司名稱:光鉅控股股份有限公司(以下稱光鉅控股) 3.與公司關係(請輸入本公司或子公司):子公司 4.相互持股比例:本公司持股100%之子公司。 5.發生緣由:為深化集團半導體事業之國際化布局，強化對客戶在地服務能量。…",
-        "source": "twse-mops",
-        "category": "第51款",
-        "symbols": [
-          "2338"
-        ],
-        "publishedAt": "2026-07-15T10:56:56+00:00",
         "url": "https://openapi.twse.com.tw/v1/opendata/t187ap04_L",
         "impact": "內容偏正面，但仍要觀察是否已反映在股價。",
         "sentiment": "正面"
@@ -465,6 +465,48 @@
         "sentiment": "中性"
       },
       {
+        "id": "6b5f4c49-fe28-4e03-a6b6-262b1baa1013",
+        "title": "公告本公司115年06月份自結報表之負債比率、流動\n比率、速動比率、現金餘額及銀行融資情形、應收款項、預\n估未來三個月現金收支",
+        "summary": "1.事實發生日:115/07/15 2.公司名稱:安瑞科技股份有限公司 3.與公司關係(請輸入本公司或子公司):本公司 4.相互持股比例:不適用 5.發生緣由:依櫃買中心之證櫃監字第11402012171號函辦理。 6.因應措施:依主管機關規定公告。…",
+        "source": "tpex-mops",
+        "category": "第53款",
+        "symbols": [
+          "3664"
+        ],
+        "publishedAt": "2026-07-15T13:15:41+00:00",
+        "url": "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap04_O",
+        "impact": "目前無法只靠標題判定影響，建議閱讀公告原文。",
+        "sentiment": "中性"
+      },
+      {
+        "id": "1f14f72a-5231-4dc3-b5cd-4566d155d540",
+        "title": "公告本公司內部稽核主管異動",
+        "summary": "1.人員變動別（請輸入發言人、代理發言人、重要營運主管 (如:執行長、營運長、行銷長及策略長等)、財務主管、會計 主管、公司治理主管、資訊安全長、研發主管、內部稽核主管或訴訟及非 訟代理人）:內部稽核主管 2.發生變動日期:115/07/15 3.舊任者姓名、級職及簡歷:劉良泰/本公司稽核主管 4.新任者姓名、級職及簡…",
+        "source": "tpex-mops",
+        "category": "第8款",
+        "symbols": [
+          "3115"
+        ],
+        "publishedAt": "2026-07-15T12:57:10+00:00",
+        "url": "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap04_O",
+        "impact": "目前無法只靠標題判定影響，建議閱讀公告原文。",
+        "sentiment": "中性"
+      },
+      {
+        "id": "f785d935-bde1-48b8-9dc3-4ae52360f479",
+        "title": "公告旭軟電子科技股份有限公司國內第二次有擔保(例：第一次有擔保)轉(交)換公司債(簡稱：旭軟二，代碼：33902)停止受理轉交換等相關事項。",
+        "summary": "內容：本公司國內第二次有擔保轉換公司債發行及轉換辦法規定辦理。<br>(一)停止受理轉交換之事由：辦理配股配息作業事宜。<br>(其他事項敘明：)<br>(二)停止受理轉交換登記起訖日期：115年07月23日至115年08月17日止。…",
+        "source": "tpex-mops",
+        "category": "第53款",
+        "symbols": [
+          "3390"
+        ],
+        "publishedAt": "2026-07-15T12:45:29+00:00",
+        "url": "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap04_O",
+        "impact": "目前無法只靠標題判定影響，建議閱讀公告原文。",
+        "sentiment": "中性"
+      },
+      {
         "id": "b474fa13-5edf-41da-9667-a7a286ae55c8",
         "title": "本公司研發之B10 L-BPA注射液術前輔助治療局部晚期口腔癌之\n第一及第二期學術研究用人體臨床試驗，通過台灣衛生福利部食品\n藥物管理署(TFDA)新藥臨床試驗(IND)審查",
         "summary": "1.事實發生日:115/07/15 2.研發新藥名稱或代號:B10 L-BPA注射液 3.用途:評估硼中子捕獲治療(BNCT)作為術前輔助治療局部晚期口腔癌的安全性和有效性 4.預計進行之所有研發階段:第一及第二期臨床試驗 5.目前進行中之研發階段(請說明目前之研發階段係屬提出申請/通過核准/ 不通過核准，若未通過者，…",
@@ -475,6 +517,20 @@
         ],
         "publishedAt": "2026-07-15T12:20:16+00:00",
         "url": "https://openapi.twse.com.tw/v1/opendata/t187ap04_L",
+        "impact": "內容偏正面，但仍要觀察是否已反映在股價。",
+        "sentiment": "正面"
+      },
+      {
+        "id": "470afefa-13d2-4818-89d2-fe7d952f04b9",
+        "title": "公告本公司現金股利發放現金訂定\n除息基準日、發放日及國內第二次有擔保轉換\n公司債停止轉換期間",
+        "summary": "1.董事會、股東會決議或公司決定日期:115/07/15 2.除權、息類別（請填入「除權」、「除息」或「除權息」）:除息 3.發放普通股股利種類及金額:每股配發現金股利新台幣0.19906365元， 共計新台幣15,791,652元。…",
+        "source": "tpex-mops",
+        "category": "第14款",
+        "symbols": [
+          "3390"
+        ],
+        "publishedAt": "2026-07-15T12:14:19+00:00",
+        "url": "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap04_O",
         "impact": "內容偏正面，但仍要觀察是否已反映在股價。",
         "sentiment": "正面"
       },
@@ -502,62 +558,6 @@
           "4569"
         ],
         "publishedAt": "2026-07-15T11:37:10+00:00",
-        "url": "https://openapi.twse.com.tw/v1/opendata/t187ap04_L",
-        "impact": "內容偏正面，但仍要觀察是否已反映在股價。",
-        "sentiment": "正面"
-      },
-      {
-        "id": "5c5cd8fe-183e-4ff4-b525-c536bfed91c5",
-        "title": "公告本公司決議現金股利配息基準日(補充說明\n115/07/03及115/07/06 公告)",
-        "summary": "1.董事會、股東會決議或公司決定日期:115/07/15 2.除權、息類別（請填入「除權」、「除息」或「除權息」）:除息 3.普通股發放股利種類及金額: 普通股現金股利，每股10元，總計新台幣1,273,299,330元 4.除權（息）交易日:115/07/31 5.最後過戶日:115/08/03 6.停止過戶起始日期…",
-        "source": "twse-mops",
-        "category": "第14款",
-        "symbols": [
-          "6472"
-        ],
-        "publishedAt": "2026-07-15T11:14:43+00:00",
-        "url": "https://openapi.twse.com.tw/v1/opendata/t187ap04_L",
-        "impact": "內容偏正面，但仍要觀察是否已反映在股價。",
-        "sentiment": "正面"
-      },
-      {
-        "id": "9a703111-d2de-4987-ac3d-9616e2d1986d",
-        "title": "澄清媒體報導：本公司承攬陸軍採購案晶片原產地確為法國\n，已依法申請履約爭議調解（調解案號：調1150235號）",
-        "summary": "1.事實發生日:115/07/15 2.公司名稱:雷虎科技股份有限公司 3.與公司關係(請輸入本公司或子公司):本公司 4.相互持股比例:不適用 5.發生緣由:本公司就承攬陸軍後勤指揮部「沉浸式訓練型無人機採購案」 （下稱本採購案）之驗收爭議，說明如下： （一）事實：晶片原產地確為法國 本採購案所用飛行控制晶片為意法半…",
-        "source": "twse-mops",
-        "category": "第51款",
-        "symbols": [
-          "8033"
-        ],
-        "publishedAt": "2026-07-15T11:02:16+00:00",
-        "url": "https://openapi.twse.com.tw/v1/opendata/t187ap04_L",
-        "impact": "目前無法只靠標題判定影響，建議閱讀公告原文。",
-        "sentiment": "中性"
-      },
-      {
-        "id": "4e1b8ed5-069e-42ba-a94d-368b91172710",
-        "title": "代子公司合作金庫證券股份有限公司公告\n新任總經理資格業經金管會核准",
-        "summary": "1.董事會決議日期或發生變動日期:115/07/15 2.人員別（請輸入董事長或總經理）:總經理 3.舊任者姓名:不適用 4.舊任者簡歷:不適用 5.新任者姓名:吳春敏 6.新任者簡歷:合作金庫證券股份有限公司總經理 7.異動情形（請輸入「辭職」、「解任」、「任期屆滿」、「職務調整」、「資遣」、 「退休」、「逝世」或「…",
-        "source": "twse-mops",
-        "category": "第6款",
-        "symbols": [
-          "5880"
-        ],
-        "publishedAt": "2026-07-15T10:57:15+00:00",
-        "url": "https://openapi.twse.com.tw/v1/opendata/t187ap04_L",
-        "impact": "內容偏正面，但仍要觀察是否已反映在股價。",
-        "sentiment": "正面"
-      },
-      {
-        "id": "e05b9193-5c65-45d5-b8c6-49dc2e28f355",
-        "title": "代子公司光鉅控股股份有限公司公告，簽署對日本熊本市\n半導體設備服務公司之投資意向書",
-        "summary": "1.事實發生日:115/07/15 2.公司名稱:光鉅控股股份有限公司(以下稱光鉅控股) 3.與公司關係(請輸入本公司或子公司):子公司 4.相互持股比例:本公司持股100%之子公司。 5.發生緣由:為深化集團半導體事業之國際化布局，強化對客戶在地服務能量。…",
-        "source": "twse-mops",
-        "category": "第51款",
-        "symbols": [
-          "2338"
-        ],
-        "publishedAt": "2026-07-15T10:56:56+00:00",
         "url": "https://openapi.twse.com.tw/v1/opendata/t187ap04_L",
         "impact": "內容偏正面，但仍要觀察是否已反映在股價。",
         "sentiment": "正面"

@@ -299,6 +299,22 @@ function normalizeRanking(row = {}) {
   };
 }
 
+function normalizeLegacyRelatedStock(row = {}) {
+  const legacyScore = row?.aiScore && typeof row.aiScore === "object"
+    ? row.aiScore.value
+    : row?.aiScore;
+  const opportunityScore = numeric(row?.opportunityScore ?? legacyScore ?? row?.score);
+  return {
+    ...row,
+    symbol: String(row?.symbol || ""),
+    opportunityScore,
+    aiScore: opportunityScore,
+    confidence: numeric(row?.confidence ?? row?.aiScore?.confidence),
+    riskScore: numeric(row?.riskScore),
+    dataDate: isoDate(row?.dataDate || row?.analysisDataDate),
+  };
+}
+
 function legacyReference(row, model, horizon) {
   return {
     symbol: row.symbol,
@@ -908,7 +924,7 @@ export async function readV20Stock(symbol) {
     medium: signals.filter((row) => row.model === "medium"),
     analysis: legacy?.analysis || null,
     news: arrays(legacy?.news),
-    relatedStocks: arrays(legacy?.relatedStocks),
+    relatedStocks: arrays(legacy?.relatedStocks).map(normalizeLegacyRelatedStock),
     legacyReference: legacy ? {
       scoreDimensions: legacy.scoreDimensions,
       positiveReasons: legacy.positiveReasons,
@@ -966,6 +982,7 @@ export const v20BackendInternals = {
   SORTS,
   normalizeMarket,
   normalizeRanking,
+  normalizeLegacyRelatedStock,
   legacyReference,
   encodeCursor,
   decodeCursor,

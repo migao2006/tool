@@ -2259,7 +2259,24 @@ async function rescoreEnriched(jobs: Record<string, any>[]) {
 }
 
 async function syncEnrichment(requestedLimit: number, access: FinmindAccess) {
+  const jobKey = access.pool === "secondary" ? "enrichment_secondary" : "enrichment_primary";
   if (!access.available) {
+    await insertIgnore("stock_sync_state", [{
+      job_key: jobKey,
+      group_name: "enrichment",
+      status: "pending",
+      details: { pool: access.pool, pipelineVersion: PIPELINE_VERSION },
+    }], "job_key").catch(() => undefined);
+    await patchState(jobKey, {
+      status: "partial",
+      last_error: "finmind-secondary-token-unavailable",
+      next_run_at: new Date(Date.now() + 60 * 60 * 1_000).toISOString(),
+      details: {
+        message: "FinMind credential unavailable",
+        pool: access.pool,
+        pipelineVersion: PIPELINE_VERSION,
+      },
+    });
     return {
       skipped: true,
       reason: "finmind-secondary-token-unavailable",
@@ -2272,12 +2289,12 @@ async function syncEnrichment(requestedLimit: number, access: FinmindAccess) {
   const owner = crypto.randomUUID();
   const limit = Math.max(1, Math.min(50, Number(requestedLimit) || 50));
   await insertIgnore("stock_sync_state", [{
-    job_key: "enrichment",
+    job_key: jobKey,
     group_name: "enrichment",
     status: "pending",
     details: { pipelineVersion: PIPELINE_VERSION },
   }], "job_key").catch(() => undefined);
-  await patchState("enrichment", {
+  await patchState(jobKey, {
     status: "running",
     started_at: now(),
     last_error: null,
@@ -2293,11 +2310,11 @@ async function syncEnrichment(requestedLimit: number, access: FinmindAccess) {
   });
   const claimed = Array.isArray(data) ? data : [];
   if (!claimed.length) {
-    await patchState("enrichment", {
+    await patchState(jobKey, {
       status: "success",
       last_success_at: now(),
       next_run_at: new Date(Date.now() + 5 * 60 * 1_000).toISOString(),
-      details: { message: "No due enrichment jobs", pipelineVersion: PIPELINE_VERSION },
+      details: { message: "No due enrichment jobs", pool: access.pool, pipelineVersion: PIPELINE_VERSION },
     });
     return { claimed: 0, processed: 0, successes: [], failures: [] };
   }
@@ -2317,10 +2334,10 @@ async function syncEnrichment(requestedLimit: number, access: FinmindAccess) {
     : 300;
   await releaseEnrichment(unbudgeted, owner, retrySeconds);
   if (!allowed.length) {
-    await patchState("enrichment", {
+    await patchState(jobKey, {
       status: "pending",
       next_run_at: budget.retryAfterAt || new Date(Date.now() + retrySeconds * 1_000).toISOString(),
-      details: { message: "Waiting for FinMind rolling-hour budget", budget, pipelineVersion: PIPELINE_VERSION },
+      details: { message: "Waiting for FinMind rolling-hour budget", pool: access.pool, budget, pipelineVersion: PIPELINE_VERSION },
     });
     return { claimed: claimed.length, processed: 0, released: unbudgeted.length, budget };
   }
@@ -2358,7 +2375,7 @@ async function syncEnrichment(requestedLimit: number, access: FinmindAccess) {
     rescoreError = error instanceof Error ? error.message.slice(0, 1000) : String(error).slice(0, 1000);
   }
   const processed = successes.length + failures.length;
-  await patchState("enrichment", {
+  await patchState(jobKey, {
     status: failures.length || rescoreError ? "partial" : "success",
     processed_count: processed,
     total_items: claimed.length,
@@ -2373,6 +2390,7 @@ async function syncEnrichment(requestedLimit: number, access: FinmindAccess) {
       failures,
       released: unbudgeted.length + stopped.length,
       budget,
+      pool: access.pool,
       rescored,
       rescoreError,
       publicationPhase: "enriching",

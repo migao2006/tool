@@ -155,14 +155,16 @@ assert.match(exporterSource, /coherentTradingDate/);
 assert.match(exporterSource, /officialOpens/);
 assert.match(exporterSource, /row\.dataDate/);
 assert.match(updaterSource, /open: stock\.open/);
-assert.match(serviceWorker, /twss-v20\.0\.4/);
-assert.match(serviceWorker, /v20\.js\?v=20\.0\.4/);
-assert.match(indexHtml, /\?v=20\.0\.4/);
-assert.match(appSource, /sw\.js\?v=20\.0\.4/);
+const cacheVersion = serviceWorker.match(/const CACHE='twss-v([^']+)'/)?.[1];
+assert.ok(cacheVersion, "the service worker must expose a versioned cache name");
+const escapedCacheVersion = cacheVersion.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+assert.match(serviceWorker, new RegExp(`v20\\.js\\?v=${escapedCacheVersion}`));
+assert.match(indexHtml, new RegExp(`\\?v=${escapedCacheVersion}`));
+assert.match(appSource, new RegExp(`sw\\.js\\?v=${escapedCacheVersion}`));
 assert.doesNotMatch(smartSource, /backtest\.json/,
   "retired future-prediction verification data must not be loaded by the frontend");
 assert.match(patchSource, /LEGACY_AI_LOCAL_STORAGE_KEYS/);
 assert.doesNotMatch(patchSource, /Object\.keys\(localStorage\)|localStorage\.clear\(/,
   "legacy cleanup must never scan or clear unrelated user storage");
 
-console.log("Snapshot pipeline tests passed: 25 mature-date gating, 45-day readiness, next-open runtime, final-cycle readiness, official open, and v20.0.5 cache busting");
+console.log(`Snapshot pipeline tests passed: 25 mature-date gating, 45-day readiness, next-open runtime, final-cycle readiness, official open, and v${cacheVersion} cache busting`);

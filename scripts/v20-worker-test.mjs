@@ -18,6 +18,7 @@ import {
   normalizeEnrichmentSummary,
   publicationPhaseFor,
   resolveReadySourceCycle,
+  shouldRunFullMarket,
 } from "../supabase/functions/twss-v20-model/publication-state.js";
 
 const latest = { listed: "2026-07-16", otc: "2026-07-16", etf: "2026-07-16" };
@@ -149,8 +150,14 @@ assert.equal(publicationPhaseFor({ total: 1_023, success: 1_023, complete: true 
 assert.notEqual(
   enrichmentFingerprint(enriching),
   enrichmentFingerprint({ total: 1_023, success: 501, pending: 499, running: 23 }),
-  "same-date enrichment progress must trigger an idempotent re-score",
+  "enrichment progress remains useful publication metadata",
 );
+assert.equal(shouldRunFullMarket({ completedCycleKey: key, sourceKey: key }), false,
+  "same-date enrichment progress must never restart the full-market scan");
+assert.equal(shouldRunFullMarket({ completedCycleKey: key, sourceKey: `${key}-new` }), true,
+  "a new source cycle must run the full market");
+assert.equal(shouldRunFullMarket({ completedCycleKey: key, sourceKey: key, force: true }), true,
+  "an explicit force request must run the full market");
 
 const regimes = [
   buildMarketContext([{ market: "listed", change_pct: 10, volume: 1 }], "2026-07-16", { available: true, score: 100 }).regime,
@@ -162,9 +169,10 @@ for (const regime of regimes) {
   assert.ok(!["bullish", "range", "bearish"].includes(regime), "worker and backtest regime names must match");
 }
 
-const [workerSource, migration] = await Promise.all([
+const [workerSource, migration, incrementalMigration] = await Promise.all([
   readFile(new URL("../supabase/functions/twss-v20-model/index.ts", import.meta.url), "utf8"),
   readFile(new URL("../supabase/migrations/20260716021553_add_v20_quant_models.sql", import.meta.url), "utf8"),
+  readFile(new URL("../supabase/migrations/20260716131155_v20_incremental_dirty_queue.sql", import.meta.url), "utf8"),
 ]);
 assert.doesNotMatch(workerSource, /latestGroupDates\(\)/);
 assert.match(workerSource, /loadSourceReadiness\(\)/);
@@ -178,7 +186,19 @@ assert.match(workerSource, /baseCompletedAt/);
 assert.match(workerSource, /enrichmentCompletedAt/);
 assert.match(workerSource, /x-twss-sync-token/);
 assert.match(workerSource, /resolution=merge-duplicates/);
+assert.match(workerSource, /shouldRunFullMarket/);
+assert.match(workerSource, /twss_claim_v20_dirty_batch/);
+assert.match(workerSource, /incremental_dirty_symbols/);
+assert.doesNotMatch(workerSource, /publishedEnrichmentFingerprint === currentEnrichmentFingerprint/);
 assert.match(migration, /'strong_bull', 'bull', 'sideways', 'bear', 'strong_bear'/);
 assert.match(migration, /"maxAttempts":3/);
+assert.match(incrementalMigration, /create table if not exists public\.v20_model_dirty_queue/);
+assert.match(incrementalMigration, /where status in \('pending', 'error'\)/);
+assert.match(incrementalMigration, /for update skip locked/);
+assert.match(incrementalMigration, /dirty_version > q\.claimed_version/);
+assert.match(incrementalMigration, /then 'pending' else 'error'/,
+  "a newer dirty revision must survive failure of the leased revision");
+assert.match(incrementalMigration, /enable row level security/);
+assert.match(incrementalMigration, /to service_role/);
 
 console.log("v20 worker tests passed");

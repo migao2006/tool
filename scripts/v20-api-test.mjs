@@ -87,6 +87,15 @@ try {
   const normalized = backend.v20BackendInternals.normalizeRanking(rankingRows[1]);
   assert.equal(normalized.forecasts["5"].upProbability, null);
   assert.equal(normalized.forecasts["5"].dataState, "insufficient_history");
+  const normalizedRelated = backend.v20BackendInternals.normalizeLegacyRelatedStock({
+    symbol: "2618",
+    aiScore: { value: 83, confidence: 79 },
+    analysisDataDate: "2026-07-16T00:00:00Z",
+  });
+  assert.equal(normalizedRelated.aiScore, 83);
+  assert.equal(normalizedRelated.opportunityScore, 83);
+  assert.equal(normalizedRelated.confidence, 79);
+  assert.equal(normalizedRelated.dataDate, "2026-07-16");
   assert.equal(normalized.recommendedAction, "資料不足");
 
   backend.v20BackendInternals.clearCache();
@@ -184,13 +193,14 @@ try {
   const method = await shared.handleV20(new Request("https://app.test/api/v20/home", { method: "POST" }), async () => ({}));
   assert.equal(method.status, 405);
 
-  const [html, ui, smart, sw, manifest, generator] = await Promise.all([
+  const [html, ui, smart, sw, manifest, generator, backendSource] = await Promise.all([
     readFile(new URL("../public/index.html", import.meta.url), "utf8"),
     readFile(new URL("../public/v20.js", import.meta.url), "utf8"),
     readFile(new URL("../public/smart.js", import.meta.url), "utf8"),
     readFile(new URL("../public/sw.js", import.meta.url), "utf8"),
     readFile(new URL("../public/manifest.webmanifest", import.meta.url), "utf8"),
     readFile(new URL("./generate-worker.mjs", import.meta.url), "utf8"),
+    readFile(new URL("../src/v20-backend.js", import.meta.url), "utf8"),
   ]);
   for (const tab of ["home", "short", "medium", "watchlist", "analysis"]) {
     assert.match(html, new RegExp(`data-tab="${tab}"`));
@@ -210,12 +220,16 @@ try {
   assert.match(ui, /不會儲存資金、成本或交易紀錄/);
   assert.match(ui, /item\.opportunityScore, item\.aiScore\?\.value, item\.score/,
     "related-stock scores must support the v19 aiScore object and numeric score fallback");
+  assert.match(backendSource, /relatedStocks: arrays\(legacy\?\.relatedStocks\)\.map\(normalizeLegacyRelatedStock\)/,
+    "the v20 API must normalize legacy related-stock scores before returning them");
   assert.doesNotMatch(ui, /localStorage\.setItem\([^\n]*(?:capital|cost|position)/i);
-  assert.match(sw, /twss-v20\.0\.5/);
-  assert.match(sw, /v20\.js\?v=20\.0\.5/);
+  const assetVersion = sw.match(/const CACHE='twss-v([^']+)'/)?.[1];
+  assert.ok(assetVersion);
+  const escapedAssetVersion = assetVersion.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  assert.match(sw, new RegExp(`v20\\.js\\?v=${escapedAssetVersion}`));
   assert.match(generator, /read\("public\/v20\.js"\)/);
   assert.match(generator, /path==="\/v20\.js"/);
-  assert.equal(JSON.parse(manifest).start_url.includes("v=20.0.5"), true);
+  assert.equal(JSON.parse(manifest).start_url.includes(`v=${assetVersion}`), true);
 
   console.log("v20 API/UI contract: passed");
 } finally {

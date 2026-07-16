@@ -124,3 +124,8 @@ export function publicationPhaseFor(summary = {}) {
   if (normalized.complete && normalized.unresolved === 0) return "complete";
   return "enriching";
 }
+
+/** Full-market work is keyed only by point-in-time source data and model code. */
+export function shouldRunFullMarket({ force = false, completedCycleKey = "", sourceKey = "" } = {}) {
+  return force === true || !sourceKey || String(completedCycleKey || "") !== String(sourceKey);
+}

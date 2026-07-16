@@ -22,6 +22,7 @@ import {
   normalizeEnrichmentSummary,
   publicationPhaseFor,
   resolveReadySourceCycle,
+  shouldRunFullMarket,
 } from "./publication-state.js";
 
 const PROJECT_URL = Deno.env.get("SUPABASE_URL") || "";
@@ -194,6 +195,69 @@ async function loadRetryRow(task: Record<string, unknown>) {
   return Array.isArray(data) ? data[0] || null : null;
 }
 
+type DirtyQueueRow = {
+  id: number;
+  symbol: string;
+  data_date: string;
+  group_name: string;
+  dirty_version: number;
+  attempt_count: number;
+};
+
+async function claimDirtyBatch(owner: string, modelVersion: string, dataDate: string, limit: number) {
+  const { data } = await rest("rpc/twss_claim_v20_dirty_batch", {
+    method: "POST",
+    body: {
+      p_owner: owner,
+      p_model_version: modelVersion,
+      p_data_date: dataDate,
+      p_limit: limit,
+      p_lease_seconds: 420,
+    },
+  });
+  return (Array.isArray(data) ? data : []) as DirtyQueueRow[];
+}
+
+async function completeDirtyBatch(owner: string, ids: number[]) {
+  if (!ids.length) return 0;
+  const { data } = await rest("rpc/twss_complete_v20_dirty_batch", {
+    method: "POST",
+    body: { p_ids: ids, p_owner: owner },
+  });
+  return Number(data) || 0;
+}
+
+async function retryDirtyBatch(owner: string, ids: number[], error: string) {
+  if (!ids.length) return 0;
+  const { data } = await rest("rpc/twss_retry_v20_dirty_batch", {
+    method: "POST",
+    body: {
+      p_ids: ids,
+      p_owner: owner,
+      p_last_error: error.slice(0, 2_000),
+      p_retry_after_seconds: 120,
+    },
+  });
+  return Number(data) || 0;
+}
+
+async function loadDirtySourceRows(claims: DirtyQueueRow[]) {
+  const rows: Record<string, unknown>[] = [];
+  for (const group of V20_WORKER_GROUPS) {
+    const groupClaims = claims.filter((claim) => claim.group_name === group);
+    if (!groupClaims.length) continue;
+    const symbols = groupClaims.map((claim) => encodeURIComponent(claim.symbol)).join(",");
+    const dataDate = groupClaims[0].data_date;
+    const { data } = await rest(
+      "stock_analysis_cache?select=symbol,group_name,data_date,confidence,stock,analysis,result" +
+        `&group_name=eq.${group}&status=eq.ready&data_date=eq.${encodeURIComponent(dataDate)}` +
+        `&symbol=in.(${symbols})&limit=${Math.min(groupClaims.length, 500)}`,
+    );
+    if (Array.isArray(data)) rows.push(...data);
+  }
+  return rows;
+}
+
 async function fetchAll(path: string, pageSize = 800, maximum = 5_000) {
   const output: Record<string, unknown>[] = [];
   for (let offset = 0; offset < maximum; offset += pageSize) {
@@ -364,6 +428,165 @@ function compactError(
   return parts.length ? parts.join(" | ").slice(0, 2_000) : null;
 }
 
+async function processIncrementalBatch(input: {
+  owner: string;
+  sourceDate: string;
+  limit: number;
+  state: any;
+  priorDetails: Record<string, unknown>;
+  enrichment: ReturnType<typeof normalizeEnrichmentSummary>;
+}) {
+  const { owner, sourceDate, limit, state, priorDetails, enrichment } = input;
+  const claims = await claimDirtyBatch(owner, V20_MODEL_VERSION, sourceDate, limit);
+  if (!claims.length) {
+    const phase = publicationPhaseFor(enrichment);
+    await patchState({
+      status: priorDetails.completedCycleStatus || state?.status || "success",
+      last_error: null,
+      next_run_at: null,
+      details: {
+        ...priorDetails,
+        publicationPhase: phase,
+        enrichmentPending: enrichment.unresolved,
+        enrichmentFingerprint: enrichmentFingerprint(enrichment),
+        lastIncrementalCheckAt: now(),
+      },
+    });
+    return json({
+      status: "maintenance",
+      reason: "cycle_complete_no_dirty_symbols",
+      modelVersion: V20_MODEL_VERSION,
+      publishedDataDate: priorDetails.publishedDataDate || sourceDate,
+      publicationPhase: phase,
+      enrichmentPending: enrichment.unresolved,
+      incrementalClaimed: 0,
+    });
+  }
+
+  const sourceRows = await loadDirtySourceRows(claims);
+  const sourceByKey = new Map(sourceRows.map((row) => [workerTaskKey({
+    group_name: String(row.group_name || ""),
+    data_date: String(row.data_date || ""),
+    symbol: String(row.symbol || ""),
+  }), row]));
+  const [marketContext, newsRows, calibrationBuckets] = await Promise.all([
+    loadMarketContext(sourceDate),
+    loadRecentNews(sourceDate),
+    loadCalibrations(sourceDate),
+  ]);
+  const resources = { marketContext, newsRows, calibrationBuckets };
+  const failures: WorkerFailure[] = [];
+  const signalRows: Record<string, unknown>[] = [];
+  const universeRows: Record<string, unknown>[] = [];
+  for (const claim of claims) {
+    const task = {
+      group_name: claim.group_name,
+      signal_date: claim.data_date,
+      symbol: claim.symbol,
+    };
+    const row = sourceByKey.get(workerTaskKey({
+      group_name: claim.group_name,
+      data_date: claim.data_date,
+      symbol: claim.symbol,
+    }));
+    if (!row) {
+      addFailure(failures, "source", task, "ready_source_row_not_available");
+      continue;
+    }
+    try {
+      const scored = scoreCacheRow(row, resources);
+      signalRows.push(...scored.signals);
+      universeRows.push(scored.universe);
+    } catch (error) {
+      addFailure(failures, "model", task, error);
+    }
+  }
+
+  const isolationBudget = { remaining: 32 };
+  const [writtenSignals, writtenUniverse] = await Promise.all([
+    upsertWithIsolation(
+      "v20_model_signals",
+      signalRows,
+      "symbol,signal_date,model_key,horizon_days,model_version",
+      failures,
+      isolationBudget,
+    ),
+    upsertWithIsolation(
+      "v20_universe_membership",
+      universeRows,
+      "symbol,as_of_date,model_version",
+      failures,
+      isolationBudget,
+    ),
+  ]);
+  const failedKeys = new Set(failures.map((failure) => failure.key));
+  let successfulClaims = claims.filter((claim) => !failedKeys.has(workerTaskKey({
+    group_name: claim.group_name,
+    data_date: claim.data_date,
+    symbol: claim.symbol,
+  })));
+  let ranking: unknown = null;
+  let rankingError: string | null = null;
+  if (successfulClaims.length) {
+    try {
+      ranking = await refreshRankings(sourceDate);
+    } catch (error) {
+      rankingError = (error instanceof Error ? error.message : String(error)).slice(0, 500);
+      successfulClaims = [];
+    }
+  }
+
+  const successfulIds = successfulClaims.map((claim) => Number(claim.id));
+  const failedIds = claims
+    .filter((claim) => !successfulIds.includes(Number(claim.id)))
+    .map((claim) => Number(claim.id));
+  const retryError = [
+    rankingError ? `ranking: ${rankingError}` : "",
+    ...failures.slice(0, 8).map((failure) => `${failure.key}: ${failure.error}`),
+  ].filter(Boolean).join(" | ").slice(0, 2_000) || "incremental_rescore_failed";
+  const [completedDirty, retriedDirty] = await Promise.all([
+    completeDirtyBatch(owner, successfulIds),
+    retryDirtyBatch(owner, failedIds, retryError),
+  ]);
+  const phase = publicationPhaseFor(enrichment);
+  const incrementalError = failedIds.length ? retryError : null;
+  await patchState({
+    status: incrementalError ? "partial" : priorDetails.completedCycleStatus || "success",
+    last_error: incrementalError,
+    last_success_at: successfulIds.length ? now() : state?.last_success_at || null,
+    next_run_at: failedIds.length ? new Date(Date.now() + 2 * 60_000).toISOString() : null,
+    details: {
+      ...priorDetails,
+      publicationPhase: phase,
+      enrichmentPending: enrichment.unresolved,
+      enrichmentFingerprint: enrichmentFingerprint(enrichment),
+      lastIncrementalAt: now(),
+      lastIncremental: {
+        claimed: claims.length,
+        completed: completedDirty,
+        retried: retriedDirty,
+        writtenSignals,
+        writtenUniverse,
+        rankingRefreshed: rankingError === null && successfulIds.length > 0,
+      },
+    },
+  });
+  return json({
+    status: incrementalError ? "partial" : "success",
+    reason: "incremental_dirty_symbols",
+    modelVersion: V20_MODEL_VERSION,
+    publishedDataDate: priorDetails.publishedDataDate || sourceDate,
+    publicationPhase: phase,
+    enrichmentPending: enrichment.unresolved,
+    incrementalClaimed: claims.length,
+    incrementalCompleted: completedDirty,
+    incrementalRetried: retriedDirty,
+    writtenSignals,
+    writtenUniverse,
+    ranking,
+  });
+}
+
 Deno.serve(async (request: Request) => {
   if (request.method !== "POST") return json({ error: "method_not_allowed" }, 405);
   if (!await verifyRequest(request).catch(() => false)) return json({ error: "unauthorized" }, 401);
@@ -411,40 +634,18 @@ Deno.serve(async (request: Request) => {
     const sourceKey = groupDateCycleKey(sourceDates, V20_MODEL_VERSION);
     const enrichment = await loadEnrichmentSummary(sourceDate);
     const currentEnrichmentFingerprint = enrichmentFingerprint(enrichment);
-    const publishedEnrichmentFingerprint = String(priorDetails.enrichmentFingerprint || "");
-    if (!force && String(priorDetails.completedCycleKey || "") === sourceKey &&
-      publishedEnrichmentFingerprint === currentEnrichmentFingerprint) {
-      let outcomeEvaluation: unknown = null;
-      let maintenanceError: string | null = null;
-      try {
-        outcomeEvaluation = await evaluateMaturedSignals(sourceDate);
-      } catch (error) {
-        maintenanceError = (error instanceof Error ? error.message : String(error)).slice(0, 500);
-      }
-      await patchState({
-        status: maintenanceError ? "partial" : priorDetails.completedCycleStatus || "success",
-        last_error: maintenanceError ? `maintenance/outcome_evaluation: ${maintenanceError}` : null,
-        details: {
-          ...priorDetails,
-          lastOutcomeEvaluation: outcomeEvaluation,
-          lastOutcomeEvaluationAt: now(),
-          lastOutcomeEvaluationError: maintenanceError,
-        },
-      });
-      return json({
-        status: maintenanceError ? "partial" : "maintenance",
-        reason: "cycle_complete_outcome_maintenance",
-        groupDates: sourceDates,
-        modelVersion: V20_MODEL_VERSION,
-        completedStatus: priorDetails.completedCycleStatus || "success",
-        publicationPhase: priorDetails.publicationPhase || publicationPhaseFor(enrichment),
-        baseCompletedAt: priorDetails.baseCompletedAt || null,
-        enrichmentCompletedAt: priorDetails.enrichmentCompletedAt || null,
-        enrichmentPending: enrichment.unresolved,
-        sourceDates: priorDetails.sourceDates || { ...sourceDates, universe: sourceDate },
-        dataCompleteness: Number(priorDetails.dataCompleteness) || 0,
-        outcomeEvaluation,
-        maintenanceError,
+    if (!shouldRunFullMarket({
+      force,
+      completedCycleKey: String(priorDetails.completedCycleKey || ""),
+      sourceKey,
+    })) {
+      return await processIncrementalBatch({
+        owner,
+        sourceDate,
+        limit,
+        state,
+        priorDetails,
+        enrichment,
       });
     }
 

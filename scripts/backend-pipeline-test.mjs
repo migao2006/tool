@@ -34,6 +34,10 @@ const [sync, baseSchema, schema, grants, cron, acceleratedCron, leases, quota, p
   readFile(new URL("../supabase/migrations/20260716081755_repair_admin_semantics.sql", import.meta.url), "utf8"),
   readFile(new URL("../supabase/migrations/20260716123450_add_dual_finmind_token_pool.sql", import.meta.url), "utf8"),
 ]);
+const cronGates = await readFile(
+  new URL("../supabase/migrations/20260716131112_gate_crons_and_split_finmind_state.sql", import.meta.url),
+  "utf8",
+);
 
 const hardenedBacktest = hardening.match(
   /create or replace function public\.twss_evaluate_matured_backtests[\s\S]*?grant execute on function public\.twss_evaluate_matured_backtests/,
@@ -104,6 +108,18 @@ assert.match(dualFinmindPool, /finmind_primary[\s\S]*finmind_secondary/);
 assert.match(dualFinmindPool, /twss-enrichment-primary-weekday/);
 assert.match(dualFinmindPool, /twss-enrichment-secondary-weekday/);
 assert.match(dualFinmindPool, /revoke all on function public\.twss_finmind_tokens\(\)[\s\S]*from public, anon, authenticated/);
+assert.match(sync, /const jobKey = access\.pool === "secondary" \? "enrichment_secondary" : "enrichment_primary"/,
+  "each FinMind pool must publish an independent worker state");
+assert.doesNotMatch(cronGates, /p_source not in \('finmind',/,
+  "the legacy finmind source must not remain a third rolling-hour ledger");
+assert.match(cronGates, /check \(source in \('finmind_primary', 'finmind_secondary'\)\)/);
+assert.match(cronGates, /twss_refresh_enrichment_state[\s\S]*'enrichment_primary', 'enrichment_secondary'/,
+  "the legacy enrichment state must remain as a compatible aggregate");
+assert.match(cronGates, /where public\.twss_cron_deep_due\('listed'\)/);
+assert.match(cronGates, /where public\.twss_cron_enrichment_due\(\)/);
+assert.match(cronGates, /where public\.twss_cron_v20_due\(\)/);
+assert.match(cronGates, /where public\.twss_cron_v19_rankings_due\(\)/,
+  "ranking refresh must be skipped until source history changes");
 assert.doesNotMatch(sync.match(/function compactDeep[\s\S]*?\n}/)?.[0] || "", /priceHistory:/, "rank caches must not duplicate price history");
 assert.match(sync, /row\[key\] === undefined \? null : row\[key\]/, "bulk rows must preserve missing values as null");
 assert.match(sync, /for \(const row of rows\)/, "a failed symbol must not cancel sibling symbols");

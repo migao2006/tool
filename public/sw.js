@@ -1,12 +1,12 @@
-const CACHE='twss-v19.1.0';
+const CACHE='twss-v19.2.0';
 const STATIC=[
   '/',
-  '/app.js?v=19.1.0',
-  '/patch.js?v=19.1.0',
-  '/smart.js?v=19.1.0',
-  '/styles.css?v=19.1.0',
-  '/manifest.webmanifest?v=19.1.0',
-  '/icon.svg?v=19.1.0'
+  '/app.js?v=19.2.0',
+  '/patch.js?v=19.2.0',
+  '/smart.js?v=19.2.0',
+  '/styles.css?v=19.2.0',
+  '/manifest.webmanifest?v=19.2.0',
+  '/icon.svg?v=19.2.0'
 ];
 
 self.addEventListener('install',event=>event.waitUntil(
@@ -30,14 +30,14 @@ self.addEventListener('fetch',event=>{
   if(url.pathname.startsWith('/data/')){
     const cacheKey=new Request(url.origin+url.pathname);
     event.respondWith(
-      fetch(event.request,{cache:'no-store'})
-        .then(response=>{
-          if(!response.ok)return response;
-          const copy=response.clone();
-          caches.open(CACHE).then(cache=>cache.put(cacheKey,copy));
-          return response;
-        })
-        .catch(()=>caches.match(cacheKey))
+      caches.match(cacheKey).then(cached=>{
+        const refresh=fetch(event.request,{cache:'no-store'}).then(response=>{
+          if(response.ok){const copy=response.clone();caches.open(CACHE).then(cache=>cache.put(cacheKey,copy))}
+          return response
+        });
+        if(cached){event.waitUntil(refresh.catch(()=>{}));return cached}
+        return refresh.catch(()=>caches.match(cacheKey))
+      })
     );
     return;
   }

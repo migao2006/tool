@@ -360,18 +360,18 @@ assert.match(contentSecurityPolicy, /https:\/\/lfkdkdyaatdlizryiyon\.supabase\.c
   "the shared policy must continue allowing the standalone MARKET administrator console");
 assert.doesNotMatch(pageSource, /id="adminBtn"/,
   "the CORE-authenticated main application must not embed a MARKET administrator entry");
-assert.match(pageSource, /app\.js\?v=19\.1\.0/);
+assert.match(pageSource, /app\.js\?v=19\.2\.0/);
 const publicPageSource = await readFile(new URL("../public/index.html", import.meta.url), "utf8");
 const publicAppSource = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
 const publicSmartSource = await readFile(new URL("../public/smart.js", import.meta.url), "utf8");
 const publicStylesSource = await readFile(new URL("../public/styles.css", import.meta.url), "utf8");
-assert.match(publicPageSource, /app\.js\?v=19\.1\.0/);
-assert.match(publicPageSource, /id="themeToggle"/);
+assert.match(publicPageSource, /app\.js\?v=19\.2\.0/);
+assert.doesNotMatch(publicPageSource, /id="themeToggle"|data-tab="(?:forecast|verify)"/);
 const adminPageSource = await readFile(new URL("../public/admin.html", import.meta.url), "utf8");
 const adminScriptSource = await readFile(new URL("../public/admin.js", import.meta.url), "utf8");
-assert.match(adminPageSource, /icon\.svg\?v=19\.1\.0/);
-assert.match(adminPageSource, /styles\.css\?v=19\.1\.0/);
-assert.match(adminPageSource, /admin\.js\?v=19\.1\.0/);
+assert.match(adminPageSource, /icon\.svg\?v=19\.2\.0/);
+assert.match(adminPageSource, /styles\.css\?v=19\.2\.0/);
+assert.match(adminPageSource, /admin\.js\?v=19\.2\.0/);
 assert.match(adminScriptSource, /https:\/\/lfkdkdyaatdlizryiyon\.supabase\.co/,
   "the standalone administrator console must remain on MARKET");
 assert.match(adminScriptSource, /twss-market-admin-session-v18/,
@@ -396,7 +396,7 @@ assert.match(appSource, /交易日不足 60 日/, "partial histories must not be
 assert.match(appSource, /120000,0/, "opening one detail must not automatically consume a second repair attempt");
 assert.match(appSource, /aria-label','關閉視窗/);
 assert.match(appSource, /event\.key==='Escape'/);
-assert.match(appSource, /sw\.js\?v=19\.1\.0/);
+assert.match(appSource, /sw\.js\?v=19\.2\.0/);
 assert.match(appSource, /timeZone:TAIPEI_TIME_ZONE/,
   "local date defaults must use Asia/Taipei");
 assert.match(appSource, /history\.scrollRestoration='manual'/,
@@ -405,6 +405,8 @@ assert.match(appSource, /S\.tab==='home'&&\(event\.persisted\|\|initialHomeScrol
   "bfcache restoration must not discard the user's scroll position on non-home tabs");
 assert.match(appSource, /function resetPageScroll[\s\S]*window\.scrollTo\(0,0\)[\s\S]*document\.documentElement\.scrollTop=0[\s\S]*document\.body\.scrollTop=0/,
   "scroll reset must cover the iOS document and body scrolling implementations");
+assert.match(appSource, /readMarketBootCache\(\)[\s\S]*loadLatestSnapshot\(\)[\s\S]*fetchJson\(`\$\{EDGE\}\?type=stocks`/,
+  "the first paint must use local or static data before the live stocks API completes");
 assert.match(appSource, /settleInitialHomeScroll\(\)[\s\S]*loadFundamentals\(\)/,
   "the first complete market render must settle at the top before asynchronous enrichment");
 assert.match(appSource, /navigateToTab[\s\S]*resetPageScroll\(\)/,
@@ -417,16 +419,14 @@ assert.doesNotMatch(appSource, /https:\/\/lfkdkdyaatdlizryiyon\.supabase\.co/,
   "the main application must not have a direct MARKET destination for its CORE JWT");
 assert.match(appSource, /function userDataKey\(kind,userId=sessionUserId\(\)\)/,
   "local user data must be partitioned by the authenticated CORE user id");
-assert.match(appSource, /upsertPredictionCloud\(record,owner=sessionUserId\(\)\)[\s\S]*sessionUserId\(\)!==owner/,
-  "an in-flight write must be abandoned if the active account changes");
-assert.match(appSource, /cloudPred=\(pred\|\|\[\]\)[\s\S]*setPredictions\(cloudPred,userId\)/,
-  "an empty cloud result must clear stale local predictions for that account");
+assert.doesNotMatch(appSource, /prediction_logs|getPredictions|setPredictions|upsertPrediction|recordPrediction|data-verify-stock|未來漲跌預測|預測驗證/,
+  "the removed prediction UI must not retain active prediction data or controls");
 assert.match(appSource, /watchlist_groups[\s\S]*watchlist_items/,
   "the implemented watchlist must sync through CORE");
 assert.doesNotMatch(appSource, /investment_journal|saveJournal|deleteJournal|getJournal|setJournal|openJournalModal|journalSection|data-(?:patch-)?journal|data-journal-stock|投資紀錄|買入紀錄|賣出紀錄/i,
   "v19 must not expose or synchronize personal investment records");
-assert.match(appSource, /function navigateToTab\(tab\)\{if\(tab==='admin'\)return/,
-  "direct navigation must not restore the removed embedded administrator flow");
+assert.match(appSource, /function navigateToTab\(tab\)\{if\(!\['home','opportunities','mine'\]\.includes\(tab\)\)return/,
+  "direct navigation must only allow the three retained public pages");
 assert.match(appSource, /\/auth\/v1\/logout/,
   "logout must revoke the CORE Supabase session before clearing it locally");
 assert.match(adminScriptSource, /twss_admin_operations_log/);
@@ -453,6 +453,8 @@ assert.match(patchSource, /自選清單/);
 assert.match(patchSource, /規則提醒/);
 assert.doesNotMatch(patchSource, /saveJournal|deleteJournal|getJournal|openJournalModal|journalSection|data-(?:patch-)?journal|data-journal-stock|投資紀錄|買入紀錄|賣出紀錄/i,
   "the active mine-page override must not restore the removed investment journal");
+assert.doesNotMatch(patchSource, /recordPrediction|evaluatePredictions|runTechnicalBacktest|data-verify-stock|未來漲跌預測|預測驗證|預測紀錄/,
+  "the comparison override must not restore removed prediction features");
 assert.doesNotMatch(patchSource, /gemini|ai[-_ ]?research|AI 研究|AI 摘要|data-ai/i,
   "paid research UI and endpoints must remain removed from the comparison release");
 
@@ -468,12 +470,14 @@ assert.match(smartSource, /近四季現金轉換/);
 assert.match(smartSource, /最新月營收/);
 assert.match(smartSource, /營收公布後反應：待滿 5 個交易日/);
 assert.match(smartSource, /融資：不適用（不可融資）/);
-assert.match(smartSource, /backtest\.json/);
+assert.doesNotMatch(smartSource, /backtest\.json|runTechnicalBacktest|data-verify-stock/,
+  "the v19 ranking override must not load or expose future-price backtests");
 assert.match(smartSource, /cache: 'no-store'/);
 assert.match(smartSource, /globalThis\.twssUltimateSnapshot/);
 assert.match(smartSource, /backend-rankings/);
 assert.match(smartSource, /後端持續累積/);
-assert.match(smartSource, /舊模型快照不作為 v16\.3 正式候選/);
+assert.match(smartSource, /analysisVersion === EXPECTED_ANALYSIS_VERSION/,
+  "only snapshots from the expected analysis model may become formal candidates");
 assert.doesNotMatch(smartSource, /資料健康中心|data-health|statusCard/,
   "the ranking override must not restore the removed health-center entry");
 assert.doesNotMatch(smartSource, /廣告|促銷|VIP|贊助|免費試用|立即購買|解鎖/);
@@ -490,9 +494,8 @@ assert.match(publicSmartSource, /v19-compact-row/);
 assert.match(publicSmartSource, /\/api\/v19/);
 assert.match(publicSmartSource, /optionalJson\('\/home'\)/);
 assert.match(publicSmartSource, /optionalJson\(rankingQuery\(10\)\)/);
-assert.match(publicSmartSource, /if \(!home && !rankings\) await globalThis\.twssLoadUltimateSnapshot/);
-assert.doesNotMatch(publicSmartSource, /twssLoadUltimateSnapshot = loadSnapshot;[\s\S]{0,300}\n\s*loadSnapshot\(\);/,
-  "the large legacy snapshot must only load after both paged v19 endpoints fail");
+assert.match(publicSmartSource, /twssLatestSnapshotPromise/,
+  "the verified static snapshot must paint before background APIs finish");
 assert.match(publicSmartSource, /rankingQuery\(20, v19\.rankingNextCursor\)/);
 assert.match(publicSmartSource, /payload\.nextCursor/);
 assert.match(publicSmartSource, /params\.set\('cursor', cursor\)/);
@@ -539,7 +542,18 @@ assert.match(publicSmartSource, /deep_listed: '上市'/,
   "the public status must include per-market progress");
 assert.doesNotMatch(publicSmartSource, /SUPABASE_(?:SERVICE_ROLE|SECRET)_KEY|sb_secret_/);
 assert.doesNotMatch(publicSmartSource, /data-tab="admin"|id="adminBtn"/);
-assert.match(publicAppSource, /sw\.js\?v=19\.1\.0/);
+assert.match(publicSmartSource, /optionalJson\(`\/daily-report/);
+assert.match(publicSmartSource, /\/data\/daily-report\.json/);
+assert.match(publicSmartSource, /watchlist\.join\(','\)/,
+  "the dynamic daily report must include the current watchlist without blocking first paint");
+assert.match(publicSmartSource, /item\.whyNotice/,
+  "beginner-friendly stock reasons from the report API must be preserved");
+assert.match(publicSmartSource, /raw\.watchlistChanges/,
+  "the daily report must render watchlist changes when available");
+assert.match(publicSmartSource, /id="v19NewsMore"/);
+assert.match(publicSmartSource, /三分鐘看懂/);
+assert.doesNotMatch(publicSmartSource, /查看既有預測驗證/);
+assert.match(publicAppSource, /sw\.js\?v=19\.2\.0/);
 
 const stylesResponse = await worker.fetch(new Request("https://example.test/styles.css?v=18.0.0"), {}, {});
 const stylesSource = await stylesResponse.text();
@@ -551,7 +565,7 @@ assert.match(stylesSource, /authenticated administrator operations console/);
 assert.match(stylesSource, /\.app-shell\{overflow-anchor:none\}/,
   "asynchronous home renders must not let Safari move the viewport anchor");
 assert.doesNotMatch(stylesSource, /\.ai-(?:card|panel|action|summary|scenario)/);
-assert.match(publicStylesSource, /html\[data-theme="light"\]/);
+assert.doesNotMatch(publicStylesSource, /data-theme="light"|prefers-color-scheme:light|\.theme-toggle/);
 assert.match(publicStylesSource, /\.v19-ranking-filter/);
 assert.match(publicStylesSource, /\.v19-index-strip/);
 assert.match(publicStylesSource, /\.v19-featured/);
@@ -569,6 +583,13 @@ assert.doesNotMatch(JSON.stringify(latestSnapshot.backend || {}),
 assert.ok(latestSnapshot.groups.listed.length >= 1);
 assert.ok(latestSnapshot.groups.otc.length >= 1);
 assert.ok(latestSnapshot.groups.etf.length >= 1);
+
+const dailyReportResponse = await worker.fetch(new Request("https://example.test/data/daily-report.json"), {}, {});
+assert.equal(dailyReportResponse.ok, true);
+const dailyReport = await dailyReportResponse.json();
+assert.match(dailyReport.reportVersion, /^19\.2-/);
+assert.ok(dailyReport.report?.oneLine);
+assert.ok(Array.isArray(dailyReport.report?.news));
 
 const { default: fallbackWorker } = await import("../worker/index.js?fallback-test");
 globalThis.fetch = async (input) => {

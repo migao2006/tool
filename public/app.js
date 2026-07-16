@@ -3,13 +3,12 @@
 const EDGE='/api/market-data';
 const CORE_SUPABASE_URL='https://gxwrczuwshndnjactrij.supabase.co';
 const CORE_SUPABASE_KEY='sb_publishable_M8sNxTHUuH06DwQQprIaoA_A2z4Tg7G';
-const MODEL_VERSION='v16.3-persistent-backend';
 const TAIPEI_TIME_ZONE='Asia/Taipei';
-const DISCLAIMER='未來漲跌預測是依公開資料、技術指標與固定權重計算的機率估計，僅供研究參考，不構成投資建議、買賣邀約或獲利保證。模型可能因突發消息、流動性、資料延遲及市場情緒而失準，投資人應自行判斷並承擔風險。';
+const DISCLAIMER='AI 分析依公開資料、固定公式與資料完整度整理，僅供研究參考，不構成投資建議、買賣邀約或獲利保證。資料可能因突發消息、流動性或更新延遲而改變，投資人應自行判斷並承擔風險。';
 
 const S={
   tab:'home',stocks:[],mode:'loading',date:'',fundStatus:'loading',fundPeriod:'',loading:true,
-  historyCache:new Map(),historySignals:new Map(),backtestCache:new Map(),deepCache:new Map(),detailSymbol:null,forecastQuery:'',verifyQuery:'',verifySymbol:'',
+  historyCache:new Map(),historySignals:new Map(),deepCache:new Map(),detailSymbol:null,
   session:null,isAdmin:false,adminRoleChecked:false,watchlistGroupId:null,dataStatus:{},sourceDates:{},fundDates:{},syncState:'本機模式'
 };
 
@@ -119,8 +118,6 @@ function quarantineLegacyUserData(){
 }
 function getWatchlist(userId=sessionUserId()){return readLocal(userDataKey('watchlist',userId),[])}
 function setWatchlist(v,userId=sessionUserId()){writeLocal(userDataKey('watchlist',userId),v)}
-function getPredictions(userId=sessionUserId()){return readLocal(userDataKey('predictions',userId),[])}
-function setPredictions(v,userId=sessionUserId()){writeLocal(userDataKey('predictions',userId),v)}
 function isWatched(symbol){return getWatchlist().some(x=>x.symbol===symbol)}
 
 const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
@@ -150,15 +147,43 @@ function normalizeStock(item){return{
 }}
 
 async function loadStocks(){
-  S.loading=true;render();
+  const cached=readMarketBootCache();
+  if(cached)applyMarketPayload(cached,'cache');
+  else{S.loading=true;render()}
+  const staticSnapshot=loadLatestSnapshot().then(payload=>{
+    if(!S.stocks.length&&payload)applySnapshotBoot(payload);
+    return payload
+  }).catch(()=>null);
   try{
     const payload=await fetchJson(`${EDGE}?type=stocks`,120000);
     if(!Array.isArray(payload.stocks)||payload.stocks.length<20)throw new Error(payload.error||'盤後資料筆數不足');
-    S.stocks=payload.stocks.map(normalizeStock);S.mode=payload.mode||'partial';S.date=payload.date||today();S.dataStatus=payload.sourceStatus||{};S.sourceDates=payload.dates||{};S.loading=false;
-    render();settleInitialHomeScroll();loadFundamentals();
+    applyMarketPayload(payload,'live');writeMarketBootCache(payload);loadFundamentals();
   }catch(error){
+    await staticSnapshot;
+    if(S.stocks.length){S.loading=false;S.mode='partial';render();settleInitialHomeScroll();loadFundamentals();return}
     S.loading=false;app.innerHTML=`<div class="card error-card"><h3>股票資料載入失敗</h3><p class="muted">${esc(error.message)}</p><button id="retryLoad" class="btn">重新載入</button></div>`;q('#retryLoad').onclick=loadStocks;
   }
+}
+
+const MARKET_BOOT_CACHE='twss-market-boot-v19.2';
+const BOOT_STOCK_FIELDS=['symbol','name','market','instrumentType','industry','close','change','open','high','low','volume','value','transactions','pe','pb','yield','revenue','revenuePreviousMonth','revenueLastYearMonth','revenueYtd','revenueLastYearYtd','rev','revMom','revYtd','revAcceleration','revPeriod','eps','roe','roeEstimated','roePeriod','grossMargin','operatingMargin','netMargin','debt','equityRatio','foreign','trust','dealer','inst','marginBalance','marginChange','shortBalance','shortChange','disp','full'];
+function compactBootStock(stock){return Object.fromEntries(BOOT_STOCK_FIELDS.filter(key=>stock?.[key]!=null).map(key=>[key,stock[key]]))}
+function readMarketBootCache(){try{const payload=JSON.parse(localStorage.getItem(MARKET_BOOT_CACHE)||'null');return Array.isArray(payload?.stocks)&&payload.stocks.length>=20?payload:null}catch{return null}}
+function writeMarketBootCache(payload){try{localStorage.setItem(MARKET_BOOT_CACHE,JSON.stringify({...payload,stocks:payload.stocks.map(compactBootStock),cachedAt:new Date().toISOString()}))}catch{}}
+function applyMarketPayload(payload,source='live'){
+  S.stocks=payload.stocks.map(normalizeStock);S.mode=source==='live'?(payload.mode||'partial'):'partial';S.date=payload.date||today();S.dataStatus=payload.sourceStatus||{};S.sourceDates=payload.dates||{};S.loading=false;
+  render();settleInitialHomeScroll()
+}
+function loadLatestSnapshot(){
+  if(!globalThis.twssLatestSnapshotPromise)globalThis.twssLatestSnapshotPromise=fetch('/data/latest.json?v=19.2.0',{cache:'force-cache',headers:{accept:'application/json'}}).then(response=>response.ok?response.json():null).catch(()=>null);
+  return globalThis.twssLatestSnapshotPromise
+}
+function applySnapshotBoot(snapshot){
+  const rows=Object.values(snapshot?.groups||{}).flat(),stocks=[...new Map(rows.map(row=>[String(row?.stock?.symbol||''),row?.stock]).filter(([symbol,stock])=>symbol&&stock)).values()];
+  if(stocks.length<20)return false;
+  const dates=snapshot.groupDates||{},date=snapshot.dataDate||Object.values(dates).filter(Boolean).sort().at(-1)||today();
+  applyMarketPayload({stocks,date,mode:'partial',dates:{price:{twse:dates.listed||date,tpex:dates.otc||date,common:dates.listed===dates.otc?dates.listed:'',aligned:dates.listed===dates.otc}}},'snapshot');
+  return true
 }
 
 async function loadFundamentals(){
@@ -232,29 +257,21 @@ async function refreshCoreAdminRole(){
 }
 async function login(email,password){const s=await coreSb('/auth/v1/token?grant_type=password',{method:'POST',body:{email,password},auth:false});s.expires_at=Math.floor(Date.now()/1000)+(s.expires_in||3600);storeSession(s);await refreshCoreAdminRole();await cloudPull()}
 async function signup(email,password){const s=await coreSb(`/auth/v1/signup?redirect_to=${encodeURIComponent(location.origin)}`,{method:'POST',body:{email,password},auth:false});if(s?.access_token){s.expires_at=Math.floor(Date.now()/1000)+(s.expires_in||3600);storeSession(s);await refreshCoreAdminRole();await cloudPull();return true}return false}
-const predictionKey=record=>`${record.symbol}-${record.prediction_date}-${record.horizon_days}-${record.model_version}`;
 async function cloudPull(){
-  if(!await refreshSession())return;const userId=sessionUserId(),pendingPred=getPredictions().filter(x=>x._sync_state==='pending'),pendingWatch=getWatchlist().filter(x=>x._sync_state==='pending');S.syncState='同步中…';
+  if(!await refreshSession())return;const userId=sessionUserId(),pendingWatch=getWatchlist().filter(x=>x._sync_state==='pending');S.syncState='同步中…';
   try{
-    const [pred,groups,watchlist]=await Promise.all([
-      coreSb('/rest/v1/prediction_logs?select=*&order=prediction_date.desc'),
+    const [groups,watchlist]=await Promise.all([
       coreSb('/rest/v1/watchlist_groups?select=id,name,sort_order&order=sort_order.asc,id.asc'),
       coreSb('/rest/v1/watchlist_items?select=id,group_id,symbol,added_price,added_at,note&order=added_at.desc')
     ]);
     if(sessionUserId()!==userId)return;
     S.watchlistGroupId=groups?.[0]?.id||null;
-    const cloudPred=(pred||[]).map(x=>({...x,key:predictionKey(x),local_id:x.id,_sync_state:'synced'})),cloudWatch=(watchlist||[]).map(x=>({id:x.id,local_id:x.id,groupId:x.group_id,symbol:String(x.symbol),addedPrice:x.added_price,addedAt:x.added_at,note:x.note||'',_sync_state:'synced'}));
-    for(const item of pendingPred)if(!cloudPred.some(row=>predictionKey(row)===predictionKey(item)))cloudPred.unshift(item);
+    const cloudWatch=(watchlist||[]).map(x=>({id:x.id,local_id:x.id,groupId:x.group_id,symbol:String(x.symbol),addedPrice:x.added_price,addedAt:x.added_at,note:x.note||'',_sync_state:'synced'}));
     for(const item of pendingWatch)if(!cloudWatch.some(row=>row.symbol===item.symbol))cloudWatch.unshift(item);
-    setPredictions(cloudPred,userId);setWatchlist(cloudWatch,userId);
-    Promise.allSettled([...pendingPred.map(item=>upsertPredictionCloud(item,userId)),...pendingWatch.map(item=>upsertWatchlistCloud(item,userId))]).catch(()=>{});
+    setWatchlist(cloudWatch,userId);
+    Promise.allSettled(pendingWatch.map(item=>upsertWatchlistCloud(item,userId))).catch(()=>{});
     S.syncState='雲端已同步';render();
   }catch(e){if(sessionUserId()===userId)S.syncState=`同步失敗：${e.message}`}
-}
-async function upsertPredictionCloud(record,owner=sessionUserId()){
-  if(!owner||sessionUserId()!==owner||!await refreshSession()||sessionUserId()!==owner)return null;const body={user_id:owner,symbol:record.symbol,stock_name:record.stock_name,prediction_date:record.prediction_date,horizon_days:record.horizon_days,reference_price:record.reference_price,predicted_direction:record.predicted_direction,up_probability:record.up_probability,neutral_probability:record.neutral_probability,down_probability:record.down_probability,confidence:record.confidence,expected_low:record.expected_low,expected_high:record.expected_high,model_version:record.model_version,factors:record.factors||{},evaluated_at:record.evaluated_at||null,actual_price:record.actual_price??null,actual_return_pct:record.actual_return_pct??null,actual_direction:record.actual_direction||null,is_correct:record.is_correct??null};
-  const rows=await coreSb('/rest/v1/prediction_logs?on_conflict=user_id,symbol,prediction_date,horizon_days,model_version',{method:'POST',headers:{Prefer:'resolution=merge-duplicates,return=representation'},body});
-  if(sessionUserId()!==owner)return null;const saved=rows?.[0];if(saved){const list=getPredictions(owner),key=predictionKey(record),index=list.findIndex(x=>predictionKey(x)===key);if(index>=0){list[index]={...record,...saved,key,local_id:saved.id,_sync_state:'synced'};setPredictions(list,owner)}}return saved||null
 }
 async function ensureWatchlistGroup(owner=sessionUserId()){
   if(!owner||sessionUserId()!==owner)return null;if(S.watchlistGroupId)return S.watchlistGroupId;if(!await refreshSession()||sessionUserId()!==owner)return null;
@@ -270,7 +287,7 @@ async function upsertWatchlistCloud(record,owner=sessionUserId()){
 function decodeJwtSub(token){try{return JSON.parse(atob(token.split('.')[1].replace(/-/g,'+').replace(/_/g,'/'))).sub}catch{return null}}
 async function logoutAccount(){try{if(S.session?.access_token)await coreSb('/auth/v1/logout',{method:'POST'})}catch{}finally{storeSession(null);S.syncState='本機模式';closeModal();render()}}
 async function initSession(){quarantineLegacyUserData();localStorage.removeItem(LEGACY_SHARED_SESSION_KEY);let saved=null;try{saved=JSON.parse(localStorage.getItem(CORE_SESSION_KEY)||'null')}catch{}storeSession(saved);if(S.session&&await refreshSession()){try{S.session.user=await coreSb('/auth/v1/user');storeSession(S.session)}catch{}await refreshCoreAdminRole();cloudPull()}else{S.adminRoleChecked=true;updateAccountUi()}}
-globalThis.twssUserData=Object.freeze({storageKey:userDataKey,getPredictions,setPredictions,upsertPrediction:upsertPredictionCloud});
+globalThis.twssUserData=Object.freeze({storageKey:userDataKey});
 
 function mean(values){const v=values.filter(x=>x!=null&&Number.isFinite(x));return v.length?v.reduce((a,b)=>a+b,0)/v.length:null}
 function sma(values,period){return values.length>=period?mean(values.slice(-period)):null}
@@ -288,52 +305,6 @@ function computeIndicators(rows){
   const volume5=sma(volumes,5),volume20=sma(volumes,20),volumeRatio=volume5!=null&&volume20?volume5/volume20:null;
   const recent=rows.slice(-20),support=recent.length?Math.min(...recent.map(r=>r.low)):null,resistance=recent.length?Math.max(...recent.map(r=>r.high)):null;
   return{ma5,ma20,ma60,rsi14,atr14,atrPct:atr14&&last?atr14/last*100:null,macd,signal,histogram,bollingerUpper:upper,bollingerMiddle:mid,bollingerLower:lower,momentum5,momentum20,volume5,volume20,volumeRatio,support,resistance,last,rows:rows.length}
-}
-
-function calculateForecast(stock,indicators){
-  const isEtf=stock.instrumentType==='ETF'||/^00\d{2,4}[A-Z]?$/i.test(stock.symbol);
-  let technical=0,fundamental=0,chip=0,valuation=0,riskPenalty=0;const positive=[],negative=[],missing=[];
-  if(indicators){
-    if(stock.close>indicators.ma5){technical+=7;positive.push('股價站上 5 日均線')}else technical-=5;
-    if(indicators.ma5!=null&&indicators.ma20!=null&&indicators.ma5>indicators.ma20){technical+=10;positive.push('短期均線偏多')}else technical-=7;
-    if(indicators.ma20!=null&&indicators.ma60!=null){if(indicators.ma20>indicators.ma60){technical+=13;positive.push('20 日均線高於 60 日均線')}else{technical-=11;negative.push('中期均線偏弱')}}else missing.push('60 日均線');
-    if(indicators.histogram!=null){if(indicators.histogram>0){technical+=10;positive.push('MACD 柱狀體為正')}else{technical-=10;negative.push('MACD 柱狀體為負')}}
-    if(indicators.rsi14!=null){if(indicators.rsi14>=50&&indicators.rsi14<=68)technical+=8;else if(indicators.rsi14>75){technical-=9;riskPenalty+=7;negative.push('RSI 過熱')}else if(indicators.rsi14<35){technical-=4;riskPenalty+=4;negative.push('RSI 偏弱')}}
-    if(indicators.momentum5!=null)technical+=clamp(indicators.momentum5*1.2,-10,10);
-    if(indicators.momentum20!=null)technical+=clamp(indicators.momentum20*.6,-12,12);
-    if(indicators.volumeRatio!=null){if(indicators.volumeRatio>1.15&&(stock.change||0)>0){technical+=6;positive.push('量價同步')}if(indicators.volumeRatio>1.5&&(stock.change||0)<0){technical-=7;negative.push('下跌放量')}}
-    if(indicators.atrPct!=null&&indicators.atrPct>5){riskPenalty+=9;negative.push('短線波動較大')}
-  }else missing.push('歷史價格與技術指標');
-  if(!isEtf){
-    if(stock.rev!=null){if(stock.rev>=30){fundamental+=20;positive.push('月營收年增強勁')}else if(stock.rev>=10)fundamental+=13;else if(stock.rev>0)fundamental+=5;else{fundamental-=10;negative.push('月營收年增為負')}}else missing.push('月營收年增率');
-    if(stock.revMom!=null)fundamental+=clamp(stock.revMom*.25,-7,7);
-    if(stock.revYtd!=null)fundamental+=clamp(stock.revYtd*.18,-6,8);
-    if(stock.roe!=null){if(stock.roe>=15){fundamental+=14;positive.push('ROE 表現佳')}else if(stock.roe>=8)fundamental+=8;else if(stock.roe<0)fundamental-=10}else missing.push('ROE');
-    if(stock.eps!=null)fundamental+=stock.eps>0?6:-8;else missing.push('EPS');
-    if(stock.operatingMargin!=null)fundamental+=stock.operatingMargin>10?5:stock.operatingMargin<0?-7:1;
-    if(stock.debt!=null){if(stock.debt>75){fundamental-=7;riskPenalty+=5;negative.push('負債比偏高')}else if(stock.debt<50)fundamental+=3}else missing.push('負債比');
-    if(stock.pe!=null&&stock.pe>0){if(stock.pe<=15)valuation+=12;else if(stock.pe<=25)valuation+=7;else if(stock.pe<=35)valuation+=2;else{valuation-=7;negative.push('本益比偏高')}}else missing.push('本益比');
-    if(stock.pb!=null)valuation+=stock.pb<=2?5:stock.pb<=3?2:stock.pb>6?-4:0;
-    if(stock.yield!=null&&stock.yield>=3)valuation+=3;
-  }else{
-    if(stock.yield!=null){valuation+=stock.yield>=5?8:stock.yield>=3?5:2;positive.push(`ETF 殖利率 ${fmt(stock.yield)}%`)}
-    if((stock.volume||0)>=5000){fundamental+=8;positive.push('ETF 成交量充足')}else if((stock.volume||0)<500){riskPenalty+=8;negative.push('ETF 流動性偏低')}
-  }
-  if(stock.foreign!=null){if(stock.foreign>0){chip+=10;positive.push('外資買超')}else if(stock.foreign<0)chip-=8}else missing.push('外資買賣超');
-  if(stock.trust!=null)chip+=stock.trust>0?7:stock.trust<0?-5:0;if(stock.dealer!=null)chip+=stock.dealer>0?3:stock.dealer<0?-2:0;
-  if(stock.marginChange!=null&&stock.marginChange>0&&(stock.change||0)<0){chip-=4;riskPenalty+=3;negative.push('下跌且融資增加')}
-  const tn=clamp(technical,-55,55),fn=clamp(fundamental,-35,35),cn=clamp(chip,-20,20),vn=clamp(valuation,-15,15);
-  const composite=isEtf?tn*.68+fn*.10+cn*.16+vn*.06-riskPenalty*.4:tn*.52+fn*.26+cn*.15+vn*.07-riskPenalty*.35;
-  const neutralProbability=clamp(29-Math.abs(composite)*.25+(indicators?.atrPct>5?5:0),12,38),directional=100-neutralProbability,upShare=1/(1+Math.exp(-composite/11));
-  let up=Math.round(directional*upShare),down=Math.round(directional-directional*upShare),neutral=100-up-down;
-  const required=isEtf?[stock.volume,stock.value,stock.yield,stock.foreign,stock.inst,indicators?.ma20,indicators?.ma60,indicators?.rsi14,indicators?.macd,indicators?.atrPct]:[stock.rev,stock.revMom,stock.roe,stock.eps,stock.pe,stock.pb,stock.debt,stock.foreign,indicators?.ma20,indicators?.rsi14,indicators?.macd,indicators?.atrPct];
-  const available=required.filter(v=>v!=null).length;
-  const completeness=Math.round(available/required.length*100),confidence=clamp(Math.round(completeness*.78+Math.min(Math.abs(composite),30)*.55-riskPenalty),25,90);
-  const shortLabel=up>=down+12?'短期偏多':down>=up+12?'短期偏空':'短期震盪';
-  const mediumScore=(indicators?.ma20&&indicators?.ma60?(indicators.ma20>indicators.ma60?18:-18):0)+(isEtf?fn*.15+vn*.15+cn*.45:fn*.55+vn*.2+cn*.25);
-  const mediumLabel=mediumScore>=10?'中期偏多':mediumScore<=-10?'中期偏空':'中期盤整';
-  const atrPct=indicators?.atrPct??Math.max(2,Math.abs(stock.change||0)*.8),expectedMove5=clamp(atrPct*Math.sqrt(5)*.75,2,18);
-  return{up,down,neutral,confidence,completeness,shortLabel,mediumLabel,composite:+composite.toFixed(1),technical:+tn.toFixed(1),fundamental:+fn.toFixed(1),chip:+cn.toFixed(1),valuation:+vn.toFixed(1),riskPenalty,expectedMove5,expectedLow:stock.close*(1-expectedMove5/100),expectedHigh:stock.close*(1+expectedMove5/100),positive:[...new Set(positive)].slice(0,8),negative:[...new Set(negative)].slice(0,8),missing:[...new Set(missing)].slice(0,8)}
 }
 
 function opportunityScore(stock){let score=0;if(stock.rev!=null)score+=stock.rev>=30?28:stock.rev>=20?24:stock.rev>=10?20:stock.rev>0?10:0;if(stock.revMom!=null)score+=stock.revMom>=10?10:stock.revMom>0?6:0;if(stock.revYtd!=null)score+=stock.revYtd>=10?7:stock.revYtd>0?3:0;if(stock.roe!=null)score+=stock.roe>=15?15:stock.roe>=10?12:stock.roe>=8?8:0;if(stock.eps!=null&&stock.eps>0)score+=5;if(stock.pe!=null&&stock.pe>0)score+=stock.pe<=15?10:stock.pe<=25?7:stock.pe<=35?3:0;if(stock.pb!=null)score+=stock.pb<=2?4:stock.pb<=3?2:0;if(stock.foreign>0)score+=6;if(stock.trust>0)score+=4;if((stock.volume||0)>=1000)score+=6;else if((stock.volume||0)>=500)score+=3;if(stock.debt!=null&&stock.debt<=55)score+=3;return Math.min(100,Math.round(score))}
@@ -381,37 +352,6 @@ function buildEvents(stock,indicators){
   return events;
 }
 
-function scenarioAnalysis(stock,forecast,indicators){
-  const atr=indicators?.atrPct??forecast.expectedMove5/Math.sqrt(5)/.75;
-  const support=indicators?.support??stock.close*(1-forecast.expectedMove5/100),resistance=indicators?.resistance??stock.close*(1+forecast.expectedMove5/100);
-  return[
-    {type:'good',title:'樂觀情境',prob:forecast.up,range:[Math.max(stock.close,resistance*.99),stock.close*(1+clamp(forecast.expectedMove5*1.15,3,22)/100)],trigger:'突破壓力、量能維持，法人籌碼未轉弱'},
-    {type:'base',title:'中性情境',prob:forecast.neutral,range:[stock.close*(1-clamp(atr*.7,1.5,8)/100),stock.close*(1+clamp(atr*.7,1.5,8)/100)],trigger:'量價與籌碼缺乏明確方向，維持區間震盪'},
-    {type:'bad',title:'悲觀情境',prob:forecast.down,range:[stock.close*(1-clamp(forecast.expectedMove5*1.2,3,24)/100),Math.min(stock.close,support*1.01)],trigger:'跌破支撐、下跌放量或法人轉為持續賣超'}
-  ]
-}
-
-function directionFromReturn(ret){return ret>1.5?'up':ret<-1.5?'down':'neutral'}
-function directionFromForecast(f){return f.up>=f.down+12?'up':f.down>=f.up+12?'down':'neutral'}
-function recordPrediction(stock,forecast){
-  const list=getPredictions(),key=`${stock.symbol}-${today()}-5-${MODEL_VERSION}`;if(list.some(x=>x.key===key))return;
-  const rec={key,local_id:uid(),symbol:stock.symbol,stock_name:stock.name,prediction_date:today(),horizon_days:5,reference_price:stock.close,predicted_direction:directionFromForecast(forecast),up_probability:forecast.up,neutral_probability:forecast.neutral,down_probability:forecast.down,confidence:forecast.confidence,expected_low:forecast.expectedLow,expected_high:forecast.expectedHigh,model_version:MODEL_VERSION,factors:{technical:forecast.technical,fundamental:forecast.fundamental,chip:forecast.chip,valuation:forecast.valuation,completeness:forecast.completeness},created_at:new Date().toISOString(),_sync_state:S.session?'pending':'local'};
-  list.unshift(rec);setPredictions(list);upsertPredictionCloud(rec).catch(()=>{});
-}
-function evaluatePredictionsForSymbol(symbol,history){
-  const list=getPredictions();let changed=false;
-  list.forEach(rec=>{
-    if(rec.symbol!==symbol||rec.evaluated_at)return;const startIndex=history.findIndex(r=>r.date>=rec.prediction_date);if(startIndex<0||history.length<=startIndex+5)return;const actual=history[startIndex+5],ret=(actual.close/rec.reference_price-1)*100,dir=directionFromReturn(ret);Object.assign(rec,{evaluated_at:new Date().toISOString(),actual_price:actual.close,actual_return_pct:+ret.toFixed(2),actual_direction:dir,is_correct:dir===rec.predicted_direction,_sync_state:S.session?'pending':rec._sync_state});changed=true;upsertPredictionCloud(rec).catch(()=>{})
-  });if(changed)setPredictions(list)
-}
-
-function runTechnicalBacktest(stock,history){
-  const key=`${stock.symbol}-${history.at(-1)?.date||''}`;if(S.backtestCache.has(key))return S.backtestCache.get(key);
-  const samples=[];
-  for(let i=60;i<history.length-5;i+=5){const slice=history.slice(0,i+1),ind=computeIndicators(slice);if(!ind)continue;const historicalStock={...stock,close:slice.at(-1).close,change:slice.length>1?(slice.at(-1).close/slice.at(-2).close-1)*100:0,rev:null,revMom:null,revYtd:null,roe:null,eps:null,operatingMargin:null,debt:null,pe:null,pb:null,yield:null,foreign:null,trust:null,dealer:null,marginChange:null};const f=calculateForecast(historicalStock,ind),pred=directionFromForecast(f),future=history[i+5],ret=(future.close/slice.at(-1).close-1)*100,actual=directionFromReturn(ret);samples.push({date:slice.at(-1).date,pred,actual,ret:+ret.toFixed(2),correct:pred===actual,confidence:f.confidence})}
-  const correct=samples.filter(x=>x.correct).length,returns=samples.map(x=>x.ret),result={samples,count:samples.length,hitRate:samples.length?correct/samples.length*100:null,avgReturn:mean(returns),avgWin:mean(samples.filter(x=>x.ret>0).map(x=>x.ret)),avgLoss:mean(samples.filter(x=>x.ret<0).map(x=>x.ret))};S.backtestCache.set(key,result);return result
-}
-
 function objectRows(value){
   if(Array.isArray(value))return value;
   if(value&&typeof value==='object')return Object.entries(value).map(([key,row])=>({key,...(row&&typeof row==='object'?row:{value:row})}));
@@ -446,7 +386,7 @@ function homePage(){
 }
 
 function opportunityCard(stock){
-  return`<article class="card accent clickable" data-detail="${stock.symbol}"><div class="head"><div><b>${stock.name}</b><div class="muted">${stock.symbol} · ${stock.industry}</div></div><div><small class="muted">機會分數</small><div class="score">${opportunityScore(stock)}</div></div></div><div><span class="price">${fmt(stock.close)}</span> <b class="${cls(stock.change)}">${pct(stock.change)}</b></div><div class="grid">${metric('月營收年增',pct(stock.rev),stock.revPeriod||'最新公開月')}${metric('月營收月增',pct(stock.revMom))}${metric(stock.roeEstimated?'年化推估 ROE':'ROE',stock.roe==null?reasonDash('API 未回傳'):`${fmt(stock.roe)}%`,stock.roePeriod||'')}${metric('本益比',valueOrReason(stock.pe))}</div><div class="rules" style="margin-top:10px"><span>成交量 ${fmt(stock.volume,0)} 張</span>${stock.foreign!=null?`<span>外資 ${fmt(stock.foreign,0)} 張</span>`:''}<span>${stock.industry}</span></div><div class="row" style="margin-top:10px"><button class="btn grow" data-forecast="${stock.symbol}">深度預測</button><button class="btn secondary" data-watch="${stock.symbol}">${isWatched(stock.symbol)?'★ 已自選':'＋自選'}</button></div></article>`
+  return`<article class="card accent clickable" data-detail="${stock.symbol}"><div class="head"><div><b>${stock.name}</b><div class="muted">${stock.symbol} · ${stock.industry}</div></div><div><small class="muted">機會分數</small><div class="score">${opportunityScore(stock)}</div></div></div><div><span class="price">${fmt(stock.close)}</span> <b class="${cls(stock.change)}">${pct(stock.change)}</b></div><div class="grid">${metric('月營收年增',pct(stock.rev),stock.revPeriod||'最新公開月')}${metric('月營收月增',pct(stock.revMom))}${metric(stock.roeEstimated?'年化推估 ROE':'ROE',stock.roe==null?reasonDash('API 未回傳'):`${fmt(stock.roe)}%`,stock.roePeriod||'')}${metric('本益比',valueOrReason(stock.pe))}</div><div class="rules" style="margin-top:10px"><span>成交量 ${fmt(stock.volume,0)} 張</span>${stock.foreign!=null?`<span>外資 ${fmt(stock.foreign,0)} 張</span>`:''}<span>${stock.industry}</span></div><div class="row" style="margin-top:10px"><button class="btn grow" data-analysis="${stock.symbol}">查看分析</button><button class="btn secondary" data-watch="${stock.symbol}">${isWatched(stock.symbol)?'★ 已自選':'＋自選'}</button></div></article>`
 }
 function opportunitiesPage(){
   const selected=S.stocks.filter(opportunityEligible).sort((a,b)=>opportunityScore(b)-opportunityScore(a));
@@ -457,27 +397,6 @@ function stockSearchResults(query,attr){
   const text=query.trim().toLowerCase();if(!text)return'';const rows=S.stocks.filter(x=>x.symbol.includes(text)||x.name.toLowerCase().includes(text)).slice(0,12);
   return rows.length?`<div class="search-results">${rows.map(x=>`<button class="search-result" ${attr}="${x.symbol}"><span><b>${x.name}</b><small class="muted"> ${x.symbol} · ${x.industry}</small></span><span class="${cls(x.change)}">${pct(x.change)}</span></button>`).join('')}</div>`:'<div class="muted" style="margin-top:10px">找不到符合的股票</div>'
 }
-function forecastPage(){
-  const top=[...S.stocks].filter(x=>x.rev!=null).sort((a,b)=>opportunityScore(b)-opportunityScore(a)).slice(0,8);
-  return`<h2>未來漲跌預測</h2><p class="muted">整合歷史日線、MA、RSI、MACD、布林通道、ATR、量價、基本面、法人籌碼、大盤與產業環境。</p><div class="notice"><b>僅供參考使用</b><br>${DISCLAIMER}</div><div class="card"><h3>搜尋股票</h3><div class="search-row"><input id="forecastSearch" value="${esc(S.forecastQuery)}" placeholder="輸入代號或名稱，例如 3702 大聯大"><button id="forecastSearchBtn" class="btn">搜尋</button></div>${stockSearchResults(S.forecastQuery,'data-forecast')}</div><div class="card"><h3>優先分析清單</h3><div class="rank-list">${top.map((x,i)=>`<div class="rank clickable" data-forecast="${x.symbol}"><b>${i+1}</b><span><b>${x.name}</b><small class="muted"> ${x.symbol}</small></span><b>${opportunityScore(x)} 分</b></div>`).join('')}</div></div>${disclaimer()}`
-}
-
-function predictionStats(){
-  const rows=getPredictions(),evaluated=rows.filter(x=>x.evaluated_at),recent30=evaluated.filter(x=>(Date.now()-new Date(x.prediction_date).getTime())<=30*864e5),recent90=evaluated.filter(x=>(Date.now()-new Date(x.prediction_date).getTime())<=90*864e5);
-  const rate=list=>list.length?list.filter(x=>x.is_correct).length/list.length*100:null;
-  return{rows,evaluated,rate30:rate(recent30),rate90:rate(recent90),pending:rows.filter(x=>!x.evaluated_at).length}
-}
-function verifyPage(){
-  const stats=predictionStats(),selected=S.verifySymbol?S.stocks.find(x=>x.symbol===S.verifySymbol):null,cached=selected?[...S.backtestCache.entries()].find(([k])=>k.startsWith(selected.symbol+'-'))?.[1]:null;
-  return`<h2>預測驗證</h2><p class="muted">保存每次預測，五個交易日後比對實際結果；另提供不使用未來資料的技術面走勢回測。</p><div class="stat-strip">${metric('已評估',fmt(stats.evaluated.length,0))}${metric('待評估',fmt(stats.pending,0))}${metric('近 30 日命中率',stats.rate30==null?'尚無樣本':`${fmt(stats.rate30,1)}%`)}${metric('近 90 日命中率',stats.rate90==null?'尚無樣本':`${fmt(stats.rate90,1)}%`)}</div>
-  <div class="card"><h3>選擇股票進行歷史驗證</h3><div class="search-row"><input id="verifySearch" value="${esc(S.verifyQuery)}" placeholder="股票代號或名稱"><button id="verifySearchBtn" class="btn">搜尋</button></div>${stockSearchResults(S.verifyQuery,'data-verify')}</div>
-  ${selected?`<div class="card accent"><div class="head"><div><h3>${selected.name} ${selected.symbol}</h3><div class="muted">技術面走勢回測，每 5 個交易日取樣一次</div></div><button class="btn small-btn" id="runBacktest" data-symbol="${selected.symbol}">${cached?'重新回測':'開始回測'}</button></div>${cached?backtestHtml(cached):'<div class="muted">按下開始回測後，會讀取近 12 個月日線並驗證方向。</div>'}</div>`:''}
-  <div class="card"><h3>最近預測紀錄</h3>${stats.rows.length?`<div class="table-wrap"><table><thead><tr><th>股票／日期</th><th>預測</th><th>信心</th><th>實際</th><th>結果</th></tr></thead><tbody>${stats.rows.slice(0,30).map(x=>`<tr><td>${x.stock_name||x.symbol}<br><small class="muted">${x.prediction_date}</small></td><td>${directionLabel(x.predicted_direction)}</td><td>${fmt(x.confidence,0)}%</td><td>${x.actual_return_pct==null?'待評估':pct(x.actual_return_pct)}</td><td>${x.evaluated_at?(x.is_correct?'<span class="tag">正確</span>':'<span class="tag bad">不符</span>'):'<span class="tag info">等待中</span>'}</td></tr>`).join('')}</tbody></table></div>`:'<div class="empty muted">尚未產生預測紀錄。開啟任一股票的深度預測後會自動保存。</div>'}</div>
-  <div class="notice">命中率只反映既有樣本，樣本不足或市場狀態改變時，不代表未來仍有相同表現。</div>${disclaimer()}`
-}
-function directionLabel(value){return value==='up'?'偏多':value==='down'?'偏空':'震盪'}
-function backtestHtml(b){return`<div class="grid" style="margin-top:12px">${metric('回測樣本',fmt(b.count,0))}${metric('方向命中率',b.hitRate==null?'—':`${fmt(b.hitRate,1)}%`)}${metric('樣本平均報酬',pct(b.avgReturn))}${metric('平均獲利／虧損',`${pct(b.avgWin)} / ${pct(b.avgLoss)}`)}</div><div class="table-wrap" style="margin-top:10px"><table><thead><tr><th>日期</th><th>預測</th><th>5 日報酬</th><th>結果</th></tr></thead><tbody>${b.samples.slice(-12).reverse().map(x=>`<tr><td>${x.date}</td><td>${directionLabel(x.pred)}</td><td class="${cls(x.ret)}">${pct(x.ret)}</td><td>${x.correct?'✓':'×'}</td></tr>`).join('')}</tbody></table></div><div class="muted small" style="margin-top:8px">此回測只使用當時之前的價格與成交量，不套用現在的月營收或財報資料，避免偷看未來。</div>`}
-
 function minePage(){
   return`<h2>我的</h2><h3 class="section-title">自選清單</h3>${watchSection()}${disclaimer()}`
 }
@@ -486,13 +405,10 @@ function watchSection(){
   const rows=items.map(item=>({item,stock:S.stocks.find(x=>x.symbol===item.symbol)})).filter(x=>x.stock);
   if(!rows.length)return '<div class="card empty"><h3>尚未加入自選股票</h3><p class="muted">可在機會股或股票詳細頁加入。</p></div>';
   return `<div class="list two-col">${rows.map(({stock})=>{
-    return `<div class="card clickable" data-detail="${stock.symbol}"><div class="head"><div><b>${stock.name}</b><div class="muted">${stock.symbol} · ${stock.industry}</div></div><button class="icon-btn" data-watch="${stock.symbol}">移除</button></div><div class="grid">${metric('目前價格',fmt(stock.close))}${metric('當日漲跌',`<span class="${cls(stock.change)}">${pct(stock.change)}</span>`)}${metric('月營收年增',pct(stock.rev))}${metric('機會分數',opportunityScore(stock))}</div><button class="btn" data-forecast="${stock.symbol}" style="width:100%;margin-top:10px">查看趨勢預測</button></div>`;
+    return `<div class="card clickable" data-detail="${stock.symbol}"><div class="head"><div><b>${stock.name}</b><div class="muted">${stock.symbol} · ${stock.industry}</div></div><button class="icon-btn" data-watch="${stock.symbol}">移除</button></div><div class="grid">${metric('目前價格',fmt(stock.close))}${metric('當日漲跌',`<span class="${cls(stock.change)}">${pct(stock.change)}</span>`)}${metric('月營收年增',pct(stock.rev))}${metric('機會分數',opportunityScore(stock))}</div><button class="btn" data-analysis="${stock.symbol}" style="width:100%;margin-top:10px">查看分析</button></div>`;
   }).join('')}</div>`;
 }
 function sparkline(rows){const values=rows.slice(-60).map(r=>r.close).filter(v=>v!=null);if(values.length<2)return'';const w=600,h=84,min=Math.min(...values),max=Math.max(...values),range=max-min||1;const points=values.map((v,i)=>`${i/(values.length-1)*w},${h-(v-min)/range*(h-8)-4}`).join(' '),area=`0,${h} ${points} ${w},${h}`;return`<svg class="sparkline" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><polygon class="area" points="${area}"></polygon><polyline points="${points}"></polyline></svg>`}
-function probabilitySection(f){return`<div class="prob-grid">${[['上漲',f.up,'up','bar-up'],['震盪',f.neutral,'neutral','bar-neutral'],['下跌',f.down,'down','bar-down']].map(([label,value,color,bar])=>`<div class="prob-box"><small class="muted">${label}機率</small><b class="${color}">${value}%</b><div class="progress" role="progressbar" aria-label="${label}機率" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${value}"><span class="${bar}" style="width:${value}%"></span></div></div>`).join('')}</div>`}
-function factorSection(f){const rows=[['技術面',f.technical,55],['基本面',f.fundamental,35],['籌碼面',f.chip,20],['估值面',f.valuation,15]];return`<div class="factor-list">${rows.map(([label,value,max])=>{const width=clamp((value+max)/(max*2)*100,0,100);return`<div class="factor"><span>${label}</span><div class="track" role="progressbar" aria-label="${label}評估位置" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${fmt(width,0)}"><span style="width:${width}%"></span></div><b class="${cls(value)}">${value>0?'+':''}${fmt(value,1)}</b></div>`}).join('')}</div>`}
-function scenarioHtml(stock,forecast,indicators){return scenarioAnalysis(stock,forecast,indicators).map(s=>`<div class="card scenario ${s.type}"><div class="head"><div><b>${s.title}</b><div class="muted">觸發條件：${s.trigger}</div></div><b>${s.prob}%</b></div><div class="price">${fmt(s.range[0])}～${fmt(s.range[1])}</div><div class="muted">5 個交易日情境區間，非價格保證。</div></div>`).join('')}
 function marketIndustryHtml(stock){const env=marketEnvironment(),industry=env.industries.find(x=>x.industry===stock.industry);return`<div class="grid">${metric('大盤環境',env.label)}${metric('多頭家數比',`${fmt(env.breadth,0)}%`)}${metric(`${stock.industry}平均漲跌`,industry?pct(industry.avgChange):reasonDash('同業不足'))}${metric(`${stock.industry}上漲家數`,industry?`${fmt(industry.breadth,0)}%`:reasonDash('同業不足'))}${metric('市場外資合計',`${fmt(env.foreign,0)} 張`)}${metric('產業外資合計',industry?`${fmt(industry.foreign,0)} 張`:reasonDash('同業不足'))}</div>`}
 function deepRowForStock(stock){
   const cached=S.deepCache.get(stock.symbol);if(cached&&!(cached instanceof Promise))return cached;
@@ -525,24 +441,22 @@ function peerHtml(stock){
 function eventHtml(stock,indicators){const events=buildEvents(stock,indicators);return`<div class="card">${events.map(e=>`<div class="event"><div class="event-icon">${e.icon}</div><div><b>${e.title}</b><div class="muted">${e.detail}</div></div><span class="tag ${e.level==='bad'?'bad':e.level==='warn'?'warn':'info'}">${e.level==='bad'?'風險':e.level==='warn'?'注意':'事件'}</span></div>`).join('')}</div>`}
 
 function detailHtml(stock,state){
-  const indicators=state?.indicators||null,history=state?.rows||[],forecast=calculateForecast(stock,indicators);
+  const indicators=state?.indicators||null,history=state?.rows||[];
   const historyLoading=state?.loading,historyError=state?.error;
   const isEtf=instrumentGroup(stock)==='etf',notApplicable=reasonDash('ETF 不適用'),revenueAmount=value=>value==null?reasonDash('官方未提供'):`${fmt(value/1000000,0)} 百萬元`;
   const periodLine=isEtf?'ETF 無公司層級月營收與財報指標':`月營收 ${S.fundDates?.revenue?.period||stock.revPeriod||'載入中'} · 財報 ${S.fundDates?.financials?.period||stock.roePeriod||'載入中'}`;
   const basicMetrics=isEtf?`${metric('商品類型','ETF')}${metric('殖利率',valueOrReason(stock.yield,'%'))}${metric('本益比',notApplicable)}${metric('股價淨值比',notApplicable)}${metric('月營收',notApplicable)}${metric('ROE',notApplicable)}`:`${metric('本益比',valueOrReason(stock.pe))}${metric('股價淨值比',valueOrReason(stock.pb))}${metric('殖利率',valueOrReason(stock.yield,'%'))}${metric('當月營收',revenueAmount(stock.revenue),stock.revPeriod||'')}${metric('最新季營業額',revenueAmount(stock.quarterRevenue),stock.quarterRevenuePeriod||stock.roePeriod||'')}${metric('上月營收',revenueAmount(stock.revenuePreviousMonth))}${metric('去年同月營收',revenueAmount(stock.revenueLastYearMonth))}${metric('本年累計營收',revenueAmount(stock.revenueYtd))}${metric('去年同期累計',revenueAmount(stock.revenueLastYearYtd))}${metric('月營收年增',stock.rev==null?reasonDash(stock.dataStatus?.revenueYoy==='not-applicable-prior-year-zero'?'去年同期為 0，不適用':'官方未提供'):pct(stock.rev))}${metric('月營收月增',stock.revMom==null?reasonDash('官方未提供'):pct(stock.revMom))}${metric('累計營收年增',stock.revYtd==null?reasonDash('官方未提供'):pct(stock.revYtd))}${metric('成長加速度',stock.revAcceleration==null?reasonDash('資料不足'):pct(stock.revAcceleration),'單月年增－累計年增')}${metric('EPS',valueOrReason(stock.eps))}${metric(stock.roeEstimated?'年化推估 ROE':'ROE',valueOrReason(stock.roe,'%'),stock.roePeriod||'')}${metric('毛利率',valueOrReason(stock.grossMargin,'%'))}${metric('營業利益率',valueOrReason(stock.operatingMargin,'%'))}${metric('淨利率',valueOrReason(stock.netMargin,'%'))}${metric('負債比',valueOrReason(stock.debt,'%'))}${metric('權益比率',valueOrReason(stock.equityRatio,'%'))}${metric('資料期間',stock.roePeriod||stock.revPeriod||'—')}`;
   return`<div class="modal"><div class="sheet"><button class="sheet-close" type="button">×</button><div class="head"><div><h2>${stock.name} ${stock.symbol}</h2><div class="muted">${stock.market} · ${stock.industry} · 行情 ${S.sourceDates?.price?.[stock.market==='上市'?'twse':'tpex']||S.date}</div></div><button class="btn secondary small-btn" data-watch="${stock.symbol}">${isWatched(stock.symbol)?'★ 已自選':'☆ 加入自選'}</button></div><div><span class="price">${fmt(stock.close)} 元</span> <b class="${cls(stock.change)}">${pct(stock.change)}</b></div><div class="notice"><b>各資料來源日期</b><br>${sourceDateSummary()}。${periodLine}。</div>
   ${historyLoading?'<div class="card"><div class="loading"><span class="spinner"></span>正在讀取歷史日線並計算技術指標…</div></div>':''}${historyError?`<div class="card warn-card"><b>歷史日線暫時無法取得</b><p class="muted">目前先使用基本面與籌碼進行低信心估計。${esc(historyError)}</p></div>`:''}${history.length?sparkline(history):''}
-  <h3 class="section-title">未來漲跌預測（5 個交易日）</h3><div class="card accent"><div class="head"><div><small class="muted">判斷</small><div class="price">${forecast.shortLabel}</div><div class="muted">中期：${forecast.mediumLabel}</div></div><div><small class="muted">預測信心</small><div class="score">${forecast.confidence}%</div><div class="muted">資料完整度 ${forecast.completeness}%</div></div></div>${probabilitySection(forecast)}<div class="grid" style="margin-top:10px">${metric('5 日合理波動區間',`${fmt(forecast.expectedLow)}～${fmt(forecast.expectedHigh)}`,`推估 ±${fmt(forecast.expectedMove5,1)}%`)}${metric('綜合方向分數',`${forecast.composite>0?'+':''}${forecast.composite}`,'正值偏多、負值偏空')}</div></div><div class="notice"><b>僅供參考使用</b><br>${DISCLAIMER}</div>
-  <h3 class="section-title">三種情境分析</h3>${scenarioHtml(stock,forecast,indicators)}
   <h3 class="section-title">大盤與產業環境</h3><div class="card">${marketIndustryHtml(stock)}</div>
   <h3 class="section-title">分數與排名變化</h3>${trendHtml(stock)}
   <h3 class="section-title">同業比較</h3>${peerHtml(stock)}
   <h3 class="section-title">重要事件與風險提醒</h3>${eventHtml(stock,indicators)}
-  <h3 class="section-title">評估構成</h3><div class="card">${factorSection(forecast)}</div><div class="card"><h3>支持因素</h3>${forecast.positive.length?forecast.positive.map(x=>`<span class="tag">${x}</span>`).join(''):'<span class="muted">目前沒有明顯正向訊號</span>'}<h3 style="margin-top:14px">風險因素</h3>${forecast.negative.length?forecast.negative.map(x=>`<span class="tag warn">${x}</span>`).join(''):'<span class="muted">目前沒有明顯負向訊號</span>'}<h3 style="margin-top:14px">資料缺口</h3>${forecast.missing.length?forecast.missing.map(x=>`<span class="tag bad">${x}</span>`).join(''):'<span class="tag">主要資料完整</span>'}</div>
+  <h3 class="section-title">閱讀重點</h3><div class="card"><p>先確認營收、法人與價格趨勢是否同方向，再查看下方風險提醒。指標只是線索，不能單獨代表好壞。</p></div>
   <h3 class="section-title">技術面分析</h3><div class="grid three">${metric('MA5',valueOrReason(indicators?.ma5))}${metric('MA20',valueOrReason(indicators?.ma20))}${metric('MA60',valueOrReason(indicators?.ma60))}${metric('RSI 14',valueOrReason(indicators?.rsi14))}${metric('MACD',valueOrReason(indicators?.macd))}${metric('MACD 柱狀體',valueOrReason(indicators?.histogram))}${metric('ATR 14',valueOrReason(indicators?.atr14),indicators?.atrPct!=null?`${fmt(indicators.atrPct)}%`:'')}${metric('量能比 5/20',valueOrReason(indicators?.volumeRatio,' 倍'))}${metric('20 日動能',valueOrReason(indicators?.momentum20,'%'))}${metric('布林上軌',valueOrReason(indicators?.bollingerUpper))}${metric('布林中軌',valueOrReason(indicators?.bollingerMiddle))}${metric('布林下軌',valueOrReason(indicators?.bollingerLower))}${metric('20 日支撐',valueOrReason(indicators?.support))}${metric('20 日壓力',valueOrReason(indicators?.resistance))}${metric('歷史日線筆數',indicators?.rows==null?reasonDash('尚未取得'):fmt(indicators.rows,0))}</div>
   <h3 class="section-title">${isEtf?'ETF 指標':'基本面與估值'}</h3><div class="grid three">${basicMetrics}</div>${isEtf?'<div class="notice">ETF 是一籃子資產，不適用單一公司的月營收、EPS、ROE、本益比與負債比；排名改看流動性、20／60 日動能、法人、波動風險與殖利率。</div>':stock.roeEstimated?'<div class="notice">ROE 是依最新公開累計淨利與股東權益推算的年化值，並非官方直接公布的單一指標。</div>':''}
   <h3 class="section-title">籌碼與交易資訊</h3><div class="grid three">${metric('外資買賣超',stock.foreign==null?reasonDash('該資料日無資料'):`${fmt(stock.foreign,0)} 張`)}${metric('投信買賣超',stock.trust==null?reasonDash('該資料日無資料'):`${fmt(stock.trust,0)} 張`)}${metric('自營商買賣超',stock.dealer==null?reasonDash('該資料日無資料'):`${fmt(stock.dealer,0)} 張`)}${metric('三大法人合計',stock.inst==null?reasonDash('該資料日無資料'):`${fmt(stock.inst,0)} 張`)}${metric('融資增減',stock.marginChange==null?reasonDash('官方未提供'):`${fmt(stock.marginChange,0)} 張`)}${metric('融資餘額',stock.marginBalance==null?reasonDash('官方未提供'):`${fmt(stock.marginBalance,0)} 張`)}${metric('融券增減',stock.shortChange==null?reasonDash('官方未提供'):`${fmt(stock.shortChange,0)} 張`)}${metric('融券餘額',stock.shortBalance==null?reasonDash('官方未提供'):`${fmt(stock.shortBalance,0)} 張`)}${metric('成交量',stock.volume==null?reasonDash('API 未回傳'):`${fmt(stock.volume,0)} 張`)}${metric('開盤',valueOrReason(stock.open))}${metric('最高',valueOrReason(stock.high))}${metric('最低',valueOrReason(stock.low))}${metric('成交金額',stock.value==null?reasonDash('API 未回傳'):`${fmt(stock.value/100000000,2)} 億元`)}${metric('成交筆數',stock.transactions==null?reasonDash('API 未回傳'):fmt(stock.transactions,0))}${metric('收盤',valueOrReason(stock.close))}</div>
-  <div class="row" style="margin-top:16px"><button class="btn grow" data-verify-stock="${stock.symbol}">查看預測驗證</button></div>${disclaimer()}</div></div>`
+  ${disclaimer()}</div></div>`
 }
 
 async function openDetail(symbol,loadHistory=true){
@@ -557,10 +471,10 @@ async function openDetail(symbol,loadHistory=true){
     const deepPromise=cachedDeep instanceof Promise?cachedDeep:getDeepAnalysis(symbol);
     tasks.push(Promise.resolve(deepPromise).then(()=>paint()).catch(()=>{}));
   }
-  if(resolvedHistory){const f=calculateForecast(stock,resolvedHistory.indicators);recordPrediction(stock,f);evaluatePredictionsForSymbol(symbol,resolvedHistory.rows)}
+  if(resolvedHistory)historyState={...resolvedHistory,loading:false};
   else{
     const historyPromise=cachedHistory instanceof Promise?cachedHistory:(loadHistory?getHistory(symbol):null);
-    if(historyPromise)tasks.push(Promise.resolve(historyPromise).then(result=>{historyState={...result,loading:false};paint();const f=calculateForecast(stock,result.indicators);recordPrediction(stock,f);evaluatePredictionsForSymbol(symbol,result.rows)}).catch(error=>{historyState={loading:false,error:error.message,rows:[]};paint()}));
+    if(historyPromise)tasks.push(Promise.resolve(historyPromise).then(result=>{historyState={...result,loading:false};paint()}).catch(error=>{historyState={loading:false,error:error.message,rows:[]};paint()}));
     else historyState={loading:false,rows:[]};
   }
   await Promise.allSettled(tasks);
@@ -654,46 +568,36 @@ async function loadAdminLog(force=false){
   render()
 }
 */
-function navigateToTab(tab){if(tab==='admin')return;S.tab=tab;render();resetPageScroll()}
+function navigateToTab(tab){if(!['home','opportunities','mine'].includes(tab))return;S.tab=tab;render();resetPageScroll()}
 
 function render(){
   if(S.tab==='admin')S.tab='home';
   qa('.bottom-nav button').forEach(button=>{const active=button.dataset.tab===S.tab;button.classList.toggle('active',active);if(active)button.setAttribute('aria-current','page');else button.removeAttribute('aria-current')});
   updateAccountUi();updateMarketHeader();
   if(S.loading&&!S.stocks.length){app.innerHTML='<div class="card empty"><div class="loading"><span class="spinner"></span>正在載入官方盤後資料…</div></div>';bind();return}
-  app.innerHTML=S.tab==='home'?homePage():S.tab==='opportunities'?opportunitiesPage():S.tab==='forecast'?forecastPage():S.tab==='verify'?verifyPage():minePage();bind()
+  app.innerHTML=S.tab==='home'?homePage():S.tab==='opportunities'?opportunitiesPage():minePage();bind()
 }
 
 function bind(){
   qa('.bottom-nav button').forEach(button=>button.onclick=()=>navigateToTab(button.dataset.tab));
   qa('[data-detail]').forEach(element=>element.onclick=event=>{if(!event.target.closest('button'))openDetail(element.dataset.detail)});
-  qa('[data-forecast]').forEach(element=>element.onclick=event=>{event.stopPropagation();openDetail(element.dataset.forecast)});
+  qa('[data-analysis]').forEach(element=>element.onclick=event=>{event.stopPropagation();openDetail(element.dataset.analysis)});
   qa('[data-watch]').forEach(button=>button.onclick=event=>{event.stopPropagation();toggleWatch(button.dataset.watch)});
-  const forecastSearch=q('#forecastSearch');if(forecastSearch){forecastSearch.oninput=e=>S.forecastQuery=e.target.value;forecastSearch.onkeydown=e=>{if(e.key==='Enter'){S.forecastQuery=e.target.value;render()}}}
-  q('#forecastSearchBtn')?.addEventListener('click',()=>{S.forecastQuery=q('#forecastSearch')?.value||'';render()});
-  const verifySearch=q('#verifySearch');if(verifySearch){verifySearch.oninput=e=>S.verifyQuery=e.target.value;verifySearch.onkeydown=e=>{if(e.key==='Enter'){S.verifyQuery=e.target.value;render()}}}
-  q('#verifySearchBtn')?.addEventListener('click',()=>{S.verifyQuery=q('#verifySearch')?.value||'';render()});
-  qa('[data-verify]').forEach(button=>button.onclick=()=>{S.verifySymbol=button.dataset.verify;S.verifyQuery='';render()});
-  q('#runBacktest')?.addEventListener('click',async e=>{
-    const symbol=e.currentTarget.dataset.symbol,stock=S.stocks.find(x=>x.symbol===symbol);e.currentTarget.disabled=true;e.currentTarget.textContent='回測中…';
-    try{const history=await getHistory(symbol),result=runTechnicalBacktest(stock,history.rows);evaluatePredictionsForSymbol(symbol,history.rows);render()}catch(error){alert(`回測失敗：${error.message}`);render()}
-  });
 }
 
 function bindModal(){
   q('.modal',modalRoot)?.addEventListener('click',e=>{if(e.target.classList.contains('modal'))closeModal()});
   qa('[data-watch]',modalRoot).forEach(button=>button.onclick=e=>{e.stopPropagation();toggleWatch(button.dataset.watch)});
-  qa('[data-verify-stock]',modalRoot).forEach(button=>button.onclick=()=>{S.verifySymbol=button.dataset.verifyStock;S.tab='verify';closeModal();render()});
 }
 
 function openAccountModal(){
-  if(S.session){const roleLabel=!S.adminRoleChecked?'正在確認帳戶權限…':S.isAdmin?'已驗證為管理員':'一般使用者';modalRoot.innerHTML=`<div class="modal"><div class="sheet"><button class="sheet-close">×</button><h2>雲端帳戶</h2><div class="card"><div class="head"><div><b>${esc(S.session.user?.email||'已登入')}</b><div class="muted">${roleLabel}</div></div>${S.isAdmin?'<span class="tag">管理員</span>':''}</div><p class="muted">預測紀錄與自選清單會同步至 CORE 資料庫。</p>${S.isAdmin?'<button id="openAdminConsole" class="btn admin-open" type="button">開啟管理員後台</button>':''}<div class="row"><button id="syncCloud" class="btn secondary grow">立即同步</button><button id="logout" class="btn danger">登出</button></div></div><div class="muted">${esc(S.syncState)}</div></div></div>`;bindModal();q('#openAdminConsole',modalRoot)?.addEventListener('click',()=>location.assign('/admin'));q('#syncCloud',modalRoot).onclick=cloudPull;q('#logout',modalRoot).onclick=logoutAccount;return}
-  modalRoot.innerHTML=`<div class="modal"><div class="sheet"><button class="sheet-close">×</button><h2>登入台股智選</h2><p class="muted">登入後可同步預測紀錄與自選清單。</p><label>電子郵件<input id="authEmail" type="email" autocomplete="email"></label><label>密碼<input id="authPass" type="password" autocomplete="current-password" placeholder="至少 6 個字元"></label><div class="row" style="margin-top:12px"><button id="loginBtn" class="btn grow">登入</button><button id="signupBtn" class="btn secondary">建立帳戶</button></div><div id="authMsg" class="muted" style="margin-top:10px"></div></div></div>`;bindModal();
+  if(S.session){const roleLabel=!S.adminRoleChecked?'正在確認帳戶權限…':S.isAdmin?'已驗證為管理員':'一般使用者';modalRoot.innerHTML=`<div class="modal"><div class="sheet"><button class="sheet-close">×</button><h2>雲端帳戶</h2><div class="card"><div class="head"><div><b>${esc(S.session.user?.email||'已登入')}</b><div class="muted">${roleLabel}</div></div>${S.isAdmin?'<span class="tag">管理員</span>':''}</div><p class="muted">自選清單與重要提醒會同步至 CORE 資料庫。</p>${S.isAdmin?'<button id="openAdminConsole" class="btn admin-open" type="button">開啟管理員後台</button>':''}<div class="row"><button id="syncCloud" class="btn secondary grow">立即同步</button><button id="logout" class="btn danger">登出</button></div></div><div class="muted">${esc(S.syncState)}</div></div></div>`;bindModal();q('#openAdminConsole',modalRoot)?.addEventListener('click',()=>location.assign('/admin'));q('#syncCloud',modalRoot).onclick=cloudPull;q('#logout',modalRoot).onclick=logoutAccount;return}
+  modalRoot.innerHTML=`<div class="modal"><div class="sheet"><button class="sheet-close">×</button><h2>登入台股智選</h2><p class="muted">登入後可同步自選清單與重要提醒。</p><label>電子郵件<input id="authEmail" type="email" autocomplete="email"></label><label>密碼<input id="authPass" type="password" autocomplete="current-password" placeholder="至少 6 個字元"></label><div class="row" style="margin-top:12px"><button id="loginBtn" class="btn grow">登入</button><button id="signupBtn" class="btn secondary">建立帳戶</button></div><div id="authMsg" class="muted" style="margin-top:10px"></div></div></div>`;bindModal();
   const afterAuth=()=>{closeModal();render()};
   const act=async type=>{const email=q('#authEmail',modalRoot).value.trim(),password=q('#authPass',modalRoot).value,msg=q('#authMsg',modalRoot);if(!email||password.length<6){msg.textContent='請輸入有效電子郵件，密碼至少 6 個字元。';return}msg.textContent='處理中…';try{if(type==='login'){await login(email,password);afterAuth()}else{const ok=await signup(email,password);if(ok)afterAuth();else msg.textContent='驗證信已寄出，完成驗證後再登入。'}}catch(e){msg.textContent=e.message}};
   q('#loginBtn',modalRoot).onclick=()=>act('login');q('#signupBtn',modalRoot).onclick=()=>act('signup')
 }
 
 document.querySelector('#accountBtn').onclick=openAccountModal;
-if('serviceWorker'in navigator)navigator.serviceWorker.register('/sw.js?v=19.1.0',{updateViaCache:'none'}).catch(()=>{});
+if('serviceWorker'in navigator)navigator.serviceWorker.register('/sw.js?v=19.2.0',{updateViaCache:'none'}).catch(()=>{});
 initSession();render();loadStocks();

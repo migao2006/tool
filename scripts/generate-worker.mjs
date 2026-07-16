@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 const projectRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const read = (path) => readFile(resolve(projectRoot, path), "utf8");
 
-const [page, app, patch, smart, styles, manifest, icon, serviceWorker, latestData, backtestData, backendSource, deepDataSource, backendStoreSource] =
+const [page, app, patch, smart, styles, manifest, icon, serviceWorker, latestData, backtestData, dailyReportData, backendSource, deepDataSource, backendStoreSource] =
   await Promise.all([
     read("public/index.html"),
     read("public/app.js"),
@@ -17,6 +17,7 @@ const [page, app, patch, smart, styles, manifest, icon, serviceWorker, latestDat
     read("public/sw.js"),
     read("public/data/latest.json"),
     read("public/data/backtest.json"),
+    read("public/data/daily-report.json"),
     read("src/market-data.js"),
     read("src/deep-data.js"),
     read("src/backend-store.js"),
@@ -36,6 +37,7 @@ const worker = `${[
   `const SERVICE_WORKER=${literal(serviceWorker)};`,
   `const LATEST_DATA=${literal(latestData)};`,
   `const BACKTEST_DATA=${literal(backtestData)};`,
+  `const DAILY_REPORT_DATA=${literal(dailyReportData)};`,
 ].join("\n")}
 
 ${backend}
@@ -69,6 +71,7 @@ export default {
     if(path==="/sw.js")return new Response(SERVICE_WORKER,{headers:securityHeaders("text/javascript; charset=utf-8","no-cache, no-store, must-revalidate")});
     if(path==="/data/latest.json")return new Response(LATEST_DATA,{headers:securityHeaders("application/json; charset=utf-8","no-store, max-age=0")});
     if(path==="/data/backtest.json")return new Response(BACKTEST_DATA,{headers:securityHeaders("application/json; charset=utf-8","no-store, max-age=0")});
+    if(path==="/data/daily-report.json")return new Response(DAILY_REPORT_DATA,{headers:securityHeaders("application/json; charset=utf-8","no-store, max-age=0")});
     return new Response("Not found",{status:404,headers:securityHeaders("text/plain; charset=utf-8","no-store")});
   }
 };

@@ -27,6 +27,12 @@ import {
 
 const VERSION = "16.3";
 const PIPELINE_VERSION = "20-db-first";
+const ENRICHMENT_BATCH_LIMIT = 15;
+const ENRICHMENT_CONCURRENCY = 3;
+const ENRICHMENT_LEASE_SECONDS = 180;
+const ENRICHMENT_HEARTBEAT_MS = 60_000;
+const ENRICHMENT_WORKER_DEADLINE_MS = 300_000;
+const ENRICHMENT_JOB_START_GUARD_MS = 45_000;
 const PROJECT_URL = Deno.env.get("SUPABASE_URL") || "";
 const GROUPS = ["listed", "otc", "etf"] as const;
 type Group = typeof GROUPS[number];
@@ -2193,7 +2199,7 @@ async function failEnrichment(job: Record<string, any>, owner: string, error: un
     : status >= 500 || (error as any)?.name === "AbortError"
       ? "upstream-temporary"
       : "source-or-network";
-  const attempt = Math.max(1, Number(job.attempt_count) || 1);
+  const attempt = Math.max(1, (Number(job.attempt_count) || 0) + 1);
   const retryAfterSeconds = errorKind === "rate-limit"
     ? Math.max(3_600, Number((error as any)?.retryAfter) || 0)
     : Math.min(21_600, 300 * (2 ** Math.min(6, attempt - 1)));
@@ -2217,6 +2223,19 @@ async function releaseEnrichment(jobs: Record<string, any>[], owner: string, ret
       p_ids: jobs.map((job) => job.id),
       p_owner: owner,
       p_retry_after_seconds: Math.max(60, Math.round(retryAfterSeconds)),
+    },
+  });
+  return Number(data) || 0;
+}
+
+async function renewEnrichmentLeases(ids: number[], owner: string) {
+  if (!ids.length) return 0;
+  const { data } = await rest("rpc/twss_renew_enrichment_leases", {
+    method: "POST",
+    body: {
+      p_ids: ids,
+      p_owner: owner,
+      p_lease_seconds: ENRICHMENT_LEASE_SECONDS,
     },
   });
   return Number(data) || 0;
@@ -2259,6 +2278,8 @@ async function rescoreEnriched(jobs: Record<string, any>[]) {
 }
 
 async function syncEnrichment(requestedLimit: number, access: FinmindAccess) {
+  const startedAt = Date.now();
+  const deadlineAt = startedAt + ENRICHMENT_WORKER_DEADLINE_MS;
   const jobKey = access.pool === "secondary" ? "enrichment_secondary" : "enrichment_primary";
   if (!access.available) {
     await insertIgnore("stock_sync_state", [{
@@ -2287,7 +2308,10 @@ async function syncEnrichment(requestedLimit: number, access: FinmindAccess) {
     };
   }
   const owner = crypto.randomUUID();
-  const limit = Math.max(1, Math.min(50, Number(requestedLimit) || 50));
+  const limit = Math.max(1, Math.min(
+    ENRICHMENT_BATCH_LIMIT,
+    Number(requestedLimit) || ENRICHMENT_BATCH_LIMIT,
+  ));
   await insertIgnore("stock_sync_state", [{
     job_key: jobKey,
     group_name: "enrichment",
@@ -2304,7 +2328,7 @@ async function syncEnrichment(requestedLimit: number, access: FinmindAccess) {
     body: {
       p_owner: owner,
       p_limit: limit,
-      p_lease_seconds: 420,
+      p_lease_seconds: ENRICHMENT_LEASE_SECONDS,
       p_dataset_keys: null,
     },
   });
@@ -2344,29 +2368,85 @@ async function syncEnrichment(requestedLimit: number, access: FinmindAccess) {
 
   const successes: Record<string, any>[] = [];
   const failures: Record<string, any>[] = [];
-  let stoppedAt = allowed.length;
-  for (let index = 0; index < allowed.length; index += 1) {
-    const job = allowed[index];
-    try {
-      const result = await persistEnrichmentJob(job, access);
-      await completeEnrichment(job, owner, result);
-      successes.push(job);
-    } catch (error) {
-      failures.push({
-        id: job.id,
-        symbol: job.symbol,
-        dataset: job.dataset_key,
-        error: error instanceof Error ? error.message : String(error),
+  const startedIds = new Set<number>();
+  const activeLeaseIds = new Set<number>(allowed.map((job) => Number(job.id)));
+  let nextIndex = 0;
+  let providerPaused = false;
+  let deadlineReached = false;
+  let heartbeatError: string | null = null;
+  let heartbeatInFlight = false;
+
+  const heartbeatTimer = setInterval(() => {
+    if (heartbeatInFlight || !activeLeaseIds.size) return;
+    heartbeatInFlight = true;
+    renewEnrichmentLeases([...activeLeaseIds], owner)
+      .then((renewed) => {
+        if (renewed < activeLeaseIds.size) {
+          console.warn("[enrichment-worker] lease heartbeat renewed fewer rows than expected", {
+            pool: access.pool,
+            requested: activeLeaseIds.size,
+            renewed,
+          });
+        }
+      })
+      .catch((error) => {
+        heartbeatError = error instanceof Error ? error.message.slice(0, 1000) : String(error).slice(0, 1000);
+        console.error("[enrichment-worker] lease heartbeat failed", {
+          pool: access.pool,
+          error: heartbeatError,
+        });
+      })
+      .finally(() => {
+        heartbeatInFlight = false;
       });
-      await failEnrichment(job, owner, error).catch(() => undefined);
-      if (finmindProviderPaused(error)) {
-        stoppedAt = index + 1;
-        break;
+  }, ENRICHMENT_HEARTBEAT_MS);
+
+  const processNext = async () => {
+    while (!providerPaused) {
+      if (Date.now() + ENRICHMENT_JOB_START_GUARD_MS >= deadlineAt) {
+        deadlineReached = true;
+        return;
+      }
+      const index = nextIndex;
+      nextIndex += 1;
+      if (index >= allowed.length) return;
+      const job = allowed[index];
+      const jobId = Number(job.id);
+      startedIds.add(jobId);
+      try {
+        const result = await persistEnrichmentJob(job, access);
+        await completeEnrichment(job, owner, result);
+        successes.push(job);
+      } catch (error) {
+        failures.push({
+          id: job.id,
+          symbol: job.symbol,
+          dataset: job.dataset_key,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        await failEnrichment(job, owner, error).catch(() => undefined);
+        if (finmindProviderPaused(error)) providerPaused = true;
+      } finally {
+        activeLeaseIds.delete(jobId);
       }
     }
+  };
+
+  try {
+    await Promise.all(
+      Array.from(
+        { length: Math.min(ENRICHMENT_CONCURRENCY, allowed.length) },
+        () => processNext(),
+      ),
+    );
+  } finally {
+    clearInterval(heartbeatTimer);
   }
-  const stopped = allowed.slice(stoppedAt);
-  await releaseEnrichment(stopped, owner, 3_600);
+
+  const stopped = allowed.filter((job) => !startedIds.has(Number(job.id)));
+  const stoppedRetrySeconds = providerPaused ? 3_600 : 60;
+  await releaseEnrichment(stopped, owner, stoppedRetrySeconds);
+  for (const job of stopped) activeLeaseIds.delete(Number(job.id));
   let rescored: unknown = [];
   let rescoreError: string | null = null;
   try {
@@ -2391,6 +2471,11 @@ async function syncEnrichment(requestedLimit: number, access: FinmindAccess) {
       released: unbudgeted.length + stopped.length,
       budget,
       pool: access.pool,
+      concurrency: ENRICHMENT_CONCURRENCY,
+      deadlineReached,
+      providerPaused,
+      heartbeatError,
+      durationMs: Date.now() - startedAt,
       rescored,
       rescoreError,
       publicationPhase: "enriching",
@@ -2404,6 +2489,11 @@ async function syncEnrichment(requestedLimit: number, access: FinmindAccess) {
     failures,
     released: unbudgeted.length + stopped.length,
     budget,
+    concurrency: ENRICHMENT_CONCURRENCY,
+    deadlineReached,
+    providerPaused,
+    heartbeatError,
+    durationMs: Date.now() - startedAt,
     rescored,
     rescoreError,
   };

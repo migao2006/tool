@@ -31,8 +31,40 @@ const SORTS = Object.freeze({
 });
 const memoryCache = new Map();
 const serverEnv = globalThis.process?.env || {};
-const marketServiceKey = String(serverEnv.SUPABASE_SERVICE_ROLE_KEY || "").trim();
+const marketServiceKey = String(
+  serverEnv.SUPABASE_SECRET_KEY || serverEnv.SUPABASE_SERVICE_ROLE_KEY || "",
+).trim();
 const PUBLICATION_PHASES = new Set(["cached", "base_ready", "enriching", "complete"]);
+const MODEL_FEATURES = Object.freeze({
+  short: Object.freeze({
+    technicalTrend: ["技術趨勢與型態", 20],
+    volumePrice: ["成交量與量價結構", 20],
+    institutional: ["法人及籌碼", 15],
+    market: ["台股與國際市場", 15],
+    industry: ["產業與相對強度", 10],
+    news: ["新聞與事件催化", 10],
+    fundamentalSafety: ["基本面安全檢查", 5],
+    liquidity: ["流動性與執行品質", 5],
+  }),
+  medium: Object.freeze({
+    growthEarnings: ["營收與獲利成長", 25],
+    industryTrend: ["產業及族群趨勢", 20],
+    institutional: ["法人中期布局", 15],
+    mediumTechnical: ["中期技術趨勢", 15],
+    valuation: ["估值合理性", 10],
+    financialSafety: ["財務安全", 10],
+    news: ["新聞與事件催化", 5],
+  }),
+});
+const GATE_DEFINITIONS = Object.freeze({
+  data_complete: ["資料完整", "資料完整度與歷史行情已達門檻", "資料完整度或歷史行情未達門檻"],
+  tradeable_liquid: ["交易與流動性", "交易狀態及流動性合格", "交易限制、重大風險或流動性未達門檻"],
+  market_allowed: ["市場環境", "市場環境允許此策略", "市場環境不允許此策略"],
+  trend_structure: ["趨勢結構", "趨勢與均線結構符合策略", "趨勢或均線結構未通過"],
+  relative_strength: ["相對強度", "相對大盤或產業強度合格", "相對大盤或產業強度不足"],
+  evidence_support: ["實質支撐", "基本面、籌碼或事件具備支撐", "基本面、籌碼與事件支撐不足"],
+  positive_expectancy: ["交易條件", "規則計算的期望值與風報比合格", "規則計算的期望值或風報比未達門檻"],
+});
 
 const finite = (value) => value != null && Number.isFinite(Number(value));
 const numeric = (value) => finite(value) ? Number(value) : null;
@@ -43,6 +75,13 @@ const arrays = (...values) => values.flatMap((value) => Array.isArray(value) ? v
 const unique = (values) => [...new Set(values.filter(Boolean).map(String))];
 const clamp = (value, min = 0, max = 100) => Math.max(min, Math.min(max, Number(value)));
 const cleanObject = (value) => value && typeof value === "object" && !Array.isArray(value) ? value : {};
+
+function serviceHeaders(key = marketServiceKey) {
+  return {
+    apikey: key,
+    ...(!key.startsWith("sb_secret_") ? { authorization: `Bearer ${key}` } : {}),
+  };
+}
 
 export class V20PublicError extends Error {
   constructor(code, status = 400, message = code) {
@@ -96,12 +135,7 @@ async function loadPublicationState() {
       ? await backendStoreInternals.request(
         "stock_sync_state?select=details&job_key=eq.v20_model&limit=1",
         {
-          headers: {
-            apikey: marketServiceKey,
-            ...(!marketServiceKey.startsWith("sb_secret_")
-              ? { authorization: `Bearer ${marketServiceKey}` }
-              : {}),
-          },
+          headers: serviceHeaders(),
         },
       )
       : await backendStoreInternals.request("rpc/twss_v20_publication_state", {
@@ -231,26 +265,31 @@ async function persistGlobalMarket(liveGlobal, token) {
 function normalizeRanking(row = {}) {
   const model = row.model_key === "medium" ? "medium" : "short";
   const horizon = Number(row.horizon_days) || DEFAULT_HORIZON[model];
-  const probabilityBasis = row.prediction_basis || null;
-  const forecastState = !finite(row.up_probability)
-    ? "insufficient_history"
-    : probabilityBasis === "walk-forward-calibration"
-      ? "calibrated"
-      : "quant_bootstrap";
+  const predictionState = predictionStateFor(row);
+  const calibrated = predictionState.status === "calibrated";
+  const probabilityBasis = predictionState.basis;
+  const forecastState = calibrated
+    ? "calibrated"
+    : predictionState.status === "not_calibrated"
+      ? "quant_bootstrap"
+      : "insufficient_history";
+  const gateResults = cleanObject(row.gate_results);
+  const featureScores = cleanObject(row.feature_scores);
   const forecast = {
     horizon,
-    upProbability: numeric(row.up_probability),
-    expectedNetReturn: numeric(row.expected_return_net),
+    upProbability: calibrated ? numeric(row.up_probability) : null,
+    expectedNetReturn: calibrated ? numeric(row.expected_return_net) : null,
     returnRange: {
-      p10: numeric(row.return_p10),
-      p50: numeric(row.return_p50),
-      p90: numeric(row.return_p90),
+      p10: calibrated ? numeric(row.return_p10) : null,
+      p50: calibrated ? numeric(row.return_p50) : null,
+      p90: calibrated ? numeric(row.return_p90) : null,
     },
-    averageMfe: numeric(row.mfe),
-    averageMae: numeric(row.mae),
-    targetFirstProbability: numeric(row.target_first_probability),
+    averageMfe: calibrated ? numeric(row.mfe) : null,
+    averageMae: calibrated ? numeric(row.mae) : null,
+    targetFirstProbability: calibrated ? numeric(row.target_first_probability) : null,
     probabilityBasis,
     dataState: forecastState,
+    predictionState,
   };
   return {
     symbol: String(row.symbol || ""),
@@ -270,7 +309,7 @@ function normalizeRanking(row = {}) {
     riskScore: numeric(row.risk_score),
     confidence: numeric(row.confidence),
     completeness: numeric(row.completeness),
-    expectedValue: numeric(row.expected_value),
+    expectedValue: calibrated ? numeric(row.expected_value) : null,
     official: row.official === true,
     gatePassed: row.gate_passed !== false,
     recommendedAction: row.recommended_action || "資料不足",
@@ -278,8 +317,12 @@ function normalizeRanking(row = {}) {
     reasons: arrays(row.reasons).slice(0, 8),
     risks: arrays(row.risks).slice(0, 8),
     invalidationConditions: arrays(row.invalidation_conditions).slice(0, 8),
-    gateResults: cleanObject(row.gate_results),
-    featureScores: cleanObject(row.feature_scores),
+    gateResults,
+    featureScores,
+    predictionState,
+    gateReasons: gateReasonsFor(row, predictionState),
+    scoreExplanation: scoreExplanationFor(model, featureScores),
+    marketImpact: marketImpactFor(model, featureScores),
     forecasts: { [String(horizon)]: forecast },
     tradePlan: {
       entryLow: numeric(row.entry_low),
@@ -312,6 +355,115 @@ function normalizeLegacyRelatedStock(row = {}) {
     confidence: numeric(row?.confidence ?? row?.aiScore?.confidence),
     riskScore: numeric(row?.riskScore),
     dataDate: isoDate(row?.dataDate || row?.analysisDataDate),
+  };
+}
+
+function predictionStateFor(row = {}) {
+  const basis = row.prediction_basis || cleanObject(row.gate_results).probabilityBasis || null;
+  if (basis === "walk-forward-calibration" && finite(row.up_probability)) {
+    return {
+      status: "calibrated",
+      basis,
+      publicForecast: true,
+      reason: "已使用 Walk-forward 實際結果完成校準。",
+    };
+  }
+  if (basis === "walk-forward-calibration") {
+    return {
+      status: "insufficient_history",
+      basis,
+      publicForecast: false,
+      reason: "Walk-forward 校準尚未產生足夠樣本，因此暫不公開機率與報酬。",
+    };
+  }
+  if (basis) {
+    return {
+      status: "not_calibrated",
+      basis,
+      publicForecast: false,
+      reason: "目前只有量化規則初估，尚未完成 Walk-forward 校準，因此不公開機率、報酬、MFE 與 MAE。",
+    };
+  }
+  return {
+    status: "not_generated",
+    basis: null,
+    publicForecast: false,
+    reason: "模型尚未產生預測基礎，或可用歷史樣本不足。",
+  };
+}
+
+function gateReasonsFor(row = {}, predictionState = predictionStateFor(row)) {
+  const values = cleanObject(row.gate_results);
+  const rows = Object.entries(GATE_DEFINITIONS).map(([key, [label, passReason, failReason]]) => {
+    const value = values[key];
+    const status = value === true ? "pass" : value === false ? "fail" : "unknown";
+    let reason = status === "pass" ? passReason : status === "fail" ? failReason : `${label}尚無足夠資料可判定`;
+    if (key === "positive_expectancy" && predictionState.status !== "calibrated") {
+      reason += "；目前僅為內部規則檢查，尚未完成機率校準";
+    }
+    return { key, label, status, reason };
+  });
+  const thresholds = [
+    ["score_threshold", "機會分數", numeric(row.opportunity_score), (value) => value >= 60, "機會分數需達 60 分"],
+    ["risk_threshold", "風險分數", numeric(row.risk_score), (value) => value <= 75, "風險分數需不高於 75 分"],
+    ["confidence_threshold", "模型信心", numeric(row.confidence), (value) => value >= 65, "模型信心需達 65% 才能列為正式推薦"],
+  ];
+  for (const [key, label, value, passed, requirement] of thresholds) {
+    rows.push({
+      key,
+      label,
+      status: value == null ? "unknown" : passed(value) ? "pass" : "fail",
+      reason: value == null ? `${label}尚無足夠資料可判定` : `${requirement}；目前為 ${value}`,
+    });
+  }
+  return rows;
+}
+
+function scoreExplanationFor(model, featureScores = {}) {
+  return Object.entries(MODEL_FEATURES[model] || {}).map(([key, [label, weight]]) => {
+    const score = numeric(featureScores[key]);
+    const effectiveScore = score == null ? 50 : clamp(score);
+    return {
+      key,
+      label,
+      score,
+      effectiveScore,
+      weight,
+      contribution: Number((effectiveScore * weight / 100).toFixed(2)),
+      dataState: score == null ? "neutral_fallback" : "measured",
+    };
+  });
+}
+
+function marketImpactFor(model, featureScores = {}) {
+  if (model === "short") {
+    const score = numeric(featureScores.market);
+    const effectiveScore = score == null ? 50 : clamp(score);
+    return {
+      featureKey: "market",
+      featureLabel: "台股與國際市場",
+      featureScore: score,
+      opportunityWeight: 15,
+      opportunityContribution: Number((effectiveScore * 0.15).toFixed(2)),
+      opportunityDeltaFromNeutral: Number(((effectiveScore - 50) * 0.15).toFixed(2)),
+      riskWeight: 15,
+      riskContribution: null,
+      note: score == null
+        ? "市場分項缺少資料，機會分數依既有公式採中性 50 分；風險分項只保存總分，未推測拆分值。"
+        : "市場分項占短期機會分數 15%；短期風險模型另有 15% 市場權重，但目前只保存總風險分數。",
+    };
+  }
+  const score = numeric(featureScores.industryTrend);
+  return {
+    featureKey: "industryTrend",
+    featureLabel: "產業及族群趨勢",
+    featureScore: score,
+    opportunityWeight: 20,
+    opportunityContribution: Number(((score == null ? 50 : clamp(score)) * 0.2).toFixed(2)),
+    opportunityDeltaFromNeutral: null,
+    riskWeight: 10,
+    riskContribution: null,
+    note: "中期市場因素包含在產業趨勢分項與市場事件風險中；資料庫未保存內部分項，因此不推測個別市場扣加分。",
   };
 }
 
@@ -852,17 +1004,27 @@ export async function readV20Home() {
 }
 
 async function loadSignals(symbol, dataDate = null) {
-  if (dataDate) {
+  if (marketServiceKey) {
     const params = new URLSearchParams({
       select: "*",
       symbol: `eq.${symbol}`,
-      signal_date: `eq.${dataDate}`,
       model_version: `eq.${MODEL_VERSION}`,
-      order: "model_key.asc,horizon_days.asc",
       limit: "20",
     });
-    const { data } = await backendStoreInternals.request(`v20_model_signals?${params}`);
-    return (Array.isArray(data) ? data : []).map(normalizeRanking);
+    if (dataDate) params.set("signal_date", `eq.${dataDate}`);
+    params.set("order", dataDate
+      ? "model_key.asc,horizon_days.asc"
+      : "signal_date.desc,model_key.asc,horizon_days.asc");
+    try {
+      const { data } = await backendStoreInternals.request(`v20_model_signals?${params}`, {
+        headers: serviceHeaders(),
+      });
+      const rows = Array.isArray(data) ? data : [];
+      if (rows.length) return rows.map(normalizeRanking);
+    } catch {
+      // The bounded public RPC below is the safe fallback for a missing,
+      // rotated, or temporarily unavailable server credential.
+    }
   }
   const params = new URLSearchParams({
     p_symbol: symbol,
@@ -878,6 +1040,45 @@ async function loadSignals(symbol, dataDate = null) {
   return [...latestByKey.values()].map(normalizeRanking);
 }
 
+function modelStateFor(model, signals, publication, queryFailed = false) {
+  const label = model === "short" ? "短期" : "中期";
+  const modelSignals = signals.filter((row) => row.model === model);
+  const availableDataDate = modelSignals.map((row) => row.dataDate).filter(Boolean).sort().at(-1) || null;
+  const requestedDataDate = publication.publishedDataDate || null;
+  if (modelSignals.length) {
+    if (requestedDataDate && availableDataDate !== requestedDataDate) {
+      return {
+        status: "previous_date",
+        requestedDataDate,
+        availableDataDate,
+        reason: `${requestedDataDate} 的${label}模型尚未完成，暫時顯示 ${availableDataDate || "前一交易日"} 的結果。`,
+      };
+    }
+    return {
+      status: "ready",
+      requestedDataDate,
+      availableDataDate,
+      reason: `${label}模型分數與條件已產生；預測機率是否公開依各期間的校準狀態判定。`,
+    };
+  }
+  if (queryFailed) {
+    return {
+      status: "query_failed",
+      requestedDataDate,
+      availableDataDate: null,
+      reason: `${label}模型資料查詢失敗，既有行情與基本面資料仍可使用。`,
+    };
+  }
+  return {
+    status: "not_generated",
+    requestedDataDate,
+    availableDataDate: null,
+    reason: requestedDataDate
+      ? `尚未產生 ${requestedDataDate} 的${label}模型訊號；行情資料可能已完整，但該模型工作尚未完成。`
+      : `尚未找到可用的${label}模型訊號，可能尚未建立交易日分析。`,
+  };
+}
+
 export async function readV20Stock(symbol) {
   const normalized = String(symbol || "").trim().toUpperCase();
   if (!/^[0-9]{4,6}[A-Z]?$/.test(normalized)) throw new V20PublicError("invalid_symbol");
@@ -890,10 +1091,14 @@ export async function readV20Stock(symbol) {
   const legacy = legacyResult.status === "fulfilled" ? legacyResult.value : null;
   const signals = signalsResult.status === "fulfilled" ? signalsResult.value : [];
   const signalCacheStale = memoryCache.get(signalCacheKey)?.stale === true;
+  const signalsPreviousDate = Boolean(
+    publication.publishedDataDate && signals.length && signals.some((row) => row.dataDate !== publication.publishedDataDate),
+  );
   const degraded = [
     ...(legacy?.degraded || (legacy ? [] : ["v19_stock_detail"])),
     ...(signalsResult.status === "rejected" ? ["v20_model_signals"] : []),
     ...(signalCacheStale ? ["v20_model_signals_cache_stale"] : []),
+    ...(signalsPreviousDate ? ["v20_model_signals_previous_date"] : []),
     ...(!signals.length ? ["v20_model_not_ready"] : []),
   ];
   const sourceDates = { ...cleanObject(legacy?.sourceDates), ...sourceDatesFromRows(signals) };
@@ -925,6 +1130,10 @@ export async function readV20Stock(symbol) {
     analysis: legacy?.analysis || null,
     news: arrays(legacy?.news),
     relatedStocks: arrays(legacy?.relatedStocks).map(normalizeLegacyRelatedStock),
+    modelStates: {
+      short: modelStateFor("short", signals, publication, signalsResult.status === "rejected"),
+      medium: modelStateFor("medium", signals, publication, signalsResult.status === "rejected"),
+    },
     legacyReference: legacy ? {
       scoreDimensions: legacy.scoreDimensions,
       positiveReasons: legacy.positiveReasons,
@@ -982,6 +1191,11 @@ export const v20BackendInternals = {
   SORTS,
   normalizeMarket,
   normalizeRanking,
+  predictionStateFor,
+  gateReasonsFor,
+  scoreExplanationFor,
+  marketImpactFor,
+  modelStateFor,
   normalizeLegacyRelatedStock,
   legacyReference,
   encodeCursor,
@@ -989,5 +1203,6 @@ export const v20BackendInternals = {
   publicMeta,
   normalizePublication,
   loadPublicationState,
+  loadSignals,
   clearCache() { memoryCache.clear(); },
 };

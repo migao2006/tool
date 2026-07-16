@@ -32,6 +32,49 @@ const rankingRows = [1, 2, 3].map((rank) => ({
   generated_at: "2026-07-15T12:00:00Z",
 }));
 
+const detailSignalRow = {
+  ...rankingRows[0],
+  symbol: "2330",
+  signal_date: "2026-07-16",
+  official: false,
+  gate_passed: false,
+  gate_results: {
+    data_complete: true,
+    tradeable_liquid: true,
+    market_allowed: true,
+    trend_structure: false,
+    relative_strength: false,
+    evidence_support: true,
+    positive_expectancy: true,
+    probabilityBasis: "deterministic-quant-rule-v20-bootstrap",
+  },
+  feature_scores: {
+    technicalTrend: 64,
+    volumePrice: 61,
+    institutional: 58,
+    market: 18,
+    industry: 55,
+    news: 50,
+    fundamentalSafety: 70,
+    liquidity: 82,
+  },
+  return_p10: -4.2,
+  return_p50: 1.1,
+  return_p90: 6.3,
+  mfe: 7.2,
+  mae: -5.1,
+  target_first_probability: 56,
+  entry_low: 100,
+  entry_high: 102,
+  stop_loss: 95,
+  take_profit_1: 107,
+  take_profit_2: 114,
+  risk_reward_ratio: 2,
+  recommended_holding_days: 5,
+  reasons: ["短期策略：趨勢拉回"],
+  risks: ["趨勢結構未通過"],
+};
+
 globalThis.fetch = async (input, init = {}) => {
   const url = new URL(String(input));
   calls.push({ url, init });
@@ -61,6 +104,14 @@ globalThis.fetch = async (input, init = {}) => {
       : rankingRows;
     return Response.json(ordered.filter((row) => row.rank_position > after).slice(offset, offset + limit));
   }
+  if (url.pathname.endsWith("/v20_model_signals")) {
+    const symbol = String(url.searchParams.get("symbol") || "").replace("eq.", "");
+    return Response.json(symbol === "2330" ? [detailSignalRow] : []);
+  }
+  if (url.pathname.endsWith("/rpc/twss_v20_public_stock_signals")) {
+    const symbol = url.searchParams.get("p_symbol");
+    return Response.json(symbol === "2332" ? [{ ...detailSignalRow, symbol: "2332" }] : []);
+  }
   if (url.pathname.endsWith("/v20_market_context")) return Response.json([]);
   throw new Error(`unexpected Supabase path: ${url.pathname}`);
 };
@@ -68,6 +119,7 @@ globalThis.fetch = async (input, init = {}) => {
 const backend = await import(`../src/v20-backend.js?test=${Date.now()}`);
 const rankingsRoute = (await import(`../api/v20/rankings.js?test=${Date.now()}`)).default;
 const marketRoute = (await import(`../api/v20/market.js?test=${Date.now()}`)).default;
+const stocksRoute = (await import(`../api/v20/stocks.js?test=${Date.now()}`)).default;
 const shared = await import(`../api/v20/_shared.js?test=${Date.now()}`);
 
 try {
@@ -97,6 +149,81 @@ try {
   assert.equal(normalizedRelated.confidence, 79);
   assert.equal(normalizedRelated.dataDate, "2026-07-16");
   assert.equal(normalized.recommendedAction, "資料不足");
+
+  const bootstrap = backend.v20BackendInternals.normalizeRanking(detailSignalRow);
+  assert.equal(bootstrap.predictionState.status, "not_calibrated");
+  assert.equal(bootstrap.predictionState.publicForecast, false);
+  assert.equal(bootstrap.forecasts["5"].upProbability, null,
+    "non-Walk-forward probability must never be exposed by the public contract");
+  assert.equal(bootstrap.forecasts["5"].expectedNetReturn, null);
+  assert.deepEqual(bootstrap.forecasts["5"].returnRange, { p10: null, p50: null, p90: null });
+  assert.equal(bootstrap.forecasts["5"].averageMfe, null);
+  assert.equal(bootstrap.forecasts["5"].averageMae, null);
+  assert.equal(bootstrap.forecasts["5"].targetFirstProbability, null);
+  assert.equal(bootstrap.expectedValue, null);
+  assert.equal(bootstrap.opportunityScore, detailSignalRow.opportunity_score,
+    "hiding uncalibrated forecasts must preserve the deterministic opportunity score");
+  assert.equal(bootstrap.tradePlan.stopLoss, 95);
+  assert.equal(bootstrap.gateReasons.find((item) => item.key === "trend_structure")?.status, "fail");
+  assert.equal(bootstrap.gateReasons.find((item) => item.key === "confidence_threshold")?.status, "pass");
+  assert.equal(bootstrap.scoreExplanation.find((item) => item.key === "market")?.weight, 15);
+  assert.equal(bootstrap.marketImpact.opportunityDeltaFromNeutral, -4.8);
+
+  const calibrated = backend.v20BackendInternals.normalizeRanking({
+    ...detailSignalRow,
+    prediction_basis: "walk-forward-calibration",
+    up_probability: 63,
+    expected_return_net: 2.1,
+    expected_value: 2.1,
+    return_p10: -3,
+    return_p50: 2,
+    return_p90: 7,
+    mfe: 8,
+    mae: -4,
+    target_first_probability: 59,
+  });
+  assert.equal(calibrated.predictionState.status, "calibrated");
+  assert.equal(calibrated.forecasts["5"].upProbability, 63);
+  assert.equal(calibrated.forecasts["5"].expectedNetReturn, 2.1);
+  assert.equal(calibrated.forecasts["5"].averageMfe, 8);
+  assert.equal(calibrated.expectedValue, 2.1);
+
+  calls.length = 0;
+  const privateSignals = await backend.v20BackendInternals.loadSignals("2330", "2026-07-16");
+  assert.equal(privateSignals.length, 1,
+    "server-side detail reads must include a non-official signal hidden by public table RLS");
+  const privateRead = calls.find((call) => call.url.pathname.endsWith("/v20_model_signals"));
+  assert.equal(privateRead.init.headers.apikey, "test-service-role-key");
+  assert.equal(privateRead.init.headers.authorization, "Bearer test-service-role-key");
+  assert.equal(privateRead.url.searchParams.get("signal_date"), "eq.2026-07-16");
+
+  calls.length = 0;
+  const fallbackSignals = await backend.v20BackendInternals.loadSignals("2332", "2026-07-16");
+  assert.equal(fallbackSignals.length, 1, "empty service reads must fall back to the bounded public symbol RPC");
+  assert.ok(calls.some((call) => call.url.pathname.endsWith("/rpc/twss_v20_public_stock_signals")));
+  const rpcRead = calls.find((call) => call.url.pathname.endsWith("/rpc/twss_v20_public_stock_signals"));
+  assert.notEqual(rpcRead.init.headers.apikey, "test-service-role-key",
+    "the public fallback must not forward an elevated server credential");
+
+  const missingModel = backend.v20BackendInternals.modelStateFor(
+    "medium", [], { publishedDataDate: "2026-07-16" }, false,
+  );
+  assert.equal(missingModel.status, "not_generated");
+  assert.match(missingModel.reason, /2026-07-16.*中期模型訊號/);
+  assert.doesNotMatch(missingModel.reason, /完整度\s*0/,
+    "a missing model row must not be misreported as zero data completeness");
+
+  calls.length = 0;
+  const stockResponse = await stocksRoute.fetch(new Request("https://app.test/api/v20/stocks?symbol=2330"));
+  assert.equal(stockResponse.status, 200);
+  const stockDetail = await stockResponse.json();
+  assert.equal(stockDetail.short.length, 1,
+    "the public stock endpoint must render non-official detail signals through the server credential");
+  assert.equal(stockDetail.short[0].official, false);
+  assert.equal(stockDetail.short[0].forecasts["5"].upProbability, null);
+  assert.equal(stockDetail.modelStates.short.status, "ready");
+  assert.equal(stockDetail.modelStates.medium.status, "not_generated");
+  assert.match(stockDetail.modelStates.medium.reason, /中期模型訊號/);
 
   backend.v20BackendInternals.clearCache();
   calls.length = 0;
@@ -218,6 +345,12 @@ try {
   assert.match(ui, /twssV19Benchmarks\?\.marketIndices/);
   assert.match(smart, /globalThis\.twssV19Benchmarks\s*=\s*value/);
   assert.match(ui, /不會儲存資金、成本或交易紀錄/);
+  assert.match(ui, /未通過或待確認條件/);
+  assert.match(ui, /預測尚未公開/);
+  assert.match(ui, /modelState\?\.reason/,
+    "empty model blocks must display the exact API diagnostic instead of a generic placeholder");
+  assert.match(ui, /相對中性值/,
+    "the detail UI must explain the stored market factor contribution without changing its formula");
   assert.match(ui, /item\.opportunityScore, item\.aiScore\?\.value, item\.score/,
     "related-stock scores must support the v19 aiScore object and numeric score fallback");
   assert.match(backendSource, /relatedStocks: arrays\(legacy\?\.relatedStocks\)\.map\(normalizeLegacyRelatedStock\)/,

@@ -38,6 +38,10 @@ const cronGates = await readFile(
   new URL("../supabase/migrations/20260716131112_gate_crons_and_split_finmind_state.sql", import.meta.url),
   "utf8",
 );
+const quotaBoundsFix = await readFile(
+  new URL("../supabase/migrations/20260716143407_fix_finmind_quota_bounds.sql", import.meta.url),
+  "utf8",
+);
 
 const hardenedBacktest = hardening.match(
   /create or replace function public\.twss_evaluate_matured_backtests[\s\S]*?grant execute on function public\.twss_evaluate_matured_backtests/,
@@ -120,6 +124,16 @@ assert.match(cronGates, /where public\.twss_cron_enrichment_due\(\)/);
 assert.match(cronGates, /where public\.twss_cron_v20_due\(\)/);
 assert.match(cronGates, /where public\.twss_cron_v19_rankings_due\(\)/,
   "ranking refresh must be skipped until source history changes");
+assert.match(quotaBoundsFix, /create or replace function public\.twss_reserve_api_batch\(/,
+  "the corrected quota reservation must replace the existing function in place");
+assert.doesNotMatch(quotaBoundsFix, /pg_catalog\.(?:least|greatest)\s*\(/i,
+  "LEAST/GREATEST are PostgreSQL expressions and must never be schema-qualified");
+assert.match(quotaBoundsFix, /safe_cap := greatest\(0, least\(/);
+assert.match(quotaBoundsFix, /available_units := least\(greatest\(/);
+assert.match(quotaBoundsFix, /security definer[\s\S]*set search_path = ''/,
+  "the narrow quota writer must preserve its hardened execution context");
+assert.match(quotaBoundsFix, /revoke all on function public\.twss_reserve_api_batch[\s\S]*from public, anon, authenticated;[\s\S]*to service_role;/,
+  "only service_role may reserve FinMind quota");
 assert.doesNotMatch(sync.match(/function compactDeep[\s\S]*?\n}/)?.[0] || "", /priceHistory:/, "rank caches must not duplicate price history");
 assert.match(sync, /row\[key\] === undefined \? null : row\[key\]/, "bulk rows must preserve missing values as null");
 assert.match(sync, /for \(const row of rows\)/, "a failed symbol must not cancel sibling symbols");

@@ -374,7 +374,7 @@ const adminPageSource = await readFile(new URL("../public/admin.html", import.me
 const adminScriptSource = await readFile(new URL("../public/admin.js", import.meta.url), "utf8");
 assert.match(adminPageSource, /icon\.svg\?v=20\.0\.0/);
 assert.match(adminPageSource, /styles\.css\?v=20\.0\.0/);
-assert.match(adminPageSource, /admin\.js\?v=20\.0\.0/);
+assert.match(adminPageSource, /admin\.js\?v=20\.0\.7/);
 assert.match(adminScriptSource, /https:\/\/lfkdkdyaatdlizryiyon\.supabase\.co/,
   "the standalone administrator console must remain on MARKET");
 assert.match(adminScriptSource, /twss-market-admin-session-v18/,

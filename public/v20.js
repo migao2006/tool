@@ -179,14 +179,23 @@
     return row?.forecasts?.[String(row.horizon)] || Object.values(row?.forecasts || {})[0] || {};
   }
 
+  function predictionFor(row, forecast = forecastFor(row)) {
+    if (row?.predictionState && typeof row.predictionState === 'object') return row.predictionState;
+    if (forecast?.predictionState && typeof forecast.predictionState === 'object') return forecast.predictionState;
+    if (forecast?.dataState === 'calibrated') return { status: 'calibrated', publicForecast: true, reason: '已完成 Walk-forward 校準。' };
+    if (forecast?.dataState === 'quant_bootstrap') return { status: 'not_calibrated', publicForecast: false, reason: '目前只有規則初估，尚未完成 Walk-forward 校準。' };
+    return { status: 'not_generated', publicForecast: false, reason: '模型尚未產生可公開的預測資料。' };
+  }
+
   function modelCard(row, rank = null) {
     const forecast = forecastFor(row);
+    const prediction = predictionFor(row, forecast);
     const reference = row.legacyReference === true;
     return `<article class="card v20-model-card ${reference ? 'reference' : ''}" data-v20-detail="${esc(row.symbol)}">
       <div class="v20-card-head"><span class="v20-rank">${rank || row.rank || '—'}</span><div class="v20-card-name"><b>${esc(row.name || row.symbol)}</b><small>${esc(row.symbol)} · ${esc(first(row.market, row.group, '市場待補'))}</small></div><div class="v20-card-score"><small>${reference ? '舊資料參考' : '機會分數'}</small><strong>${reference ? '—' : displayNumber(row.opportunityScore, 0)}</strong></div></div>
       <p class="v20-summary">${esc(localizeStrategyText(first(row.summary, safeArray(row.reasons)[0], reference ? 'v20 模型建立中，暫不提供推測分數。' : '分析原因待補')))}</p>
       <div class="v20-chip-row"><span>${esc(strategyLabel(row.strategy))}</span><span>風險 ${displayNumber(row.riskScore, 0)}</span><span>信心 ${probability(row.confidence)}</span><span>資料 ${esc(first(row.dataDate, '日期待補'))}</span></div>
-      <div class="v20-forecast-row"><div><small>${row.horizon} 日${forecast.dataState === 'quant_bootstrap' ? '規則初估（待校準）' : '上漲機率'}</small><b>${probability(forecast.upProbability)}</b></div><div><small>預估淨報酬</small><b>${displayPercent(forecast.expectedNetReturn)}</b></div><div><small>建議</small><b>${esc(row.recommendedAction || '資料不足')}</b></div></div>
+      ${prediction.publicForecast ? `<div class="v20-forecast-row"><div><small>${row.horizon} 日上漲機率</small><b>${probability(forecast.upProbability)}</b></div><div><small>預估淨報酬</small><b>${displayPercent(forecast.expectedNetReturn)}</b></div><div><small>建議</small><b>${esc(row.recommendedAction || '資料不足')}</b></div></div>` : `<div class="v20-forecast-row"><div><small>${row.horizon} 日預測</small><b>尚未校準</b></div><div><small>目前可參考</small><b>分數與風險</b></div><div><small>建議</small><b>${esc(row.recommendedAction || '觀察')}</b></div></div>`}
       <div class="row v20-card-actions"><button class="btn secondary grow" type="button" data-watch="${esc(row.symbol)}">${isWatched(row.symbol) ? '✓ 已自選' : '＋ 加入自選'}</button><button class="btn grow" type="button" data-v20-detail="${esc(row.symbol)}">查看分析</button></div>
     </article>`;
   }
@@ -504,6 +513,32 @@
     return `<div class="v20-factor-grid">${rows.map(([key, value]) => `<div><small>${esc(featureLabels[key] || key)}</small><b>${displayNumber(value?.value ?? value, 0)}</b></div>`).join('')}</div>`;
   }
 
+  function scoreExplanationGrid(signal) {
+    const rows = safeArray(signal?.scoreExplanation);
+    if (!rows.length) return factorGrid(signal?.featureScores);
+    return `<h4>分數組成</h4><div class="v20-factor-grid">${rows.map(item => `<div><small>${esc(item.label || item.key)} · 權重 ${displayNumber(item.weight, 0)}%</small><b>${item.score == null ? '資料缺少（中性 50）' : `${displayNumber(item.score, 1)} 分`}</b><span>貢獻 ${displayNumber(item.contribution, 2)} 分</span></div>`).join('')}</div>`;
+  }
+
+  function gateSummary(signal) {
+    const rows = safeArray(signal?.gateReasons);
+    if (!rows.length) return '';
+    const unresolved = rows.filter(item => item?.status !== 'pass');
+    if (!unresolved.length) return '<div class="v20-inline-note"><b>推薦條件：</b>所有已知硬性條件均通過。</div>';
+    return `<h4>未通過或待確認條件</h4><ul class="v20-detail-list">${unresolved.map(item => `<li><b>${esc(item.label || item.key)}：</b>${esc(item.reason || (item.status === 'fail' ? '未通過' : '資料不足，無法判定'))}</li>`).join('')}</ul>`;
+  }
+
+  function marketImpactSummary(signal) {
+    const impact = signal?.marketImpact;
+    if (!impact || typeof impact !== 'object') return '';
+    const delta = num(impact.opportunityDeltaFromNeutral);
+    return `<div class="v20-inline-note"><b>市場影響：</b>${esc(impact.featureLabel || '市場分項')}權重 ${displayNumber(impact.opportunityWeight, 0)}%，目前貢獻 ${displayNumber(impact.opportunityContribution, 2)} 分${delta == null ? '' : `，相對中性值${delta >= 0 ? '增加' : '減少'} ${displayNumber(Math.abs(delta), 2)} 分`}。${esc(impact.note || '')}</div>`;
+  }
+
+  function modelStateNotice(state) {
+    if (!state || state.status === 'ready') return '';
+    return `<div class="v20-inline-note"><b>${state.status === 'query_failed' ? '模型查詢失敗' : state.status === 'previous_date' ? '使用前一交易日模型' : '模型尚未完成'}：</b>${esc(state.reason || '尚未取得具體狀態。')}</div>`;
+  }
+
   function detailResearchSections(detail) {
     const reference = detail?.legacyReference || {};
     const dimensions = reference.scoreDimensions || detail?.analysis?.scoreDimensions || {};
@@ -520,14 +555,21 @@
       ${sourceDates.length ? `<section><h3>資料來源日期</h3><div class="card v20-factor-grid">${sourceDates.map(([key, value]) => `<div><small>${esc(key)}</small><b>${esc(value)}</b></div>`).join('')}</div></section>` : ''}`;
   }
 
-  function signalSection(signals, model) {
+  function signalSection(signals, model, modelState = null) {
     const label = model === 'short' ? '短期模型' : '中期模型';
-    if (!signals.length) return `<section><h3>${label}</h3><div class="card v20-empty">模型樣本或校準不足，目前不提供推測機率。</div></section>`;
-    return `<section><h3>${label}</h3><div class="v20-signal-grid">${signals.map(signal => {
+    if (!signals.length) return `<section><h3>${label}</h3><div class="card v20-empty"><b>${modelState?.status === 'query_failed' ? '模型查詢失敗' : '模型訊號尚未產生'}</b><p>${esc(modelState?.reason || `${label}工作尚未完成；行情、基本面完整度與模型預測狀態是不同項目。`)}</p></div></section>`;
+    return `<section><h3>${label}</h3>${modelStateNotice(modelState)}<div class="v20-signal-grid">${signals.map(signal => {
       const forecast = forecastFor(signal);
+      const prediction = predictionFor(signal, forecast);
       const range = forecast.returnRange || {};
       const invalidations = safeArray(signal.invalidationConditions);
-      return `<article class="card v20-signal-card"><div class="head"><div><span class="tag info">${signal.horizon} 日 · ${esc(first(signal.dataDate, '日期待補'))}</span><h3>${esc(strategyLabel(signal.strategy))}</h3></div><div class="v20-card-score"><small>機會／風險</small><strong>${displayNumber(signal.opportunityScore, 0)}<i>／${displayNumber(signal.riskScore, 0)}</i></strong></div></div><div class="v20-forecast-row"><div><small>${forecast.dataState === 'quant_bootstrap' ? '規則初估（待校準）' : '上漲機率'}</small><b>${probability(forecast.upProbability)}</b></div><div><small>預估淨報酬</small><b>${displayPercent(forecast.expectedNetReturn)}</b></div><div><small>信心／完整度</small><b>${probability(signal.confidence)}／${probability(signal.completeness)}</b></div></div>${factorGrid(signal.featureScores)}<p><b>為什麼值得注意：</b>${esc(localizeStrategyText(first(safeArray(signal.reasons)[0], signal.summary, '資料不足')))}</p><p class="v20-risk-text"><b>主要風險：</b>${esc(localizeStrategyText(first(safeArray(signal.risks)[0], '尚未發現已驗證的額外風險')))}</p><div class="v20-plan-grid"><span>悲觀／中位／樂觀 <b>${displayPercent(range.p10)}／${displayPercent(range.p50)}／${displayPercent(range.p90)}</b></span><span>MFE／MAE <b>${displayPercent(forecast.averageMfe)}／${displayPercent(forecast.averageMae)}</b></span><span>布局區 <b>${displayNumber(signal.tradePlan?.entryLow, 2)}–${displayNumber(signal.tradePlan?.entryHigh, 2)}</b></span><span>突破確認價 <b>${displayNumber(signal.tradePlan?.breakoutPrice, 2)}</b></span><span>不追價價格 <b>${displayNumber(signal.tradePlan?.noChasePrice, 2)}</b></span><span>停損 <b>${displayNumber(signal.tradePlan?.stopLoss, 2)}</b></span><span>第一／第二停利 <b>${displayNumber(signal.tradePlan?.takeProfit1, 2)}／${displayNumber(signal.tradePlan?.takeProfit2, 2)}</b></span><span>風報比／持有期 <b>${displayNumber(signal.tradePlan?.riskRewardRatio, 2)}／${displayNumber(signal.tradePlan?.recommendedHoldingDays, 0)} 日</b></span></div>${invalidations.length ? `<h4>失效條件</h4><ul class="v20-detail-list">${invalidations.slice(0, 6).map(item => `<li>${esc(localizeStrategyText(item))}</li>`).join('')}</ul>` : ''}<div class="v20-action">${esc(signal.recommendedAction || '資料不足')}</div></article>`;
+      const reasons = safeArray(signal.reasons);
+      const risks = safeArray(signal.risks);
+      const forecastBlock = prediction.publicForecast
+        ? `<div class="v20-forecast-row"><div><small>上漲機率</small><b>${probability(forecast.upProbability)}</b></div><div><small>預估淨報酬</small><b>${displayPercent(forecast.expectedNetReturn)}</b></div><div><small>信心／完整度</small><b>${probability(signal.confidence)}／${probability(signal.completeness)}</b></div></div>`
+        : `<div class="v20-inline-note"><b>預測尚未公開：</b>${esc(prediction.reason || '尚未完成 Walk-forward 校準。')}目前仍可參考機會分數、風險、因子與交易條件。</div><div class="v20-forecast-row"><div><small>預測狀態</small><b>尚未校準</b></div><div><small>模型信心</small><b>${probability(signal.confidence)}</b></div><div><small>資料完整度</small><b>${probability(signal.completeness)}</b></div></div>`;
+      const calibratedRanges = prediction.publicForecast ? `<span>悲觀／中位／樂觀 <b>${displayPercent(range.p10)}／${displayPercent(range.p50)}／${displayPercent(range.p90)}</b></span><span>MFE／MAE <b>${displayPercent(forecast.averageMfe)}／${displayPercent(forecast.averageMae)}</b></span>` : '';
+      return `<article class="card v20-signal-card"><div class="head"><div><span class="tag info">${signal.horizon} 日 · ${esc(first(signal.dataDate, '日期待補'))}</span><h3>${esc(strategyLabel(signal.strategy))}</h3></div><div class="v20-card-score"><small>機會／風險</small><strong>${displayNumber(signal.opportunityScore, 0)}<i>／${displayNumber(signal.riskScore, 0)}</i></strong></div></div>${forecastBlock}${scoreExplanationGrid(signal)}${marketImpactSummary(signal)}${reasons.length ? `<h4>為什麼值得注意</h4><ul class="v20-detail-list">${reasons.slice(0, 5).map(item => `<li>${esc(localizeStrategyText(item))}</li>`).join('')}</ul>` : `<p><b>為什麼值得注意：</b>${esc(localizeStrategyText(first(signal.summary, '尚未整理出已驗證的正面原因')))}</p>`}${risks.length ? `<h4>主要風險</h4><ul class="v20-detail-list v20-risk-text">${risks.slice(0, 6).map(item => `<li>${esc(localizeStrategyText(item))}</li>`).join('')}</ul>` : '<p class="v20-risk-text"><b>主要風險：</b>尚未發現額外風險，但仍須遵守停損與失效條件。</p>'}${gateSummary(signal)}<div class="v20-plan-grid">${calibratedRanges}<span>布局區 <b>${displayNumber(signal.tradePlan?.entryLow, 2)}–${displayNumber(signal.tradePlan?.entryHigh, 2)}</b></span><span>突破確認價 <b>${displayNumber(signal.tradePlan?.breakoutPrice, 2)}</b></span><span>不追價價格 <b>${displayNumber(signal.tradePlan?.noChasePrice, 2)}</b></span><span>停損 <b>${displayNumber(signal.tradePlan?.stopLoss, 2)}</b></span><span>第一／第二停利 <b>${displayNumber(signal.tradePlan?.takeProfit1, 2)}／${displayNumber(signal.tradePlan?.takeProfit2, 2)}</b></span><span>風報比／持有期 <b>${displayNumber(signal.tradePlan?.riskRewardRatio, 2)}／${displayNumber(signal.tradePlan?.recommendedHoldingDays, 0)} 日</b></span></div>${invalidations.length ? `<h4>失效條件</h4><ul class="v20-detail-list">${invalidations.slice(0, 6).map(item => `<li>${esc(localizeStrategyText(item))}</li>`).join('')}</ul>` : ''}<div class="v20-action">${esc(signal.recommendedAction || '資料不足')}</div></article>`;
     }).join('')}</div></section>`;
   }
 
@@ -546,7 +588,7 @@
       ${statusBanner(detail || {}, loading ? 'refreshing' : detail?.dataState, error)}
       <div class="v20-quote"><div><small>最新盤後價格 · ${esc(first(detail?.tradeDate, stock?.priceDate, '日期待補'))}</small><strong>${displayNumber(first(stock?.close, stock?.price), 2)}</strong></div><div><small>當日漲跌</small><b class="${num(stock?.change) > 0 ? 'up' : num(stock?.change) < 0 ? 'down' : 'muted'}">${displayPercent(stock?.change, 2)}</b></div><div><small>資料完整度</small><b>${probability(detail?.completeness)}</b></div></div>
       <div class="card v20-factor-grid"><div><small>交易日期</small><b>${esc(first(detail?.tradeDate, '待補'))}</b></div><div><small>分析資料日期</small><b>${esc(first(detail?.analysisDataDate, '待補'))}</b></div><div><small>最新新聞發布</small><b>${esc(first(detail?.newsPublishedAt?.slice?.(0, 16), '待補'))}</b></div><div><small>分析產生時間</small><b>${esc(first(detail?.analysisGeneratedAt?.slice?.(0, 16), '待補'))}</b></div></div>
-      ${signalSection(safeArray(detail?.short), 'short')}${signalSection(safeArray(detail?.medium), 'medium')}${detailResearchSections(detail)}${positionCalculator(detail)}
+      ${signalSection(safeArray(detail?.short), 'short', detail?.modelStates?.short)}${signalSection(safeArray(detail?.medium), 'medium', detail?.modelStates?.medium)}${detailResearchSections(detail)}${positionCalculator(detail)}
       ${safeArray(detail?.news).length ? `<section><h3>重要新聞與公告</h3><div class="card v20-news-list">${detail.news.slice(0, 8).map(item => `<article><div><b>${esc(item.title || '未命名公告')}</b><small>${esc(first(item.source, '公開來源'))} · ${esc(first(item.eventDate, item.publishedAt?.slice?.(0, 10), '日期待補'))}</small></div></article>`).join('')}</div></section>` : ''}
       ${disclaimer()}</div></div>`;
   }

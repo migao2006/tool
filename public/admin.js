@@ -268,8 +268,21 @@
     const timeline = rows(payload.timeline);
     const quota = payload.apiQuota || {};
     const groupQuota = rows(quota.byJob);
+    const primaryQuota = quota.pools?.primary || {};
+    const secondaryQuota = quota.pools?.secondary || {};
+    const combinedQuota = quota.combined || {
+      usedLast60Minutes: quota.usedLast60Minutes,
+      limit: 1200,
+      remaining: Math.max(0, 1200 - (finite(quota.usedLast60Minutes) || 0)),
+      reservationCount: quota.reservationCount,
+      nextReleaseAt: quota.nextReleaseAt
+    };
     const enrichment = payload.enrichmentQueue || {};
     const enrichmentByDataset = rows(enrichment.byDataset);
+    const throughput = payload.workerThroughput || {};
+    const calibration = payload.calibrationReadiness || {};
+    const shortCalibration = calibration.byModel?.short || {};
+    const mediumCalibration = calibration.byModel?.medium || {};
     const publication = payload.publication || payload.baseAnalysis || {};
     const overall = String(health.overallStatus || '').toLowerCase();
     setHeader(`登入者 ${payload.admin?.username || '管理員'} · 更新 ${timestamp(payload.generatedAt)}`, 'ok');
@@ -292,8 +305,10 @@
       ${metric('最新資料日', summary.latestDataDate || health.dataDate || '—')}
     </section>
     <section class="health-section"><h2>同步工作</h2><div class="admin-job-list">${jobs.length ? jobs.map(jobCard).join('') : '<div class="card muted">尚無同步工作日誌。</div>'}</div></section>
-    <section class="health-section"><h2>兩階段發布與背景補齊</h2><div class="card"><div class="grid three">${metric('發布階段', statusLabel(publication.phase || publication.publicationPhase || '—'))}${metric('基礎分析完成', timestamp(publication.baseCompletedAt))}${metric('補齊完成', timestamp(publication.enrichmentCompletedAt))}${metric('待處理', `${number(enrichment.pending)} 筆`)}${metric('執行中', `${number(enrichment.running)} 筆`)}${metric('失敗', `${number(enrichment.error)} 筆`)}</div>${enrichmentByDataset.length ? `<div class="rules admin-quota-tags">${enrichmentByDataset.map(item => `<span>${escapeHtml(datasetLabels[item.key || item.dataset] || item.key || item.dataset || '資料')} ${number(item.pending ?? item.value)} 筆</span>`).join('')}</div>` : ''}</div></section>
-    <section class="health-section"><h2>API 使用量</h2><div class="card"><div class="grid three">${metric('近 60 分鐘', `${number(quota.usedLast60Minutes)} 單位`)}${metric('預約紀錄', `${number(quota.reservationCount)} 筆`)}${metric('最早釋放', timestamp(quota.nextReleaseAt))}</div>${groupQuota.length ? `<div class="rules admin-quota-tags">${groupQuota.map(item => `<span>${escapeHtml(jobLabel(item.key))} ${number(item.value)} 單位</span>`).join('')}</div>` : ''}</div></section>
+    <section class="health-section"><h2>兩階段發布與背景補齊</h2><div class="card"><div class="grid three">${metric('發布階段', statusLabel(publication.phase || publication.publicationPhase || '—'))}${metric('基礎分析完成', timestamp(publication.baseCompletedAt))}${metric('補齊完成', timestamp(publication.enrichmentCompletedAt))}${metric('待處理', `${number(enrichment.pending)} 筆`)}${metric('有效租約', `${number(enrichment.activeLeases ?? enrichment.running)} 筆`)}${metric('失敗', `${number(enrichment.error)} 筆`)}${metric('目前過期租約', `${number(enrichment.expiredLeases)} 筆`)}${metric('心跳逾時', `${number(enrichment.staleLeases)} 筆`)}${metric('累計租約逾時', `${number(enrichment.leaseTimeoutCount)} 次`)}${metric('最近心跳', timestamp(enrichment.latestHeartbeatAt))}</div>${enrichmentByDataset.length ? `<div class="rules admin-quota-tags">${enrichmentByDataset.map(item => `<span>${escapeHtml(datasetLabels[item.key || item.dataset] || item.key || item.dataset || '資料')} ${number(item.pending ?? item.value)} 筆</span>`).join('')}</div>` : ''}</div></section>
+    <section class="health-section"><h2>Worker 處理速度</h2><div class="card"><div class="grid three">${metric('近 15 分鐘完成', `${number(throughput.completedLast15Minutes)} 筆`)}${metric('近 60 分鐘完成', `${number(throughput.completedLast60Minutes)} 筆`)}${metric('每分鐘完成', `${number(throughput.perMinuteLast60, 2)} 筆`)}${metric('最近完成', timestamp(throughput.lastCompletedAt))}${metric('最新心跳', timestamp(throughput.latestHeartbeatAt))}</div></div></section>
+    <section class="health-section"><h2>FinMind API 使用量</h2><div class="card"><div class="grid three">${metric('第一組', `${number(primaryQuota.usedLast60Minutes)}／${number(primaryQuota.limit ?? 600)}`)}${metric('第二組', `${number(secondaryQuota.usedLast60Minutes)}／${number(secondaryQuota.limit ?? 600)}`)}${metric('兩組合計', `${number(combinedQuota.usedLast60Minutes)}／${number(combinedQuota.limit ?? 1200)}`)}${metric('第一組剩餘', `${number(primaryQuota.remaining)} 單位`)}${metric('第二組剩餘', `${number(secondaryQuota.remaining)} 單位`)}${metric('合計剩餘', `${number(combinedQuota.remaining)} 單位`)}${metric('預約紀錄', `${number(combinedQuota.reservationCount)} 筆`)}${metric('最早釋放', timestamp(combinedQuota.nextReleaseAt))}</div>${groupQuota.length ? `<div class="rules admin-quota-tags">${groupQuota.map(item => `<span>${escapeHtml(jobLabel(item.key))} ${number(item.value)} 單位</span>`).join('')}</div>` : ''}</div></section>
+    <section class="health-section"><h2>模型校準成熟度</h2><div class="card"><div class="grid three">${metric('公開機率狀態', calibration.ready ? '已校準' : '尚未校準')}${metric('實際結果', `${number(calibration.outcomeCount)} 筆`)}${metric('校準樣本', `${number(calibration.calibrationSampleCount)} 筆`)}${metric('短期期間', `${number(shortCalibration.readyHorizons)}／${number(shortCalibration.requiredHorizons ?? 4)}`)}${metric('中期期間', `${number(mediumCalibration.readyHorizons)}／${number(mediumCalibration.requiredHorizons ?? 3)}`)}${metric('最新校準日', calibration.latestCalibrationDate || '—')}</div><div class="muted">各策略門檻 ${number(calibration.thresholds?.exact ?? 60)} 筆；全模型備援門檻 ${number(calibration.thresholds?.fallback ?? 150)} 筆。未達門檻時不公開推測機率。</div></div></section>
     <section class="health-section"><h2>資料來源</h2><div class="health-sources">${sources.length ? sources.map(sourceCard).join('') : '<div class="card muted">來源健康資料尚未回傳。</div>'}</div></section>
     <section class="health-section"><div class="head"><div><h2>修復佇列</h2><div class="muted">只列真正可重試項目；來源限制與不適用欄位保留在缺漏分類。</div></div><span class="status-pill">${number(payload.repairQueue?.pending)} pending · ${number(payload.repairQueue?.errors)} errors</span></div>
       <div class="card admin-filter-grid">
@@ -329,6 +344,12 @@
     const jobs = rows(payload.jobs);
     const enrichment = payload.enrichmentQueue || {};
     const publication = payload.publication || payload.baseAnalysis || {};
+    const quota = payload.apiQuota || {};
+    const primaryQuota = quota.pools?.primary || {};
+    const secondaryQuota = quota.pools?.secondary || {};
+    const combinedQuota = quota.combined || {};
+    const throughput = payload.workerThroughput || {};
+    const calibration = payload.calibrationReadiness || {};
     return [
       `台股智選 v${payload.version || '20.0.0'} 管理後台修復報告`,
       `產生時間：${timestamp(payload.generatedAt)}`,
@@ -336,6 +357,9 @@
       '',
       `摘要：待修復標的 ${number(summary.pendingRepairs)}、可修復資料項 ${number(summary.actionableMissing)}、分析錯誤 ${number(summary.analysisErrors)}、核心失敗工作 ${number(summary.failedJobs)}、按需查詢異常 ${number(summary.historyLookupIssues)}、本期深度分析 ${number(summary.currentReadyAnalyses)}、v20 模型完成 ${number(summary.v20ModelSymbols)}`,
       `兩階段發布：${statusLabel(publication.phase || publication.publicationPhase || '—')}｜基礎完成 ${timestamp(publication.baseCompletedAt)}｜待補齊 ${number(enrichment.pending)}｜執行中 ${number(enrichment.running)}｜失敗 ${number(enrichment.error)}`,
+      `Worker：過期租約 ${number(enrichment.expiredLeases)}｜心跳逾時 ${number(enrichment.staleLeases)}｜近 60 分鐘完成 ${number(throughput.completedLast60Minutes)}｜每分鐘 ${number(throughput.perMinuteLast60, 2)}`,
+      `FinMind：第一組 ${number(primaryQuota.usedLast60Minutes)}／${number(primaryQuota.limit ?? 600)}｜第二組 ${number(secondaryQuota.usedLast60Minutes)}／${number(secondaryQuota.limit ?? 600)}｜合計 ${number(combinedQuota.usedLast60Minutes)}／${number(combinedQuota.limit ?? 1200)}`,
+      `模型校準：${calibration.ready ? '已校準' : '尚未校準'}｜實際結果 ${number(calibration.outcomeCount)}｜校準樣本 ${number(calibration.calibrationSampleCount)}`,
       '',
       '同步工作：',
       ...jobs.map(job => `- ${jobLabel(job.jobKey)}｜${statusLabel(job.status)}｜${number(job.processed)}/${number(job.total)} (${number(job.progress, 1)}%)｜資料日 ${job.cycleDate || '—'}${job.lastErrorCode ? `｜${errorLabels[job.lastErrorCode] || job.lastErrorCode}` : ''}`),

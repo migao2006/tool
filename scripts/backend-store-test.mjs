@@ -49,6 +49,14 @@ const scoreRows = {
   etf: {},
 };
 
+const marketSnapshotRows = ["6488", ...Array.from({ length: 1004 }, (_, index) => String(7000 + index))]
+  .map((symbol) => ({
+    symbol, trade_date: "2026-07-14", market: "上櫃", industry: "半導體業",
+    instrument_type: "股票", open: 100, high: 103, low: 99, close: 102,
+    change_pct: 2, volume: 5000, trade_value: 510000000, transactions: 3000,
+    raw_data: { name: `測試公司 ${symbol}` }, source_dates: { price: "2026-07-14" },
+  }));
+
 globalThis.fetch = async (input, options = {}) => {
   const url = new URL(String(input));
   calls.push({ url, options });
@@ -67,12 +75,9 @@ globalThis.fetch = async (input, options = {}) => {
     if (url.searchParams.get("select") === "trade_date") {
       return Response.json([{ trade_date: "2026-07-14" }]);
     }
-    return Response.json([{
-      symbol: "6488", trade_date: "2026-07-14", market: "上櫃", industry: "半導體業",
-      instrument_type: "股票", open: 100, high: 103, low: 99, close: 102,
-      change_pct: 2, volume: 5000, trade_value: 510000000, transactions: 3000,
-      raw_data: { name: "環球晶" }, source_dates: { price: "2026-07-14" },
-    }]);
+    const after = url.searchParams.get("symbol")?.replace(/^gt\./, "") || "";
+    const limit = Number(url.searchParams.get("limit")) || 1000;
+    return Response.json(marketSnapshotRows.filter((row) => row.symbol > after).slice(0, limit));
   }
   if (url.pathname.endsWith("/opportunity_ranking_cycles")) {
     const group = ["listed", "otc", "etf"].find((item) => url.searchParams.get("group_name") === `eq.${item}`);
@@ -146,6 +151,9 @@ assert.equal(analysis.trend.status, "ready");
 const otcFallback = await readBackendMarketStocks("otc");
 assert.equal(otcFallback.date, "2026-07-14");
 assert.equal(otcFallback.stocks[0].symbol, "6488");
+assert.equal(otcFallback.stocks.length, 1005, "market fallback must keyset-page beyond PostgREST's 1,000-row cap");
+assert.equal(otcFallback.fetchedCount, 1005);
+assert.equal(otcFallback.complete, true);
 assert.equal(otcFallback.stocks[0].backendFallback, true);
 const rankingBacktest = await readRankingBacktest();
 assert.equal(rankingBacktest.status, "insufficient_history");
@@ -169,5 +177,11 @@ assert.doesNotMatch(backendStoreSource, /gemini|ai[_-]?research|readAiResearch/i
   "paid research integration must not remain in the public backend store");
 assert.equal(calls.some(({ url }) => /ai[_-]?stock|ai[_-]?research/i.test(url.pathname)), false,
   "backend tests must never request removed research tables");
+const marketPageCalls = calls.filter(({ url }) =>
+  url.pathname.endsWith("/stock_snapshots") && url.searchParams.get("select") !== "trade_date");
+assert.equal(marketPageCalls.length, 3, "keyset pagination must continue through the empty EOF page");
+assert.equal(marketPageCalls[0].url.searchParams.has("symbol"), false);
+assert.match(marketPageCalls[1].url.searchParams.get("symbol"), /^gt\./);
+assert.equal(marketPageCalls.every(({ url }) => !url.searchParams.has("offset")), true);
 
-console.log("Backend store tests passed: public-only research reads, grouped rankings, and stored history");
+console.log("Backend store tests passed: public-only reads, grouped rankings, stored history, and complete keyset market paging");

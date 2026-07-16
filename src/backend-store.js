@@ -364,7 +364,9 @@ export async function readBackendAnalysis(symbol) {
 // and the live response remains `partial`, so stale TPEx data is never
 // presented as same-day live data.
 export async function readBackendMarketStocks(group) {
-  if (!['listed', 'otc', 'etf'].includes(group)) return { date: null, stocks: [] };
+  if (!['listed', 'otc', 'etf'].includes(group)) {
+    return { date: null, stocks: [], complete: false, truncated: false };
+  }
   const dateParams = new URLSearchParams({
     select: 'trade_date',
     order: 'trade_date.desc',
@@ -377,7 +379,7 @@ export async function readBackendMarketStocks(group) {
   }
   const { data: latestRows } = await request(`stock_snapshots?${dateParams}`);
   const date = Array.isArray(latestRows) ? latestRows[0]?.trade_date : null;
-  if (!date) return { date: null, stocks: [] };
+  if (!date) return { date: null, stocks: [], complete: false, truncated: false };
   const params = new URLSearchParams({
     select: 'symbol,trade_date,market,industry,instrument_type,open,high,low,close,change_pct,volume,trade_value,transactions,pe,pb,dividend_yield,revenue_growth,eps,roe,debt_ratio,foreign_buy,trust_buy,dealer_buy,institutional_buy,margin_balance,margin_change,short_balance,short_change,is_disposition,is_full_delivery,raw_data,source_dates',
     trade_date: `eq.${date}`,
@@ -389,8 +391,26 @@ export async function readBackendMarketStocks(group) {
     params.set('instrument_type', 'neq.ETF');
     params.set('market', `eq.${group === 'otc' ? '上櫃' : '上市'}`);
   }
-  const { data } = await request(`stock_snapshots?${params}`);
-  const stocks = (Array.isArray(data) ? data : []).map(row => ({
+  // PostgREST projects commonly cap one response at 1,000 rows.  The listed
+  // universe is larger than that, so advance on the stable symbol ordering
+  // until the database returns an empty page.  Do not infer EOF from a short
+  // page because a server-side max_rows setting may be lower than our limit.
+  const data = [];
+  let afterSymbol = '';
+  for (;;) {
+    if (afterSymbol) params.set('symbol', `gt.${afterSymbol}`);
+    else params.delete('symbol');
+    const { data: pageData } = await request(`stock_snapshots?${params}`);
+    const page = Array.isArray(pageData) ? pageData : [];
+    if (!page.length) break;
+    data.push(...page);
+    const nextSymbol = String(page.at(-1)?.symbol || '');
+    if (!nextSymbol || nextSymbol <= afterSymbol) {
+      throw new Error('後端市場快照分頁游標未前進');
+    }
+    afterSymbol = nextSymbol;
+  }
+  const stocks = data.map(row => ({
     ...(row.raw_data || {}),
     symbol: String(row.symbol || ''),
     market: row.market || (group === 'otc' ? '上櫃' : '上市'),
@@ -424,7 +444,7 @@ export async function readBackendMarketStocks(group) {
     priceDate: row.trade_date,
     backendFallback: true,
   })).filter(stock => stock.symbol && stock.close != null);
-  return { date, stocks };
+  return { date, stocks, complete: true, truncated: false, fetchedCount: data.length };
 }
 
 export async function readRankingBacktest() {

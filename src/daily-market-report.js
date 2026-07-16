@@ -301,8 +301,16 @@ export function buildDailyMarketReport({ home = {}, marketGroups = {}, riskPage 
     group,
     isoDate(marketGroups[group]?.date),
   ]));
+  const requiredMarketGroups = ["listed", "otc", "etf"];
+  const missingMarketGroups = requiredMarketGroups.filter((group) => !marketDates[group]);
+  const incompleteMarketGroups = requiredMarketGroups.filter((group) => {
+    const value = marketGroups[group];
+    return !value || value.complete === false || value.truncated === true;
+  });
   const distinctMarketDates = unique(Object.values(marketDates)).sort();
-  const marketDatesAligned = distinctMarketDates.length <= 1;
+  const marketDatesPresentAndEqual = missingMarketGroups.length === 0 && distinctMarketDates.length === 1;
+  const marketGroupsComplete = incompleteMarketGroups.length === 0;
+  const marketDatesAligned = marketDatesPresentAndEqual && marketGroupsComplete;
   const dates = unique([
     home.dataDate,
     ...Object.values(home.groupDates || {}),
@@ -311,7 +319,9 @@ export function buildDailyMarketReport({ home = {}, marketGroups = {}, riskPage 
   const degraded = unique([
     ...(Array.isArray(home.degraded) ? home.degraded : []),
     ...(rows.length ? [] : ["market_snapshot_unavailable"]),
-    ...(marketDatesAligned ? [] : ["market_dates_misaligned"]),
+    ...missingMarketGroups.map((group) => `market_${group}_date_missing`),
+    ...incompleteMarketGroups.map((group) => `market_${group}_incomplete`),
+    ...(marketDatesPresentAndEqual ? [] : ["market_dates_misaligned"]),
     ...((riskPage.items || []).length ? [] : ["risk_ranking_unavailable"]),
     ...((home.news || []).length ? [] : ["news_unavailable"]),
   ]);
@@ -345,7 +355,7 @@ export function buildDailyMarketReport({ home = {}, marketGroups = {}, riskPage 
       importantNewsAndAnnouncements: news,
       watchlistChanges: watchlistChanges(parseWatchlist(watchlist), stockMap, rankingMap),
     },
-    beginnerNote: `${marketDatesAligned ? "" : "各市場資料日期尚未完全一致，報告可能再次更新。"}所有說明都由公開資料與固定規則整理，目的是幫助理解，不代表保證上漲或投資建議。`,
+    beginnerNote: `${marketDatesAligned ? "" : marketDatesPresentAndEqual ? "部分市場資料尚未完整，報告可能再次更新。" : "各市場資料日期尚未完全一致，報告可能再次更新。"}所有說明都由公開資料與固定規則整理，目的是幫助理解，不代表保證上漲或投資建議。`,
     degraded,
   };
 }

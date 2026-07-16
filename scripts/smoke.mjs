@@ -360,18 +360,18 @@ assert.match(contentSecurityPolicy, /https:\/\/lfkdkdyaatdlizryiyon\.supabase\.c
   "the shared policy must continue allowing the standalone MARKET administrator console");
 assert.doesNotMatch(pageSource, /id="adminBtn"/,
   "the CORE-authenticated main application must not embed a MARKET administrator entry");
-assert.match(pageSource, /app\.js\?v=19\.2\.0/);
+assert.match(pageSource, /app\.js\?v=20\.0\.0/);
 const publicPageSource = await readFile(new URL("../public/index.html", import.meta.url), "utf8");
 const publicAppSource = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
 const publicSmartSource = await readFile(new URL("../public/smart.js", import.meta.url), "utf8");
 const publicStylesSource = await readFile(new URL("../public/styles.css", import.meta.url), "utf8");
-assert.match(publicPageSource, /app\.js\?v=19\.2\.0/);
+assert.match(publicPageSource, /app\.js\?v=20\.0\.0/);
 assert.doesNotMatch(publicPageSource, /id="themeToggle"|data-tab="(?:forecast|verify)"/);
 const adminPageSource = await readFile(new URL("../public/admin.html", import.meta.url), "utf8");
 const adminScriptSource = await readFile(new URL("../public/admin.js", import.meta.url), "utf8");
-assert.match(adminPageSource, /icon\.svg\?v=19\.2\.0/);
-assert.match(adminPageSource, /styles\.css\?v=19\.2\.0/);
-assert.match(adminPageSource, /admin\.js\?v=19\.2\.0/);
+assert.match(adminPageSource, /icon\.svg\?v=20\.0\.0/);
+assert.match(adminPageSource, /styles\.css\?v=20\.0\.0/);
+assert.match(adminPageSource, /admin\.js\?v=20\.0\.0/);
 assert.match(adminScriptSource, /https:\/\/lfkdkdyaatdlizryiyon\.supabase\.co/,
   "the standalone administrator console must remain on MARKET");
 assert.match(adminScriptSource, /twss-market-admin-session-v18/,
@@ -381,6 +381,12 @@ assert.doesNotMatch(adminScriptSource, /gxwrczuwshndnjactrij|twss-core-session/,
 
 const appResponse = await worker.fetch(new Request("https://example.test/app.js?v=18.0.0"), {}, {});
 const appSource = await appResponse.text();
+assert.doesNotMatch(appSource, /S\.date=payload\.date\|\|today\(\)/,
+  "a missing trading date must stay empty instead of being replaced by the execution date");
+assert.match(appSource, /資料日期待補/,
+  "the UI must identify a missing trading date explicitly");
+assert.match(appSource, /if\(globalThis\.twssV20Active\|\|document\.querySelector\('script\[src\^="\/v20\.js"\]'\)\)\{S\.fundStatus='deferred';return\}/,
+  "v20 startup must defer the two legacy all-market fundamentals requests");
 assert.match(appSource, /官方日期已核對/);
 assert.match(appSource, /各資料來源日期/);
 assert.match(appSource, /上市機會榜/);
@@ -396,7 +402,7 @@ assert.match(appSource, /交易日不足 60 日/, "partial histories must not be
 assert.match(appSource, /120000,0/, "opening one detail must not automatically consume a second repair attempt");
 assert.match(appSource, /aria-label','關閉視窗/);
 assert.match(appSource, /event\.key==='Escape'/);
-assert.match(appSource, /sw\.js\?v=19\.2\.0/);
+assert.match(appSource, /sw\.js\?v=20\.0\.0/);
 assert.match(appSource, /timeZone:TAIPEI_TIME_ZONE/,
   "local date defaults must use Asia/Taipei");
 assert.match(appSource, /history\.scrollRestoration='manual'/,
@@ -553,7 +559,7 @@ assert.match(publicSmartSource, /raw\.watchlistChanges/,
 assert.match(publicSmartSource, /id="v19NewsMore"/);
 assert.match(publicSmartSource, /三分鐘看懂/);
 assert.doesNotMatch(publicSmartSource, /查看既有預測驗證/);
-assert.match(publicAppSource, /sw\.js\?v=19\.2\.0/);
+assert.match(publicAppSource, /sw\.js\?v=20\.0\.0/);
 
 const stylesResponse = await worker.fetch(new Request("https://example.test/styles.css?v=18.0.0"), {}, {});
 const stylesSource = await stylesResponse.text();

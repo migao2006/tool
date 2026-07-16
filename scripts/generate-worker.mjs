@@ -5,12 +5,13 @@ import { fileURLToPath } from "node:url";
 const projectRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const read = (path) => readFile(resolve(projectRoot, path), "utf8");
 
-const [page, app, patch, smart, styles, manifest, icon, serviceWorker, latestData, backtestData, dailyReportData, backendSource, deepDataSource, backendStoreSource] =
+const [page, app, patch, smart, v20, styles, manifest, icon, serviceWorker, latestData, backtestData, dailyReportData, backendSource, deepDataSource, backendStoreSource] =
   await Promise.all([
     read("public/index.html"),
     read("public/app.js"),
     read("public/patch.js"),
     read("public/smart.js"),
+    read("public/v20.js"),
     read("public/styles.css"),
     read("public/manifest.webmanifest"),
     read("public/icon.svg"),
@@ -31,6 +32,7 @@ const worker = `${[
   `const APP=${literal(app)};`,
   `const PATCH=${literal(patch)};`,
   `const SMART=${literal(smart)};`,
+  `const V20=${literal(v20)};`,
   `const STYLES=${literal(styles)};`,
   `const MANIFEST=${literal(manifest)};`,
   `const ICON=${literal(icon)};`,
@@ -65,6 +67,7 @@ export default {
     if(path==="/app.js")return new Response(APP,{headers:securityHeaders("text/javascript; charset=utf-8")});
     if(path==="/patch.js")return new Response(PATCH,{headers:securityHeaders("text/javascript; charset=utf-8")});
     if(path==="/smart.js")return new Response(SMART,{headers:securityHeaders("text/javascript; charset=utf-8")});
+    if(path==="/v20.js")return new Response(V20,{headers:securityHeaders("text/javascript; charset=utf-8")});
     if(path==="/styles.css")return new Response(STYLES,{headers:securityHeaders("text/css; charset=utf-8")});
     if(path==="/manifest.webmanifest")return new Response(MANIFEST,{headers:securityHeaders("application/manifest+json; charset=utf-8")});
     if(path==="/icon.svg")return new Response(ICON,{headers:securityHeaders("image/svg+xml; charset=utf-8")});

@@ -81,6 +81,26 @@ assert.equal(built.report.news[0].sentiment, "正面");
 assert.equal(built.report.watchlistChanges[0].status, "AI 分數上升");
 assert.equal(built.report.watchlistChanges[2].status, "資料更新中");
 assert.match(built.beginnerNote, /不代表保證上漲或投資建議/);
+assert.equal(built.dateStatus, "aligned");
+assert.equal(built.updateStatus, "complete");
+
+const missingGroupDate = buildDailyMarketReport({
+  home,
+  marketGroups: { ...groups, etf: { date: null, stocks: [] } },
+  riskPage,
+});
+assert.equal(missingGroupDate.dateStatus, "partial", "all three market group dates are required for alignment");
+assert.equal(missingGroupDate.updateStatus, "partial");
+assert.ok(missingGroupDate.degraded.includes("market_etf_date_missing"));
+
+const truncatedGroup = buildDailyMarketReport({
+  home,
+  marketGroups: { ...groups, listed: { ...groups.listed, complete: false, truncated: true } },
+  riskPage,
+});
+assert.equal(truncatedGroup.dateStatus, "partial", "a truncated group must never be labelled aligned");
+assert.equal(truncatedGroup.updateStatus, "partial");
+assert.ok(truncatedGroup.degraded.includes("market_listed_incomplete"));
 
 dailyMarketReportInternals.clearCache();
 let loadCount = 0;

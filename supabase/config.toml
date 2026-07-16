@@ -11,3 +11,9 @@ entrypoint = "./functions/twss-sync-batch/index.ts"
 # intentionally disabled because pg_cron is the only caller.
 verify_jwt = false
 entrypoint = "./functions/twss-v19-news/index.ts"
+
+[functions.twss-v20-model]
+# pg_cron has no user JWT. The function rejects callers unless the independent
+# Vault-backed x-twss-sync-token passes twss_verify_sync_token().
+verify_jwt = false
+entrypoint = "./functions/twss-v20-model/index.ts"

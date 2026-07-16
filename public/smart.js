@@ -943,11 +943,17 @@
     paint();
   }
 
+  const v20ShellActive = Boolean(document.querySelector('script[src^="/v20.js"]'));
+
   async function loadV19() {
     void optionalMarketJson().then(value => {
       v19.benchmarks = value;
+      globalThis.twssV19Benchmarks = value;
       if (!S.loading && S.tab === 'home') render();
     });
+    // v20 only reuses the official market benchmark adapter. Its own cache-first
+    // shell loads home, rankings, daily report, watchlist and details on demand.
+    if (v20ShellActive) return;
     const applyDailyReport=(value,state)=>{const report=unwrap(value);if(!report||typeof report!=='object')return false;v19.dailyReport=report;v19.dailyReportState=state;writeDailyReportCache(report);if(!S.loading&&S.tab==='home')render();return true};
     void fetch('/data/daily-report.json',{cache:'force-cache'}).then(response=>response.ok?response.json():null).then(value=>applyDailyReport(unwrap(value),'static')).catch(()=>{});
     const watchlist=getWatchlist().map(item=>String(item.symbol||'')).filter(Boolean).slice(0,30),reportQuery=watchlist.length?`?watchlist=${encodeURIComponent(watchlist.join(','))}`:'';
@@ -962,6 +968,7 @@
   }
 
   async function loadWatchRows() {
+    if (v20ShellActive) return;
     const symbols = [...new Set(getWatchlist().map(item => String(item.symbol || '')).filter(Boolean))].slice(0, 20);
     const fingerprint = symbols.join(',');
     if (fingerprint === v19.watchFingerprint) return;

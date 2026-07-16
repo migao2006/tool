@@ -96,7 +96,7 @@ function updateMarketHeader(){
   if(dates.listed&&dates.otc&&!dates.aligned){
     warning=true;label.textContent=`盤後行情 上市 ${dates.listed}／上櫃 ${dates.otc}（日期待對齊）`;mode.textContent='部分官方資料';
   }else{
-    label.textContent=dates.common?`最新交易日 ${dates.common} · 盤後資料（非即時）`:'正在核對官方資料日期…';
+    label.textContent=dates.common?`最新交易日 ${dates.common} · 盤後資料（非即時）`:'資料日期待補';
     mode.textContent=S.mode==='live'?'官方日期已核對':S.mode==='partial'?'部分官方資料':'資料載入中';
   }
   label.classList.toggle('date-warning',warning)
@@ -171,7 +171,7 @@ function compactBootStock(stock){return Object.fromEntries(BOOT_STOCK_FIELDS.fil
 function readMarketBootCache(){try{const payload=JSON.parse(localStorage.getItem(MARKET_BOOT_CACHE)||'null');return Array.isArray(payload?.stocks)&&payload.stocks.length>=20?payload:null}catch{return null}}
 function writeMarketBootCache(payload){try{localStorage.setItem(MARKET_BOOT_CACHE,JSON.stringify({...payload,stocks:payload.stocks.map(compactBootStock),cachedAt:new Date().toISOString()}))}catch{}}
 function applyMarketPayload(payload,source='live'){
-  S.stocks=payload.stocks.map(normalizeStock);S.mode=source==='live'?(payload.mode||'partial'):'partial';S.date=payload.date||today();S.dataStatus=payload.sourceStatus||{};S.sourceDates=payload.dates||{};S.loading=false;
+  S.stocks=payload.stocks.map(normalizeStock);S.mode=source==='live'?(payload.mode||'partial'):'partial';S.date=payload.date||'';S.dataStatus=payload.sourceStatus||{};S.sourceDates=payload.dates||{};S.loading=false;
   render();settleInitialHomeScroll()
 }
 function loadLatestSnapshot(){
@@ -181,12 +181,14 @@ function loadLatestSnapshot(){
 function applySnapshotBoot(snapshot){
   const rows=Object.values(snapshot?.groups||{}).flat(),stocks=[...new Map(rows.map(row=>[String(row?.stock?.symbol||''),row?.stock]).filter(([symbol,stock])=>symbol&&stock)).values()];
   if(stocks.length<20)return false;
-  const dates=snapshot.groupDates||{},date=snapshot.dataDate||Object.values(dates).filter(Boolean).sort().at(-1)||today();
-  applyMarketPayload({stocks,date,mode:'partial',dates:{price:{twse:dates.listed||date,tpex:dates.otc||date,common:dates.listed===dates.otc?dates.listed:'',aligned:dates.listed===dates.otc}}},'snapshot');
+  const dates=snapshot.groupDates||{},date=snapshot.dataDate||Object.values(dates).filter(Boolean).sort().at(-1)||'';
+  const aligned=Boolean(dates.listed&&dates.otc&&dates.listed===dates.otc);
+  applyMarketPayload({stocks,date,mode:'partial',dates:{price:{twse:dates.listed||date,tpex:dates.otc||date,common:aligned?dates.listed:'',aligned}}},'snapshot');
   return true
 }
 
 async function loadFundamentals(){
+  if(globalThis.twssV20Active||document.querySelector('script[src^="/v20.js"]')){S.fundStatus='deferred';return}
   S.fundStatus='loading';render();
   const merged=new Map();let revenueOk=false,financialOk=false;const periods=[];
   const applyPayload=(payload,type)=>{
@@ -362,7 +364,7 @@ function disclaimer(){return`<div class="disclaimer">${DISCLAIMER}</div>`}
 function metric(label,value,note=''){return`<div class="metric"><small>${label}</small><b>${value}</b>${note?`<em>${note}</em>`:''}</div>`}
 function valueOrReason(v,suffix='',reason='API 未回傳'){return v==null?reasonDash(reason):`${fmt(v)}${suffix}`}
 function sourceDateSummary(){
-  const dates=S.sourceDates||{},market=marketDateInfo(),price=market.aligned?(market.common||'—'):(market.listed&&market.otc?`上市 ${market.listed}／上櫃 ${market.otc}`:dates.price?.latest||S.date||'—'),institutional=dates.institutional?.latest||'尚未提供',margin=dates.margin?.latest||'尚未提供';
+  const dates=S.sourceDates||{},market=marketDateInfo(),price=market.aligned?(market.common||'日期待補'):(market.listed&&market.otc?`上市 ${market.listed}／上櫃 ${market.otc}`:dates.price?.latest||S.date||'日期待補'),institutional=dates.institutional?.latest||'尚未提供',margin=dates.margin?.latest||'尚未提供';
   return`行情 ${price} · 法人 ${institutional} · 融資券 ${margin}`
 }
 function etfSnapshotScore(stock){const volume=Math.max(0,Math.log10(Math.max(stock.volume||0,1))-2)*13,value=Math.max(0,Math.log10(Math.max(stock.value||0,1))-6)*8,momentum=clamp((stock.change||0)*4+10,0,24),chip=stock.inst!=null&&stock.volume?clamp(stock.inst/stock.volume*25+7,0,18):0,dividend=stock.yield==null?0:clamp(stock.yield*2,0,12);return clamp(Math.round(volume+value+momentum+chip+dividend),0,100)}
@@ -378,7 +380,7 @@ function homePage(){
   const rev=[...S.stocks].filter(x=>instrumentGroup(x)!=='etf'&&x.rev!=null).sort((a,b)=>b.rev-a.rev),inst=[...S.stocks].filter(x=>x.inst!=null).sort((a,b)=>b.inst-a.inst),listed=groupedHomeRows('listed'),otc=groupedHomeRows('otc'),etf=groupedHomeRows('etf');
   const counts={listed:S.stocks.filter(x=>instrumentGroup(x)==='listed').length,otc:S.stocks.filter(x=>instrumentGroup(x)==='otc').length,etf:S.stocks.filter(x=>instrumentGroup(x)==='etf').length},market=marketDateInfo(),dateNote=market.aligned?'上市、上櫃已對齊':market.listed&&market.otc?`上市 ${market.listed}／上櫃 ${market.otc}`:'部分市場日期尚未提供';
   return`<h2>盤後市場儀表板</h2><div class="muted">官方盤後資料整理，不是即時報價。</div>
-  <div class="grid">${metric('全市場資料日',market.common||S.date||'—',dateNote)}${metric('上市股票',fmt(counts.listed,0))}${metric('上櫃股票',fmt(counts.otc,0))}${metric('ETF',fmt(counts.etf,0))}</div>
+  <div class="grid">${metric('全市場資料日',market.common||S.date||'日期待補',dateNote)}${metric('上市股票',fmt(counts.listed,0))}${metric('上櫃股票',fmt(counts.otc,0))}${metric('ETF',fmt(counts.etf,0))}</div>
   <div class="card accent"><div class="head"><div><small class="muted">大盤環境</small><div class="price">${env.label}</div><div class="muted">上漲 ${env.up} · 下跌 ${env.down} · 平盤 ${env.flat}</div></div><div><small class="muted">多頭家數比</small><div class="score">${fmt(env.breadth,0)}%</div><div class="muted">平均漲跌 ${pct(env.avgChange)}</div></div></div><div class="grid" style="margin-top:10px">${metric('市場成交量',`${fmt(env.totalVolume,0)} 張`)}${metric('外資合計',`${fmt(env.foreign,0)} 張`)}${metric('三大法人合計',`${fmt(env.inst,0)} 張`)}${metric('環境信心',`${env.confidence}%`)}</div></div>
   <div class="card"><h3>產業相對強弱</h3><div class="rank-list">${env.industries.slice(0,6).map((x,i)=>`<div class="rank"><b>${i+1}</b><span><b>${x.industry}</b><small class="muted"> ${x.count} 檔 · 上漲家數 ${fmt(x.breadth,0)}%</small></span><b class="${cls(x.avgChange)}">${pct(x.avgChange)}</b></div>`).join('')}</div></div>
   <div class="notice"><b>分組排名</b><br>上市、上櫃與 ETF 使用各自適用因子，只與同組商品比較，不會混在同一個名次。</div>
@@ -446,7 +448,7 @@ function detailHtml(stock,state){
   const isEtf=instrumentGroup(stock)==='etf',notApplicable=reasonDash('ETF 不適用'),revenueAmount=value=>value==null?reasonDash('官方未提供'):`${fmt(value/1000000,0)} 百萬元`;
   const periodLine=isEtf?'ETF 無公司層級月營收與財報指標':`月營收 ${S.fundDates?.revenue?.period||stock.revPeriod||'載入中'} · 財報 ${S.fundDates?.financials?.period||stock.roePeriod||'載入中'}`;
   const basicMetrics=isEtf?`${metric('商品類型','ETF')}${metric('殖利率',valueOrReason(stock.yield,'%'))}${metric('本益比',notApplicable)}${metric('股價淨值比',notApplicable)}${metric('月營收',notApplicable)}${metric('ROE',notApplicable)}`:`${metric('本益比',valueOrReason(stock.pe))}${metric('股價淨值比',valueOrReason(stock.pb))}${metric('殖利率',valueOrReason(stock.yield,'%'))}${metric('當月營收',revenueAmount(stock.revenue),stock.revPeriod||'')}${metric('最新季營業額',revenueAmount(stock.quarterRevenue),stock.quarterRevenuePeriod||stock.roePeriod||'')}${metric('上月營收',revenueAmount(stock.revenuePreviousMonth))}${metric('去年同月營收',revenueAmount(stock.revenueLastYearMonth))}${metric('本年累計營收',revenueAmount(stock.revenueYtd))}${metric('去年同期累計',revenueAmount(stock.revenueLastYearYtd))}${metric('月營收年增',stock.rev==null?reasonDash(stock.dataStatus?.revenueYoy==='not-applicable-prior-year-zero'?'去年同期為 0，不適用':'官方未提供'):pct(stock.rev))}${metric('月營收月增',stock.revMom==null?reasonDash('官方未提供'):pct(stock.revMom))}${metric('累計營收年增',stock.revYtd==null?reasonDash('官方未提供'):pct(stock.revYtd))}${metric('成長加速度',stock.revAcceleration==null?reasonDash('資料不足'):pct(stock.revAcceleration),'單月年增－累計年增')}${metric('EPS',valueOrReason(stock.eps))}${metric(stock.roeEstimated?'年化推估 ROE':'ROE',valueOrReason(stock.roe,'%'),stock.roePeriod||'')}${metric('毛利率',valueOrReason(stock.grossMargin,'%'))}${metric('營業利益率',valueOrReason(stock.operatingMargin,'%'))}${metric('淨利率',valueOrReason(stock.netMargin,'%'))}${metric('負債比',valueOrReason(stock.debt,'%'))}${metric('權益比率',valueOrReason(stock.equityRatio,'%'))}${metric('資料期間',stock.roePeriod||stock.revPeriod||'—')}`;
-  return`<div class="modal"><div class="sheet"><button class="sheet-close" type="button">×</button><div class="head"><div><h2>${stock.name} ${stock.symbol}</h2><div class="muted">${stock.market} · ${stock.industry} · 行情 ${S.sourceDates?.price?.[stock.market==='上市'?'twse':'tpex']||S.date}</div></div><button class="btn secondary small-btn" data-watch="${stock.symbol}">${isWatched(stock.symbol)?'★ 已自選':'☆ 加入自選'}</button></div><div><span class="price">${fmt(stock.close)} 元</span> <b class="${cls(stock.change)}">${pct(stock.change)}</b></div><div class="notice"><b>各資料來源日期</b><br>${sourceDateSummary()}。${periodLine}。</div>
+  return`<div class="modal"><div class="sheet"><button class="sheet-close" type="button">×</button><div class="head"><div><h2>${stock.name} ${stock.symbol}</h2><div class="muted">${stock.market} · ${stock.industry} · 行情 ${S.sourceDates?.price?.[stock.market==='上市'?'twse':'tpex']||S.date||'日期待補'}</div></div><button class="btn secondary small-btn" data-watch="${stock.symbol}">${isWatched(stock.symbol)?'★ 已自選':'☆ 加入自選'}</button></div><div><span class="price">${fmt(stock.close)} 元</span> <b class="${cls(stock.change)}">${pct(stock.change)}</b></div><div class="notice"><b>各資料來源日期</b><br>${sourceDateSummary()}。${periodLine}。</div>
   ${historyLoading?'<div class="card"><div class="loading"><span class="spinner"></span>正在讀取歷史日線並計算技術指標…</div></div>':''}${historyError?`<div class="card warn-card"><b>歷史日線暫時無法取得</b><p class="muted">目前先使用基本面與籌碼進行低信心估計。${esc(historyError)}</p></div>`:''}${history.length?sparkline(history):''}
   <h3 class="section-title">大盤與產業環境</h3><div class="card">${marketIndustryHtml(stock)}</div>
   <h3 class="section-title">分數與排名變化</h3>${trendHtml(stock)}
@@ -599,5 +601,5 @@ function openAccountModal(){
 }
 
 document.querySelector('#accountBtn').onclick=openAccountModal;
-if('serviceWorker'in navigator)navigator.serviceWorker.register('/sw.js?v=19.2.0',{updateViaCache:'none'}).catch(()=>{});
+if('serviceWorker'in navigator)navigator.serviceWorker.register('/sw.js?v=20.0.0',{updateViaCache:'none'}).catch(()=>{});
 initSession();render();loadStocks();

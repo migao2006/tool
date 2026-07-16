@@ -168,6 +168,23 @@ function stockProjection(item, stockMap, kind = "opportunity") {
   };
 }
 
+function conciseNewsSummary(value, maxLength = 160) {
+  const compact = String(value || "").replace(/\s+/g, " ").trim();
+  if (!compact) return "請開啟原始連結確認完整內容。";
+  if (compact.length <= maxLength) return compact;
+  const preview = compact.slice(0, maxLength);
+  const punctuation = Math.max(
+    preview.lastIndexOf("。"),
+    preview.lastIndexOf("；"),
+    preview.lastIndexOf("！"),
+    preview.lastIndexOf("？"),
+  );
+  const cut = punctuation >= Math.floor(maxLength * 0.55)
+    ? preview.slice(0, punctuation + 1)
+    : preview;
+  return `${cut.trimEnd()}…`;
+}
+
 function importantNews(items = []) {
   return items.slice(0, 8).map((item) => {
     const sentiment = item.sentimentLabel === "benefit" ? "正面"
@@ -176,7 +193,7 @@ function importantNews(items = []) {
     return {
       id: item.id || null,
       title: item.title || "未命名公告",
-      summary: item.summary || "請開啟原始連結確認完整內容。",
+      summary: conciseNewsSummary(item.summary),
       source: item.source || null,
       category: item.category || null,
       symbols: Array.isArray(item.symbols) ? item.symbols : [],
@@ -439,6 +456,7 @@ export const dailyMarketReportInternals = {
   industryAnalysis,
   institutionalDirection,
   importantNews,
+  conciseNewsSummary,
   watchlistChanges,
   clearCache() {
     cache.clear();

@@ -55,6 +55,10 @@ const groups = {
 };
 
 assert.deepEqual(parseWatchlist(["2330, 2454", "bad", "2330"]), ["2330", "2454"]);
+const longAnnouncement = "重大訊息內容".repeat(80);
+const conciseAnnouncement = dailyMarketReportInternals.conciseNewsSummary(longAnnouncement);
+assert.ok(conciseAnnouncement.length <= 161, "announcement summaries must stay compact for the first screen");
+assert.match(conciseAnnouncement, /…$/);
 
 const built = buildDailyMarketReport({
   home,
@@ -96,4 +100,4 @@ assert.equal(optionsResponse.status, 204);
 const postResponse = await dailyReportRoute.fetch(new Request("https://app.test/api/v19/daily-report", { method: "POST" }));
 assert.equal(postResponse.status, 405);
 
-console.log("Daily market report tests passed: deterministic sections, novice explanations, watchlist changes, cache, and API guards");
+console.log("Daily market report tests passed: deterministic sections, concise news, novice explanations, watchlist changes, cache, and API guards");

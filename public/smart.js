@@ -674,13 +674,21 @@
     }).join('')}</div>`;
   }
 
-  function reportItems(...values){return cleanArray(...values).map(item=>typeof item==='string'?item:first(item?.label,item?.name,item?.industry,item?.title,item?.message,item?.summary,item?.whyNotice)).filter(Boolean)}
+  function reportIndustries(...values){
+    return cleanArray(...values).map(item=>{
+      if(typeof item==='string')return{name:item,explanation:''};
+      return{
+        name:first(item?.industry,item?.label,item?.name,item?.title),
+        explanation:first(item?.explanation,item?.summary,item?.message,'')
+      }
+    }).filter(item=>item.name)
+  }
   function dailyReportModel(rows){
     const envelope=first(v19.dailyReport,v19.home?.dailyReport,{})||{},raw=first(envelope.report,envelope.dailyReport,envelope)||{},market=raw.market||raw.marketAnalysis||{};
     const environment=marketEnvironment(),fallbackPicks=rows.filter(row=>row.score!=null).sort((a,b)=>b.score-a.score).slice(0,3);
     const strengthRaw=first(raw.marketStrength,market.strength,raw.strength),strength=typeof strengthRaw==='object'?first(strengthRaw.label,strengthRaw.level,strengthRaw.summary,strengthRaw.explanation):strengthRaw;
     const directionRaw=first(raw.institutionalDirection,raw.institutional,market.institutionalDirection),direction=typeof directionRaw==='object'?first(directionRaw.direction,directionRaw.summary,directionRaw.explanation,directionRaw.label):directionRaw;
-    const industries=reportItems(raw.hotIndustries,raw.industries,market.hotIndustries).slice(0,6);
+    const industries=reportIndustries(raw.hotIndustries,raw.industries,market.hotIndustries).slice(0,6);
     const focusRaw=cleanArray(raw.watchStocks,raw.opportunityStocks,raw.stocksToWatch,raw.opportunities);
     const focus=focusRaw.map(item=>{
       if(typeof item==='string'){const local=rows.find(row=>row.symbol===item||row.name===item);return local||{name:item,symbol:'',reason:''}}
@@ -692,12 +700,14 @@
     return{
       dataDate:dateOnly(first(envelope.dataDate,raw.dataDate,raw.reportDate,raw.date,v19.home?.dataDate,S.date)),
       oneLine:first(raw.oneLine,raw.todayMarket,raw.headline,raw.summary?.oneLine,market.oneLine,market.summary,`${environment.label}；上漲 ${environment.up} 檔、下跌 ${environment.down} 檔。`),
-      strength:first(strength,`${environment.label}，上漲家數約 ${fmt(environment.breadth,0)}%。`),
-      institutional:first(direction,environment.inst>0?'三大法人合計偏買方，但仍要觀察是否連續。':environment.inst<0?'三大法人合計偏賣方，追價前要更保守。':'法人方向不明顯，先看個股基本面。'),
-      industries:industries.length?industries:environment.industries.slice(0,3).map(item=>`${item.industry}（平均 ${pct(item.avgChange)}）`),
+      strength:first(strength,environment.label),
+      strengthExplanation:first(typeof strengthRaw==='object'?first(strengthRaw.explanation,strengthRaw.summary):strengthRaw,`${environment.label}，上漲家數約 ${fmt(environment.breadth,0)}%；市場仍可能隨新資料變動。`),
+      institutional:first(direction,environment.inst>0?'偏買方':environment.inst<0?'偏賣方':'方向不明顯'),
+      institutionalExplanation:first(typeof directionRaw==='object'?first(directionRaw.explanation,directionRaw.summary):directionRaw,environment.inst>0?'三大法人合計偏買方，但仍要觀察是否連續。':environment.inst<0?'三大法人合計偏賣方，追價前要更保守。':'法人方向不明顯，先看個股基本面。'),
+      industries:industries.length?industries:environment.industries.slice(0,3).map(item=>({name:item.industry,explanation:`平均漲跌 ${pct(item.avgChange)}，上漲家數約 ${fmt(item.breadth,0)}%。`})),
       focus:focus.length?focus:fallbackPicks,
       risks,
-      news:cleanArray(raw.importantNews,raw.news,raw.announcements),
+      news:cleanArray(raw.importantNews,raw.importantNewsAndAnnouncements,raw.news,raw.announcements),
       watch,
       source:v19.dailyReport?'AI 每日報告':'現有資料快速摘要'
     }
@@ -705,7 +715,11 @@
 
   function dailyReportHtml(rows){
     const report=dailyReportModel(rows),riskItems=report.risks.length?report.risks:['市場與個股資料仍可能更新，請避免只看單一分數。'];
-    return `<article class="card v19-daily-report"><div class="v19-report-head"><span class="v19-eyebrow">DAILY AI BRIEF</span><time>${esc(report.dataDate||'日期待確認')}</time></div><p class="v19-report-lead">${esc(report.oneLine)}</p><div class="v19-report-grid"><div><small>市場強弱</small><b>${esc(report.strength)}</b></div><div><small>法人方向</small><b>${esc(report.institutional)}</b></div></div><div class="v19-report-block"><h4>熱門產業</h4><div class="rules">${report.industries.map(item=>`<span>${esc(item)}</span>`).join('')||'<span>資料整理中</span>'}</div></div><div class="v19-report-block"><h4>值得關注</h4><div class="v19-report-stocks">${report.focus.map(item=>item.symbol?`<button type="button" data-analysis="${esc(item.symbol)}"><b>${esc(item.name)}</b><small>${esc(item.symbol)}${item.reason?` · ${esc(item.reason)}`:''}</small></button>`:`<span>${esc(item.name)}</span>`).join('')||'<span>目前沒有足夠資料</span>'}</div></div><div class="v19-report-block"><h4>主要風險</h4><ul>${riskItems.map(item=>`<li>${esc(item)}</li>`).join('')}</ul></div>${report.watch.length?`<div class="v19-report-block"><h4>自選股變化</h4><ul>${report.watch.map(item=>`<li>${esc(item)}</li>`).join('')}</ul></div>`:''}<div class="v19-report-foot">${esc(report.source)} · 新聞／公告 ${report.news.length} 則 · 自選變化 ${report.watch.length} 則</div></article>`
+    const explain=(label,value)=>value&&value!==label?`<p>${esc(value)}</p>`:'';
+    const headlines=report.news.slice(0,3).map(item=>typeof item==='string'?{title:item}:item).filter(item=>item?.title||item?.headline);
+    const headlineHtml=headlines.map(item=>{const title=first(item.title,item.headline),url=safeUrl(first(item.url,item.link)),source=first(item.source,item.publisher);return`<li>${url?`<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(title)}</a>`:`<b>${esc(title)}</b>`}${source?`<small>${esc(source)}</small>`:''}</li>`}).join('');
+    const industryHtml=report.industries.map(item=>`<div><b>${esc(item.name)}</b>${item.explanation?`<small>${esc(item.explanation)}</small>`:''}</div>`).join('')||'<div><b>資料整理中</b></div>';
+    return `<article class="card v19-daily-report"><div class="v19-report-head"><span class="v19-eyebrow">DAILY AI BRIEF</span><time>${esc(report.dataDate||'日期待確認')}</time></div><p class="v19-report-lead">${esc(report.oneLine)}</p><div class="v19-report-grid"><div><small>市場強弱</small><b>${esc(report.strength)}</b>${explain(report.strength,report.strengthExplanation)}</div><div><small>法人方向</small><b>${esc(report.institutional)}</b>${explain(report.institutional,report.institutionalExplanation)}</div></div><div class="v19-report-block"><h4>熱門產業</h4><div class="v19-report-industries">${industryHtml}</div></div><div class="v19-report-block"><h4>值得關注</h4><div class="v19-report-stocks">${report.focus.map(item=>item.symbol?`<button type="button" data-analysis="${esc(item.symbol)}"><b>${esc(item.name)}</b><small>${esc(item.symbol)}${item.reason?` · ${esc(item.reason)}`:''}</small></button>`:`<span>${esc(item.name)}</span>`).join('')||'<span>目前沒有足夠資料</span>'}</div></div><div class="v19-report-block"><h4>主要風險</h4><ul>${riskItems.map(item=>`<li>${esc(item)}</li>`).join('')}</ul></div>${headlineHtml?`<div class="v19-report-block"><h4>重要新聞與公告</h4><ul class="v19-report-news">${headlineHtml}</ul></div>`:''}${report.watch.length?`<div class="v19-report-block"><h4>自選股變化</h4><ul>${report.watch.map(item=>`<li>${esc(item)}</li>`).join('')}</ul></div>`:''}<div class="v19-report-foot">${esc(report.source)} · 新聞／公告 ${report.news.length} 則 · 自選變化 ${report.watch.length} 則</div></article>`
   }
 
   function homeNewsItems(){

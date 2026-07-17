@@ -260,10 +260,11 @@ for (const regime of regimes) {
   assert.ok(!["bullish", "range", "bearish"].includes(regime), "worker and backtest regime names must match");
 }
 
-const [workerSource, migration, incrementalMigration, verifiableMigration] = await Promise.all([
+const [workerSource, migration, incrementalMigration, staleQueueMigration, verifiableMigration] = await Promise.all([
   readFile(new URL("../supabase/functions/twss-v20-model/index.ts", import.meta.url), "utf8"),
   readFile(new URL("../supabase/migrations/20260716021553_add_v20_quant_models.sql", import.meta.url), "utf8"),
   readFile(new URL("../supabase/migrations/20260716131155_v20_incremental_dirty_queue.sql", import.meta.url), "utf8"),
+  readFile(new URL("../supabase/migrations/20260717025202_supersede_stale_v20_dirty_queue.sql", import.meta.url), "utf8"),
   readFile(new URL("../supabase/migrations/20260716173332_verifiable_opportunity_snapshots.sql", import.meta.url), "utf8"),
 ]);
 assert.doesNotMatch(workerSource, /latestGroupDates\(\)/);
@@ -350,6 +351,14 @@ assert.match(incrementalMigration, /then 'pending' else 'error'/,
   "a newer dirty revision must survive failure of the leased revision");
 assert.match(incrementalMigration, /enable row level security/);
 assert.match(incrementalMigration, /to service_role/);
+assert.match(staleQueueMigration, /'superseded'/);
+assert.match(staleQueueMigration, /new\.data_date = v_active_date/,
+  "late enrichment from an obsolete date must not enqueue current-model work");
+assert.match(staleQueueMigration, /perform public\.twss_supersede_stale_v20_dirty_queue\(p_data_date, p_model_version\)/,
+  "claiming an active batch must settle stale rows first");
+assert.match(staleQueueMigration, /q\.data_date = v_cycle_date/);
+assert.match(staleQueueMigration, /q\.model_version = v_model_version/,
+  "the cron due check must ignore obsolete model versions");
 assert.match(verifiableMigration, /create or replace function public\.twss_v20_publish_recommendation_run/);
 assert.match(verifiableMigration, /create or replace function public\.twss_v20_signal_data_cutoff/);
 assert.match(verifiableMigration, /max\(greatest\(s\.generated_at, s\.updated_at\)\)/);

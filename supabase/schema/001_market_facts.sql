@@ -27,7 +27,8 @@ create table if not exists market_data.securities (
   security_id bigint generated always as identity primary key,
   symbol text not null,
   display_name text not null,
-  market text not null check (market in ('TWSE', 'TPEX', 'ETF')),
+  market text not null constraint securities_market_check
+    check (market in ('TWSE', 'TPEX')),
   asset_type text not null check (asset_type in ('COMMON_STOCK', 'ETF')),
   currency text not null default 'TWD',
   listing_date date,
@@ -58,21 +59,28 @@ create table if not exists market_data.security_history (
   available_at timestamptz not null,
   ingested_at timestamptz not null default now(),
   unique (security_id, effective_from, source_id, source_version),
-  check (effective_to is null or effective_to >= effective_from)
+  constraint security_history_effective_range_check
+    check (effective_to is null or effective_to > effective_from)
 );
+
+comment on column market_data.security_history.effective_to is
+  'Exclusive upper bound. Null means the version remains effective indefinitely.';
 
 create table if not exists market_data.benchmark_definitions (
   benchmark_id bigint generated always as identity primary key,
   benchmark_code text not null,
   benchmark_version text not null,
-  market text not null check (market in ('TWSE', 'TPEX', 'ETF')),
+  market text not null constraint benchmark_definitions_market_check
+    check (market in ('TWSE', 'TPEX')),
   index_symbol text not null,
   effective_from date not null,
   effective_to date,
   available_at timestamptz not null,
   metadata jsonb not null default '{}'::jsonb,
   unique (benchmark_code, benchmark_version),
-  check (effective_to is null or effective_to >= effective_from)
+  check (effective_to is null or effective_to >= effective_from),
+  constraint benchmark_definitions_metadata_object_check
+    check (jsonb_typeof(metadata) = 'object')
 );
 
 create table if not exists market_data.daily_bars (
@@ -169,4 +177,3 @@ create table if not exists market_data.market_observations (
   unique (series_code, observation_at, source_id, source_version),
   check (numeric_value is not null or text_value is not null)
 );
-

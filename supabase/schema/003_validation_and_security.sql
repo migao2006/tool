@@ -8,7 +8,9 @@ create table if not exists market_data.validation_runs (
   started_at timestamptz not null,
   completed_at timestamptz,
   limitations text[] not null default '{}',
-  created_at timestamptz not null default now()
+  created_at timestamptz not null default now(),
+  constraint validation_runs_completed_at_check
+    check (completed_at is null or completed_at >= started_at)
 );
 
 create table if not exists market_data.validation_fold_metrics (
@@ -29,7 +31,9 @@ create table if not exists market_data.validation_fold_metrics (
   check (train_end < calibration_start),
   check (calibration_start <= calibration_end),
   check (calibration_end < test_start),
-  check (test_start <= test_end)
+  check (test_start <= test_end),
+  constraint validation_fold_metrics_payload_object_check
+    check (jsonb_typeof(metric_payload) = 'object')
 );
 
 create table if not exists market_data.backtest_runs (
@@ -43,7 +47,16 @@ create table if not exists market_data.backtest_runs (
   completed_at timestamptz,
   status text not null check (status in ('PASS', 'RESEARCH_ONLY', 'FAIL')),
   summary_metrics jsonb not null default '{}'::jsonb,
-  check (cost_multiplier in (0.75, 1.0, 1.5, 2.0))
+  constraint backtest_runs_cost_scenario_multiplier_check check (
+    (cost_scenario = 'LOW' and cost_multiplier = 0.75)
+    or (cost_scenario = 'BASE' and cost_multiplier = 1.0)
+    or (cost_scenario = 'STRESSED' and cost_multiplier = 1.5)
+    or (cost_scenario = 'EXTREME' and cost_multiplier = 2.0)
+  ),
+  constraint backtest_runs_summary_metrics_object_check
+    check (jsonb_typeof(summary_metrics) = 'object'),
+  constraint backtest_runs_completed_at_check
+    check (completed_at is null or completed_at >= started_at)
 );
 
 create table if not exists market_data.backtest_daily_results (
@@ -59,7 +72,15 @@ create table if not exists market_data.backtest_daily_results (
   market_exposure numeric(12,10) not null,
   market_regime text,
   holdings_count integer not null,
-  unique (backtest_run_id, trading_date)
+  unique (backtest_run_id, trading_date),
+  constraint backtest_daily_results_numeric_ranges_check check (
+    equity >= 0
+    and cash >= 0
+    and turnover >= 0
+    and transaction_cost >= 0
+    and market_exposure between 0 and 1
+    and holdings_count >= 0
+  )
 );
 
 create index if not exists trading_calendar_available_idx
@@ -110,6 +131,11 @@ create index if not exists data_quality_security_idx
   on market_data.data_quality_audits (security_id, prediction_run_id);
 create index if not exists stock_predictions_rank_idx
   on market_data.stock_predictions (prediction_run_id, global_rank);
+create unique index if not exists stock_predictions_run_global_rank_uidx
+  on market_data.stock_predictions (prediction_run_id, global_rank);
+create unique index if not exists stock_predictions_run_industry_rank_uidx
+  on market_data.stock_predictions (prediction_run_id, industry, industry_rank)
+  where industry is not null and industry_rank is not null;
 create index if not exists stock_predictions_security_idx
   on market_data.stock_predictions (security_id, prediction_run_id desc);
 create index if not exists stock_predictions_candidates_idx
@@ -117,6 +143,8 @@ create index if not exists stock_predictions_candidates_idx
   where decision = 'CANDIDATE' and data_quality_status = 'PASS';
 create index if not exists decision_gate_prediction_idx
   on market_data.decision_gate_results (stock_prediction_id, gate_order);
+create index if not exists market_predictions_market_run_idx
+  on market_data.market_predictions (market, prediction_run_id desc);
 create index if not exists validation_fold_run_idx
   on market_data.validation_fold_metrics (validation_run_id, fold_number);
 create index if not exists backtest_daily_run_idx
@@ -143,6 +171,7 @@ alter table market_data.model_registry enable row level security;
 alter table market_data.prediction_runs enable row level security;
 alter table market_data.data_quality_audits enable row level security;
 alter table market_data.stock_predictions enable row level security;
+alter table market_data.market_predictions enable row level security;
 alter table market_data.decision_gate_results enable row level security;
 alter table market_data.validation_runs enable row level security;
 alter table market_data.validation_fold_metrics enable row level security;
@@ -155,3 +184,16 @@ revoke all on all sequences in schema market_data from public, anon, authenticat
 grant usage on schema market_data to service_role;
 grant select, insert, update, delete on all tables in schema market_data to service_role;
 grant usage, select on all sequences in schema market_data to service_role;
+
+alter default privileges in schema market_data
+  revoke all on tables from public, anon, authenticated;
+alter default privileges in schema market_data
+  revoke all on sequences from public, anon, authenticated;
+alter default privileges in schema market_data
+  revoke execute on functions from public, anon, authenticated;
+alter default privileges in schema market_data
+  grant select, insert, update, delete on tables to service_role;
+alter default privileges in schema market_data
+  grant usage, select on sequences to service_role;
+alter default privileges in schema market_data
+  grant execute on functions to service_role;

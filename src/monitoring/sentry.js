@@ -60,13 +60,4 @@
     beforeSend: removeSensitiveContext,
   });
 
-  const testRequested =
-    new URLSearchParams(global.location.search).get("sentry_test") ===
-    "installation";
-
-  if (testRequested) {
-    sentry.captureException(
-      new Error("Alpha Lens Sentry installation verification"),
-    );
-  }
 })(window);

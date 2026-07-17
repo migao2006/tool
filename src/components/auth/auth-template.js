@@ -9,7 +9,7 @@ export function createAccountEntryMarkup() {
     <div class="auth-entry-card">
       <div class="auth-entry-copy">
         <strong data-auth-entry-title>登入後使用自選股</strong>
-        <small data-auth-entry-detail>同步自選清單、持倉與模型警示</small>
+        <small data-auth-entry-detail>同步自選清單與模型警示</small>
       </div>
       <button class="auth-account-button" type="button" data-auth-open aria-haspopup="dialog">
         <span class="auth-account-icon" aria-hidden="true"></span>

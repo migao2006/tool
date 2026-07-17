@@ -37,14 +37,23 @@ export function applyUiState(state) {
   document.querySelectorAll("[data-ui-state-description]").forEach((node) => {
     node.textContent = description;
   });
+  const loading = state === UI_STATE.LOADING;
+  document.querySelector("#app-content")?.setAttribute("aria-busy", String(loading));
+  const filtersEnabled = [UI_STATE.READY, UI_STATE.NO_CANDIDATES].includes(state);
+  document.querySelectorAll("[data-candidate-filters] button, [data-candidate-filters] input, [data-candidate-filters] select, [data-filter=\"watch-decision\"] button")
+    .forEach((control) => { control.disabled = !filtersEnabled; });
 }
 
 export function resolveSnapshotUiState(snapshot) {
+  if (!snapshot) return UI_STATE.LOADING;
   if (snapshot.reasonCodes?.includes("MODEL_NOT_RELEASED")) return UI_STATE.MODEL_NOT_AVAILABLE;
   if (snapshot.stale) return UI_STATE.STALE;
   if (snapshot.dataQualityHardFail) return UI_STATE.DATA_QUALITY_HARD_FAIL;
   if (snapshot.systemStatus === "FAIL") return UI_STATE.FAIL;
   if (snapshot.systemStatus === "RESEARCH_ONLY") return UI_STATE.RESEARCH_ONLY;
-  if (!snapshot.candidates?.length) return UI_STATE.NO_CANDIDATES;
+  if (!snapshot.predictions?.length) return UI_STATE.EMPTY;
+  if (!snapshot.candidates?.some((record) => record.decision === "CANDIDATE")) {
+    return UI_STATE.NO_CANDIDATES;
+  }
   return UI_STATE.READY;
 }

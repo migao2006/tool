@@ -11,7 +11,7 @@ const AUDIT_FIELDS = Object.freeze([
 
 export function createStockAuditSection() {
   const rows = AUDIT_FIELDS.map(
-    (field) => `<div><dt>${field}</dt><dd>—</dd></div>`,
+    (field) => `<div><dt>${field}</dt><dd data-audit-field="${field}">—</dd></div>`,
   ).join("");
   return `
     <details class="audit-details">

@@ -48,21 +48,67 @@ def test_bottom_navigation_has_exactly_three_product_entries() -> None:
     assert 'label: "自選"' in navigation
 
 
-def test_prediction_client_accepts_horizon_and_defaults_to_five() -> None:
+def test_prediction_client_accepts_horizon_fetches_only_when_configured() -> None:
     contract = read("src/core/five-day-contract.js")
     client = read("src/data/prediction-api.js")
     assert "CURRENT_HORIZON = 5" in contract
     assert "horizon = CURRENT_HORIZON" in client
     assert "normalizeHorizon(horizon)" in client
-    assert "fetch(" not in client
+    assert "PREDICTION_API_NOT_CONFIGURED" in client
+    assert "dataset.predictionApiBaseUrl" in client
+    assert "fetch(url" in client
+    assert 'url.searchParams.set("horizon", String(normalizedHorizon))' in client
+
+
+def test_prediction_schema_rejects_wrong_horizon_and_invalid_formal_output() -> None:
+    contract = read("src/data/prediction-contract.js")
+    assert "目前只接受 5 個交易日模型輸出" in contract
+    assert "horizon 與請求不一致" in contract
+    assert "機率總和不等於 1" in contract
+    assert "淨報酬分位數不完整或不單調" in contract
+    assert "PASS 快照缺少日期或模型版本稽核欄位" in contract
 
 
 def test_forbidden_unverified_outputs_are_absent_from_stock_page() -> None:
     stock = read("src/pages/stock-detail-page.js")
     for forbidden in ("Alpha Score", "預期報酬", "MFE", "MAE", "final score"):
         assert forbidden not in stock
-    assert "Rank Score（當日橫斷面排名百分位）" in stock
+    assert "當日橫斷面排名百分位" in stock
     assert "條件報酬分位數" in stock
+
+
+def test_formal_candidates_exclude_hard_fail_and_etf() -> None:
+    selection = read("src/features/prediction-selection.js")
+    candidates = read("src/pages/candidates-page.js")
+    assert 'record.asset_type !== "ETF"' in selection
+    assert "!record.data_quality_hard_fail" in selection
+    assert "renderExcludedSecurities(snapshot.excluded)" in candidates
+    assert '<option>FAIL</option>' not in candidates
+
+
+def test_api_values_are_escaped_before_dynamic_markup() -> None:
+    html = read("src/core/html.js")
+    card = read("src/components/candidate-card.js")
+    excluded = read("src/components/excluded-securities-drawer.js")
+    assert "escapeHtml" in html
+    assert "escapeHtml(prediction.symbol" in card
+    assert "map(escapeHtml)" in card
+    assert "map(escapeHtml)" in excluded
+
+
+def test_no_embedded_fake_stock_or_performance_data() -> None:
+    frontend = "\n".join(
+        read(path)
+        for path in (
+            "app.js",
+            "src/pages/overview-page.js",
+            "src/pages/candidates-page.js",
+            "src/pages/stock-detail-page.js",
+            "src/pages/watchlist-page.js",
+        )
+    )
+    for forbidden in ("2330", "台積電", "2317", "鴻海", "Sharpe 1", "年化報酬"):
+        assert forbidden not in frontend
 
 
 def test_all_required_ui_states_have_copy() -> None:

@@ -101,7 +101,7 @@ export class AuthDialog {
     const detail = this.entryRoot.querySelector("[data-auth-entry-detail]");
     label.textContent = user ? "帳戶" : "登入";
     title.textContent = user ? "帳戶已連接" : "登入後使用自選股";
-    detail.textContent = user?.email ?? "同步自選清單、持倉與模型警示";
+    detail.textContent = user?.email ?? "同步自選清單與模型警示";
     button.setAttribute("aria-label", user ? "開啟帳戶" : "開啟登入");
     this.root.querySelector("[data-auth-account-email]").textContent =
       user?.email ?? "—";

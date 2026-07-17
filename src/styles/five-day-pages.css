@@ -1,0 +1,102 @@
+.contract-meta,
+.decision-counts {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.contract-meta > div,
+.decision-counts article {
+  min-width: 0;
+  padding: 12px;
+  border: 0.5px solid var(--separator-soft);
+  border-radius: 14px;
+  background: var(--surface);
+}
+
+.contract-meta span,
+.decision-counts span,
+.market-probabilities span {
+  display: block;
+  color: var(--muted);
+  font-size: 0.66rem;
+}
+
+.contract-meta small,
+.decision-counts small { display: block; margin-top: 1px; }
+
+.contract-meta strong,
+.decision-counts strong,
+.market-probabilities strong {
+  display: block;
+  margin-top: 3px;
+  font-size: 0.88rem;
+}
+
+.market-probabilities {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 7px;
+  margin-top: 14px;
+}
+
+.market-probabilities > div {
+  padding: 12px;
+  border-radius: 12px;
+  background: var(--surface-2);
+  text-align: center;
+}
+
+.decision-counts { grid-template-columns: repeat(4, 1fr); margin-top: 12px; }
+
+.decision-hero {
+  padding: 16px;
+  border: 0.5px solid var(--separator-soft);
+  border-radius: 20px;
+  background: var(--surface);
+}
+
+.decision-hero > div { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.decision-hero > div + div { margin-top: 8px; }
+.decision-hero span { color: var(--muted); font-size: 0.7rem; }
+.decision-hero code { color: var(--amber); font-size: 0.67rem; }
+.decision-hero dl { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; margin: 14px 0 0; }
+.decision-hero dl div { padding: 9px; border-radius: 10px; background: var(--surface-2); }
+.decision-hero dd { margin-top: 3px; text-align: left; }
+
+.decision-gates { margin: 14px 0 0; padding: 0; list-style: none; }
+.decision-gates li { display: grid; grid-template-columns: 28px 1fr; gap: 9px; padding: 12px 0; border-bottom: 0.5px solid var(--separator-soft); }
+.decision-gates li:last-child { border-bottom: 0; }
+.gate-step { width: 26px; height: 26px; display: grid; place-items: center; border-radius: 50%; background: var(--surface-2); color: var(--muted); font-size: 0.68rem; }
+.decision-gates li.is-pass .gate-step { background: var(--green-soft); color: var(--green); }
+.decision-gates li.is-fail .gate-step { background: rgba(255, 69, 58, 0.14); color: var(--red); }
+.gate-main strong { display: block; font-size: 0.78rem; }
+.gate-main code { margin-top: 3px; }
+.decision-gates dl { grid-column: 2; display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin: 2px 0 0; }
+.decision-gates dl div { padding: 8px; border-radius: 9px; background: var(--surface-2); }
+.decision-gates dd { margin-top: 2px; text-align: left; }
+
+.detail-section-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 10px; }
+.detail-wide { grid-column: 1 / -1; }
+.quantile-fields { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; margin: 13px 0 0; }
+.quantile-fields div { min-height: 68px; display: flex; flex-direction: column; justify-content: center; padding: 10px; border-radius: 11px; background: var(--surface-2); }
+.quantile-fields dd { margin-top: 3px; text-align: left; }
+.inline-fields { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0 12px; }
+
+.audit-details { margin-top: 12px; padding: 0 16px; border: 0.5px solid var(--separator-soft); border-radius: 20px; background: var(--surface); }
+.audit-details summary { min-height: 52px; display: flex; align-items: center; justify-content: space-between; list-style: none; font-size: 0.8rem; font-weight: 650; }
+.audit-details summary::after { content: "+"; color: var(--muted); }
+.audit-details[open] summary::after { content: "−"; }
+.audit-list { padding-bottom: 12px; border-top: 0.5px solid var(--separator-soft); }
+
+@media (max-width: 600px) {
+  .contract-meta,
+  .decision-counts { grid-template-columns: repeat(2, 1fr); }
+  .detail-section-grid { grid-template-columns: 1fr; }
+  .detail-wide { grid-column: auto; }
+  .wide-filter-grid { grid-template-columns: 1fr; }
+  .decision-hero dl { grid-template-columns: 1fr; }
+  .inline-fields { grid-template-columns: 1fr; }
+  .watch-filters { display: flex; overflow-x: auto; scrollbar-width: none; }
+  .watch-filters button { flex: 0 0 auto; min-width: 92px; }
+}

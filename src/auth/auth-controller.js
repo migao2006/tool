@@ -1,12 +1,11 @@
-import { friendlyAuthError } from "../features/auth/auth-errors.js?v=auth-2";
-import { installAuthRouteGuard } from "./auth-route-guard.js?v=auth-2";
+import { friendlyAuthError } from "../features/auth/auth-errors.js?v=auth-3";
+import { installAuthRouteGuard } from "./auth-route-guard.js?v=auth-3";
 
 export class AuthController {
   constructor(dialog, service) {
     this.dialog = dialog;
     this.service = service;
     this.user = null;
-    this.pendingEmail = "";
     this.ready = false;
     this.recoveryMode = false;
   }
@@ -127,25 +126,11 @@ export class AuthController {
           this.applyUser(response.data.user);
           this.dialog.close();
         } else {
-          this.dialog.showMessage("確認信已寄出，請前往信箱完成驗證。", "success");
+          this.dialog.showMessage(
+            "確認信已寄出，請點擊信中的確認連結後再登入。",
+            "success",
+          );
         }
-        break;
-      case "otpRequest":
-        response = await this.service.sendOtp(email);
-        this.throwIfError(response);
-        this.pendingEmail = email;
-        this.dialog.setPendingEmail(email);
-        this.dialog.showView("otpVerify");
-        this.dialog.showMessage("驗證碼已寄出。", "success");
-        break;
-      case "otpVerify":
-        response = await this.service.verifyOtp(
-          this.pendingEmail,
-          String(formData.get("token") ?? "").trim(),
-        );
-        this.throwIfError(response);
-        this.applyUser(response.data.user);
-        this.dialog.close();
         break;
       case "forgot":
         response = await this.service.sendPasswordReset(email);

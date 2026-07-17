@@ -144,7 +144,6 @@ body:not([data-auth-state="authenticated"]) [data-auth-protected] {
 }
 
 .auth-field input:focus { border-color: var(--green); box-shadow: 0 0 0 3px var(--green-soft); }
-.auth-code { letter-spacing: 0.42em; text-align: center; font-size: 1.2rem !important; font-variant-numeric: tabular-nums; }
 .auth-primary,
 .auth-secondary { width: 100%; min-height: 50px; border-radius: 13px; font-weight: 700; }
 .auth-primary { margin-top: 3px; background: var(--green); color: #001804; }
@@ -156,9 +155,6 @@ body:not([data-auth-state="authenticated"]) [data-auth-protected] {
 .auth-back { padding: 0 6px; background: transparent; color: var(--green); font-size: 0.78rem; }
 .auth-back { display: block; margin: 8px auto -8px; }
 
-.auth-divider { display: flex; align-items: center; gap: 10px; margin: 9px 0; color: var(--muted-2); font-size: 0.72rem; }
-.auth-divider::before,
-.auth-divider::after { content: ""; height: 0.5px; flex: 1; background: var(--separator-soft); }
 .auth-description { margin: 0 0 14px; color: var(--muted); font-size: 0.8rem; }
 .auth-description strong { color: var(--text); }
 

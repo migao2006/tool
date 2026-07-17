@@ -2,7 +2,7 @@ import {
   authTitles,
   createAccountEntryMarkup,
   createAuthDialogMarkup,
-} from "./auth-template.js?v=auth-2";
+} from "./auth-template.js?v=auth-3";
 
 export class AuthDialog {
   constructor(root, entryRoot) {
@@ -126,10 +126,6 @@ export class AuthDialog {
         const needsService = button.matches("[data-auth-submit]");
         button.disabled = this.busy || (needsService && !this.available);
       });
-  }
-
-  setPendingEmail(email) {
-    this.root.querySelector("[data-auth-pending-email]").textContent = email;
   }
 
   showMessage(message, tone = "info") {

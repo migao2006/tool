@@ -52,11 +52,11 @@ tests/            # 對應各模組的測試
 
 ## 登入與帳戶架構
 
-- 登入 UI 必須支援 Email＋密碼登入、建立帳號、Email 六位數驗證碼登入、忘記密碼、設定新密碼與登出。
+- 登入方式只允許 Email＋密碼；UI 必須支援登入、建立帳號、忘記密碼、設定新密碼與登出。
 - 登入介面使用獨立元件、流程控制、服務層與專用樣式，不得塞入既有 `app.js` 或主樣式檔。
-- Supabase 負責帳戶、驗證、Session 與密碼重設；Resend 只透過 Supabase Custom SMTP 發信，瀏覽器不得直接呼叫 Resend。
-- 前端只能使用 Supabase publishable key；`service_role`、secret key、Resend API key 與 SMTP 密碼禁止寫入前端、Git 或公開部署檔案。
-- Email OTP 範本必須使用 `{{ .Token }}`，並設定正確 Site URL、Redirect URL、OTP 有效期、寄送頻率限制與 CAPTCHA／防濫用措施。
+- Supabase 負責帳戶、Email 確認、Session、確認信與密碼重設；不得接入第三方寄信服務或另建驗證碼機制。
+- 前端只能使用 Supabase publishable key；`service_role` 與 secret key 禁止寫入前端、Git 或公開部署檔案。
+- 建立帳號使用 Supabase 確認連結，並設定正確 Site URL、Redirect URL、寄送頻率限制與 CAPTCHA／防濫用措施。
 - 自選股、持倉與其他個人資料必須在登入後才能存取；資料表必須啟用 RLS，政策需以 `auth.uid()` 驗證資料擁有者。
 - 登入服務尚未連接或設定不完整時，UI 必須明確顯示不可用原因並停用提交，不得模擬登入成功或寄信成功。
 

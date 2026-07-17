@@ -1,8 +1,8 @@
-import { AuthController } from "./auth-controller.js?v=auth-2";
-import { AuthDialog } from "../components/auth/auth-dialog.js?v=auth-2";
-import { publicConfig } from "../core/public-config.js?v=auth-2";
-import { createSupabaseClient } from "../data/supabase-client.js?v=auth-2";
-import { createAuthService } from "../features/auth/auth-service.js?v=auth-2";
+import { AuthController } from "./auth-controller.js?v=auth-3";
+import { AuthDialog } from "../components/auth/auth-dialog.js?v=auth-3";
+import { publicConfig } from "../core/public-config.js?v=auth-3";
+import { createSupabaseClient } from "../data/supabase-client.js?v=auth-3";
+import { createAuthService } from "../features/auth/auth-service.js?v=auth-3";
 
 function startAuth() {
   const root = document.querySelector("#auth-root");

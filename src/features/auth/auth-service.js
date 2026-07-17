@@ -21,17 +21,6 @@ export function createAuthService(client, redirectUrl) {
       });
     },
 
-    sendOtp(email) {
-      return client.auth.signInWithOtp({
-        email,
-        options: { shouldCreateUser: true },
-      });
-    },
-
-    verifyOtp(email, token) {
-      return client.auth.verifyOtp({ email, token, type: "email" });
-    },
-
     sendPasswordReset(email) {
       return client.auth.resetPasswordForEmail(email, { redirectTo: redirectUrl });
     },

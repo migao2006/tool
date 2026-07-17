@@ -1091,6 +1091,12 @@ try {
   assert.match(generator, /path==="\/v20\.js"/);
   assert.ok((sw.match(/if\(response\.ok\)/g) || []).length >= 3,
     "the service worker must never cache maintenance or other non-success responses");
+  assert.match(sw, /Promise\.allSettled\(STATIC\.map/,
+    "maintenance responses must not make the whole service-worker install fail");
+  assert.doesNotMatch(sw, /cache\.addAll\(STATIC\)/,
+    "one unavailable precache URL must not delay the client update");
+  assert.match(sw, /url\.pathname===HOME_SNAPSHOT_PATH[\s\S]*cache\.match\(HOME_SNAPSHOT_URL\)[\s\S]*event\.waitUntil\(refresh\.catch/,
+    "the home read model must render the last successful snapshot while refreshing in the background");
   assert.equal(JSON.parse(manifest).start_url.includes(`v=${assetVersion}`), true);
 
   console.log("v20 API/UI contract: passed");

@@ -45,6 +45,7 @@ const artifactIdentitySource = await readFile(
   new URL("../supabase/functions/_shared/v20-model-artifact.js", import.meta.url),
   "utf8",
 );
+const appVersion = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8")).version;
 assert.match(artifactIdentitySource, new RegExp(`V20_MODEL_ARTIFACT_HASH = "${artifactHash}"`),
   "the Edge worker must publish the exact registered model bundle identity");
 assert.match(modelMigration, /'engine', 'transparent_rule_baseline'/);
@@ -99,8 +100,8 @@ assert.match(admin, /const modelObservability = payload\.modelObservability \|\|
   "missing observability data must degrade safely");
 assert.match(admin, /if \(!channel \|\| typeof channel !== 'object'\)/,
   "an unconfigured Champion or Challenger must render a safe empty state");
-assert.match(adminHtml, /admin\.js\?v=20\.1\.2/);
-assert.match(adminHtml, /styles\.css\?v=20\.1\.2/);
+assert.match(adminHtml, new RegExp(`admin\\.js\\?v=${appVersion.replaceAll(".", "\\.")}`));
+assert.match(adminHtml, new RegExp(`styles\\.css\\?v=${appVersion.replaceAll(".", "\\.")}`));
 
 assert.match(sharedSource, /JSON\.stringify\(\{ service: "twss-v20-api", \.\.\.payload \}\)/);
 assert.match(sharedSource, /msg: "start"/);

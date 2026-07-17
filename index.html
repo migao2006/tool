@@ -11,10 +11,13 @@
     <title>Alpha Lens｜台股短波段預測</title>
     <script src="./src/vendor/sentry-10.66.0.min.js" defer></script>
     <script src="./src/monitoring/sentry.js" defer></script>
+    <script src="./src/vendor/supabase-2.110.7.min.js" defer></script>
     <link rel="stylesheet" href="./styles.css?v=ios-1" />
+    <link rel="stylesheet" href="./src/styles/auth.css?v=auth-1" />
     <script src="./app.js?v=ios-1" defer></script>
+    <script type="module" src="./src/auth/bootstrap.js?v=auth-1"></script>
   </head>
-  <body>
+  <body data-auth-state="pending">
     <a class="skip-link" href="#app-content">跳到主要內容</a>
 
     <header class="topbar">
@@ -32,6 +35,7 @@
           </div>
           <span class="date-badge">資料日期：尚未提供</span>
         </div>
+        <div id="auth-entry" class="auth-entry" aria-live="polite"></div>
 
         <section class="summary-grid" aria-label="市場摘要">
           <article class="summary-card market-card">
@@ -252,6 +256,8 @@
         </section>
       </section>
     </main>
+
+    <div id="auth-root"></div>
 
     <nav class="bottom-nav" aria-label="主要導覽">
       <button type="button" class="is-active" data-route="home" aria-current="page">

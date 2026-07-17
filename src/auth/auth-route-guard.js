@@ -1,4 +1,4 @@
-const protectedSelector = '[data-route="watchlist"], .watch-button';
+const protectedSelector = ".watch-button, [data-auth-required]";
 
 function blockedReason(state) {
   if (!state.available) return "unavailable";
@@ -20,10 +20,4 @@ export function installAuthRouteGuard(getState, onBlocked) {
     },
     true,
   );
-}
-
-export function guardInitialProtectedRoute(state, onBlocked) {
-  if (state.user || window.location.hash !== "#watchlist") return;
-  document.querySelector('.bottom-nav [data-route="home"]')?.click();
-  onBlocked(blockedReason(state));
 }

@@ -1,12 +1,34 @@
 .auth-entry {
-  min-height: 44px;
-  display: flex;
-  justify-content: flex-end;
-  margin: -8px 2px 12px;
+  margin: -2px 0 12px;
 }
 
-body[data-auth-state="pending"] [data-page="watchlist"] {
-  visibility: hidden;
+body:not([data-auth-state="authenticated"]) [data-auth-protected] {
+  display: none !important;
+}
+
+.auth-entry-card {
+  min-height: 72px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 13px 14px;
+  border: 0.5px solid var(--separator-soft);
+  border-radius: var(--radius-lg);
+  background: rgba(28, 28, 30, 0.91);
+}
+
+.auth-entry-copy { min-width: 0; }
+.auth-entry-copy strong,
+.auth-entry-copy small { display: block; }
+.auth-entry-copy strong { font-size: 0.9rem; }
+.auth-entry-copy small {
+  margin-top: 3px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.7rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .auth-account-button,

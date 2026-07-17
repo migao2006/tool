@@ -13,9 +13,9 @@
     <script src="./src/monitoring/sentry.js" defer></script>
     <script src="./src/vendor/supabase-2.110.7.min.js" defer></script>
     <link rel="stylesheet" href="./styles.css?v=ios-1" />
-    <link rel="stylesheet" href="./src/styles/auth.css?v=auth-1" />
+    <link rel="stylesheet" href="./src/styles/auth.css?v=auth-2" />
     <script src="./app.js?v=ios-1" defer></script>
-    <script type="module" src="./src/auth/bootstrap.js?v=auth-1"></script>
+    <script type="module" src="./src/auth/bootstrap.js?v=auth-2"></script>
   </head>
   <body data-auth-state="pending">
     <a class="skip-link" href="#app-content">跳到主要內容</a>
@@ -35,8 +35,6 @@
           </div>
           <span class="date-badge">資料日期：尚未提供</span>
         </div>
-        <div id="auth-entry" class="auth-entry" aria-live="polite"></div>
-
         <section class="summary-grid" aria-label="市場摘要">
           <article class="summary-card market-card">
             <span>市場狀態</span>
@@ -228,13 +226,14 @@
           </div>
           <span class="date-badge">更新：—</span>
         </div>
+        <div id="auth-entry" class="auth-entry" aria-live="polite"></div>
 
-        <div class="segmented two-up" data-segment="watch-mode" aria-label="自選股內容">
+        <div class="segmented two-up" data-auth-protected data-segment="watch-mode" aria-label="自選股內容">
           <button type="button" class="is-active" data-value="watchlist" aria-pressed="true">自選清單</button>
           <button type="button" data-value="portfolio" aria-pressed="false">我的持倉</button>
         </div>
 
-        <section class="panel watch-panel" data-watch-view="watchlist" aria-labelledby="watch-list-heading">
+        <section class="panel watch-panel" data-auth-protected data-watch-view="watchlist" aria-labelledby="watch-list-heading">
           <div class="panel-heading"><h2 id="watch-list-heading">自選清單</h2><span class="count-badge">0 檔</span></div>
           <div class="watch-columns" aria-hidden="true"><span>股票</span><span>最新排名</span><span>機率變化</span><span>預期報酬</span><span>警示</span></div>
           <div class="large-empty-state">
@@ -245,7 +244,7 @@
           </div>
         </section>
 
-        <section class="panel watch-panel" data-watch-view="portfolio" aria-labelledby="portfolio-heading" hidden>
+        <section class="panel watch-panel" data-auth-protected data-watch-view="portfolio" aria-labelledby="portfolio-heading" hidden>
           <div class="panel-heading"><h2 id="portfolio-heading">我的持倉</h2><span class="count-badge">0 檔</span></div>
           <div class="watch-columns portfolio-columns" aria-hidden="true"><span>股票</span><span>持有成本</span><span>損益</span><span>風險狀態</span></div>
           <div class="large-empty-state">

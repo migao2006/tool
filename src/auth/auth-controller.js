@@ -1,8 +1,5 @@
-import { friendlyAuthError } from "../features/auth/auth-errors.js";
-import {
-  guardInitialProtectedRoute,
-  installAuthRouteGuard,
-} from "./auth-route-guard.js";
+import { friendlyAuthError } from "../features/auth/auth-errors.js?v=auth-2";
+import { installAuthRouteGuard } from "./auth-route-guard.js?v=auth-2";
 
 export class AuthController {
   constructor(dialog, service) {
@@ -25,9 +22,6 @@ export class AuthController {
     if (!this.service) {
       this.dialog.setAvailable(false);
       this.setReady(true);
-      guardInitialProtectedRoute(this.authState(), (reason) =>
-        this.showBlockedReason(reason),
-      );
       return;
     }
 
@@ -45,9 +39,6 @@ export class AuthController {
       this.applyUser(data.session?.user ?? null);
       this.setReady(true);
       this.handleRecoveryRedirect();
-      guardInitialProtectedRoute(this.authState(), (reason) =>
-        this.showBlockedReason(reason),
-      );
     } catch (error) {
       this.setReady(true);
       this.dialog.showMessage(friendlyAuthError(error), "error");

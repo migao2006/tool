@@ -10,10 +10,16 @@ export const authTitles = Object.freeze({
 
 export function createAccountEntryMarkup() {
   return `
-    <button class="auth-account-button" type="button" data-auth-open aria-haspopup="dialog">
-      <span class="auth-account-icon" aria-hidden="true"></span>
-      <span data-auth-account-label>登入</span>
-    </button>`;
+    <div class="auth-entry-card">
+      <div class="auth-entry-copy">
+        <strong data-auth-entry-title>登入後使用自選股</strong>
+        <small data-auth-entry-detail>同步自選清單、持倉與模型警示</small>
+      </div>
+      <button class="auth-account-button" type="button" data-auth-open aria-haspopup="dialog">
+        <span class="auth-account-icon" aria-hidden="true"></span>
+        <span data-auth-account-label>登入</span>
+      </button>
+    </div>`;
 }
 
 export function createAuthDialogMarkup() {

@@ -1,4 +1,7 @@
-import { hasSupabaseConfig, publicConfig } from "../core/public-config.js";
+import {
+  hasSupabaseConfig,
+  publicConfig,
+} from "../core/public-config.js?v=auth-2";
 
 let client;
 

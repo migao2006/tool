@@ -2,7 +2,7 @@ import {
   authTitles,
   createAccountEntryMarkup,
   createAuthDialogMarkup,
-} from "./auth-template.js";
+} from "./auth-template.js?v=auth-2";
 
 export class AuthDialog {
   constructor(root, entryRoot) {
@@ -97,7 +97,11 @@ export class AuthDialog {
     this.user = user;
     const label = this.entryRoot.querySelector("[data-auth-account-label]");
     const button = this.entryRoot.querySelector("[data-auth-open]");
+    const title = this.entryRoot.querySelector("[data-auth-entry-title]");
+    const detail = this.entryRoot.querySelector("[data-auth-entry-detail]");
     label.textContent = user ? "帳戶" : "登入";
+    title.textContent = user ? "帳戶已連接" : "登入後使用自選股";
+    detail.textContent = user?.email ?? "同步自選清單、持倉與模型警示";
     button.setAttribute("aria-label", user ? "開啟帳戶" : "開啟登入");
     this.root.querySelector("[data-auth-account-email]").textContent =
       user?.email ?? "—";

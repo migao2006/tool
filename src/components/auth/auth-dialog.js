@@ -2,7 +2,7 @@ import {
   authTitles,
   createAccountEntryMarkup,
   createAuthDialogMarkup,
-} from "./auth-template.js?v=auth-4";
+} from "./auth-template.js?v=auth-5";
 
 export class AuthDialog {
   constructor(root, entryRoot) {

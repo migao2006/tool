@@ -1,7 +1,13 @@
 export function friendlyAuthError(error) {
+  const code = error?.code ?? "";
   const message = error?.message ?? "";
   if (/password mismatch/i.test(message)) return "兩次輸入的密碼不一致。";
-  if (/invalid login credentials/i.test(message)) return "Email 或密碼不正確。";
+  if (code === "email_not_confirmed" || /email not confirmed/i.test(message)) {
+    return "Email 尚未完成確認，請先開啟確認信中的連結。";
+  }
+  if (code === "invalid_credentials" || /invalid login credentials/i.test(message)) {
+    return "Email 或密碼不正確。";
+  }
   if (/rate limit/i.test(message)) return "操作太頻繁，請稍後再試。";
   if (/already registered/i.test(message)) return "此 Email 已建立帳號。";
   if (/expired|invalid.*token/i.test(message)) return "確認連結已失效。";

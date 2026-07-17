@@ -1,7 +1,7 @@
 import {
   hasSupabaseConfig,
   publicConfig,
-} from "../core/public-config.js?v=auth-4";
+} from "../core/public-config.js?v=auth-5";
 
 let client;
 

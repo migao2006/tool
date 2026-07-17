@@ -1,5 +1,5 @@
-import { friendlyAuthError } from "../features/auth/auth-errors.js?v=auth-4";
-import { installAuthRouteGuard } from "./auth-route-guard.js?v=auth-4";
+import { friendlyAuthError } from "../features/auth/auth-errors.js?v=auth-5";
+import { installAuthRouteGuard } from "./auth-route-guard.js?v=auth-5";
 
 export class AuthController {
   constructor(dialog, service) {

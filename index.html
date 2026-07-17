@@ -20,12 +20,11 @@
         <span class="brand-mark" aria-hidden="true">AL</span>
         <span>
           <strong>Alpha Lens</strong>
-          <small>台股短波段決策台</small>
         </span>
       </div>
       <div class="topbar-meta">
         <span class="status-dot" aria-hidden="true"></span>
-        <span>UI 預覽模式</span>
+        <span>UI 預覽</span>
         <span class="meta-divider" aria-hidden="true"></span>
         <span>資料日期：尚未提供</span>
       </div>
@@ -34,11 +33,8 @@
     <main id="main-content" class="shell">
       <section class="hero" aria-labelledby="page-title">
         <div>
-          <p class="eyebrow">CROSS-SECTIONAL ALPHA WORKSPACE</p>
-          <h1 id="page-title">找出相對強勢，而不是猜明天股價。</h1>
-          <p class="hero-copy">
-            以超額報酬排名、成本後方向機率、報酬分布與風險，整理 2、3、5、10 個交易日的決策資訊。
-          </p>
+          <h1 id="page-title">找出相對強勢標的</h1>
+          <p class="hero-copy">超額報酬排名、方向機率、報酬區間與風險。</p>
         </div>
         <div class="hero-actions" aria-label="資料狀態">
           <span class="pill pill-muted">模型版本：尚未提供</span>
@@ -49,28 +45,24 @@
       <section class="market-strip" aria-label="市場狀態摘要">
         <article class="market-regime">
           <div>
-            <span class="section-kicker">MARKET REGIME</span>
             <h2>市場狀態</h2>
           </div>
           <div class="regime-value">
             <strong>尚無資料</strong>
-            <span>等待市場模型輸入</span>
+            <span>等待資料</span>
           </div>
         </article>
         <article class="metric-tile">
           <span>建議曝險</span>
           <strong>—</strong>
-          <small>依市場狀態動態調整</small>
         </article>
         <article class="metric-tile">
           <span>預期波動</span>
           <strong>—</strong>
-          <small>尚未取得風險預測</small>
         </article>
         <article class="metric-tile">
           <span>資料完整度</span>
           <strong>—</strong>
-          <small>資料源尚未連接</small>
         </article>
       </section>
 
@@ -78,7 +70,6 @@
         <aside class="ranking-panel" aria-labelledby="ranking-title">
           <div class="panel-heading">
             <div>
-              <span class="section-kicker">ALPHA RANKING</span>
               <h2 id="ranking-title">超額報酬排名</h2>
             </div>
             <span class="count-badge" id="ranking-count">Top 20</span>
@@ -127,14 +118,14 @@
             </div>
             <div class="empty-state compact" role="row">
               <span class="empty-icon" aria-hidden="true">↗</span>
-              <strong>尚無可排名資料</strong>
-              <p>資料與模型尚未連接，因此不顯示推估名單。</p>
+              <strong>尚無排名資料</strong>
+              <p>資料與模型尚未連接。</p>
             </div>
           </div>
 
           <div class="panel-note">
             <span aria-hidden="true">i</span>
-            <p>低流動性、處置、全額交割、停止買賣與資料不足標的將在推薦前排除。</p>
+            <p>低流動性與異常標的將排除。</p>
           </div>
         </aside>
 
@@ -143,7 +134,6 @@
             <div class="stock-identity">
               <span class="stock-avatar" aria-hidden="true">—</span>
               <div>
-                <span class="section-kicker">SELECTED SECURITY</span>
                 <h2 id="stock-title">尚未選擇股票</h2>
                 <p id="detail-context">上市 · 5 個交易日預測</p>
               </div>
@@ -158,22 +148,18 @@
             <article class="score-card accent-card">
               <span>Alpha Score</span>
               <strong>—</strong>
-              <small>預期超額報酬排名分數</small>
             </article>
             <article class="score-card">
               <span>全市場百分位</span>
               <strong>—</strong>
-              <small>尚無全市場比較資料</small>
             </article>
             <article class="score-card">
               <span>同產業排名</span>
               <strong>—</strong>
-              <small>尚無產業分類資料</small>
             </article>
             <article class="score-card">
               <span>預期超額報酬</span>
               <strong>—</strong>
-              <small>尚無對應基準資料</small>
             </article>
           </div>
 
@@ -181,7 +167,6 @@
             <article class="data-card probability-card">
               <div class="card-title-row">
                 <div>
-                  <span class="section-kicker">DIRECTION</span>
                   <h3>成本後方向機率</h3>
                 </div>
                 <span class="confidence">信心：尚未提供</span>
@@ -208,7 +193,6 @@
             <article class="data-card distribution-card">
               <div class="card-title-row">
                 <div>
-                  <span class="section-kicker">RETURN RANGE</span>
                   <h3>報酬分布</h3>
                 </div>
                 <span class="muted-label">預測區間：—</span>
@@ -229,7 +213,6 @@
             <article class="data-card risk-card">
               <div class="card-title-row">
                 <div>
-                  <span class="section-kicker">RISK MAP</span>
                   <h3>風險概況</h3>
                 </div>
                 <span class="risk-grade">風險等級：—</span>
@@ -247,7 +230,6 @@
             <article class="data-card path-card">
               <div class="card-title-row">
                 <div>
-                  <span class="section-kicker">TRADE PATH</span>
                   <h3>交易路徑</h3>
                 </div>
                 <span class="muted-label">建議持有：—</span>
@@ -259,7 +241,7 @@
               </div>
               <div class="unavailable-callout">
                 <span aria-hidden="true">⌁</span>
-                <p>Triple Barrier 路徑模型尚未啟用，此區不提供推估數字。</p>
+                <p>路徑模型尚未啟用。</p>
               </div>
             </article>
           </div>
@@ -268,37 +250,21 @@
             <article>
               <span>資料完整度</span>
               <strong>—</strong>
-              <small>資料源尚未連接</small>
             </article>
             <article>
               <span>模型可信度</span>
               <strong>尚未評估</strong>
-              <small>需完成樣本外驗證</small>
             </article>
             <article>
               <span>預測失效條件</span>
               <strong>尚未定義</strong>
-              <small>需由正式模型與風控規則提供</small>
             </article>
           </div>
         </section>
       </section>
 
-      <section class="methodology" aria-labelledby="method-title">
-        <div>
-          <span class="section-kicker">DECISION STANDARD</span>
-          <h2 id="method-title">這個介面如何支援決策</h2>
-        </div>
-        <div class="method-grid">
-          <article><span>01</span><h3>先看排名</h3><p>比較股票相對市場或產業基準的超額報酬潛力。</p></article>
-          <article><span>02</span><h3>再看機率</h3><p>交易成本後沒有足夠優勢時，明確輸出中性與不交易。</p></article>
-          <article><span>03</span><h3>檢查區間</h3><p>以 P10、P50、P90 理解不確定性，不使用精確股價作為核心預測。</p></article>
-          <article><span>04</span><h3>控制風險</h3><p>用波動、MAE、MFE、流動性與市場曝險調整最終決策。</p></article>
-        </div>
-      </section>
-
       <footer class="footer">
-        <p>本頁僅為 UI 介面，尚未連接正式資料或模型，不構成投資建議，也不保證獲利。</p>
+        <p>僅供介面預覽，不構成投資建議。</p>
         <span>Alpha Lens · UI v0.1</span>
       </footer>
     </main>

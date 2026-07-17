@@ -308,12 +308,13 @@ assert.equal(missingTurnoverBaseline.regime_score, 82.35,
   "the missing 15% turnover factor must be removed and remaining weights renormalized");
 assert.ok(missingTurnoverBaseline.degraded_sources.includes("turnover_baseline"));
 
-const [workerSource, migration, incrementalMigration, staleQueueMigration, verifiableMigration] = await Promise.all([
+const [workerSource, migration, incrementalMigration, staleQueueMigration, verifiableMigration, championWakeMigration] = await Promise.all([
   readFile(new URL("../supabase/functions/twss-v20-model/index.ts", import.meta.url), "utf8"),
   readFile(new URL("../supabase/migrations/20260716021553_add_v20_quant_models.sql", import.meta.url), "utf8"),
   readFile(new URL("../supabase/migrations/20260716131155_v20_incremental_dirty_queue.sql", import.meta.url), "utf8"),
   readFile(new URL("../supabase/migrations/20260717025202_supersede_stale_v20_dirty_queue.sql", import.meta.url), "utf8"),
   readFile(new URL("../supabase/migrations/20260716173332_verifiable_opportunity_snapshots.sql", import.meta.url), "utf8"),
+  readFile(new URL("../supabase/migrations/20260717094000_wake_v20_on_champion_release.sql", import.meta.url), "utf8"),
 ]);
 assert.doesNotMatch(workerSource, /latestGroupDates\(\)/);
 assert.match(workerSource, /loadSourceReadiness\(\)/);
@@ -415,6 +416,12 @@ assert.match(staleQueueMigration, /perform public\.twss_supersede_stale_v20_dirt
 assert.match(staleQueueMigration, /q\.data_date = v_cycle_date/);
 assert.match(staleQueueMigration, /q\.model_version = v_model_version/,
   "the cron due check must ignore obsolete model versions");
+assert.match(championWakeMigration, /v_state_model_version is distinct from v_champion_model_version/,
+  "a Champion promotion must wake the worker without waiting for a new trading date");
+assert.match(championWakeMigration, /q\.model_version = v_active_model_version/,
+  "dirty work must follow the active Champion version after promotion");
+assert.match(championWakeMigration, /s\.status in \('error', 'partial'\)/,
+  "a retryable partial publication must not become permanently dormant");
 assert.match(verifiableMigration, /create or replace function public\.twss_v20_publish_recommendation_run/);
 assert.match(verifiableMigration, /create or replace function public\.twss_v20_signal_data_cutoff/);
 assert.match(verifiableMigration, /max\(greatest\(s\.generated_at, s\.updated_at\)\)/);

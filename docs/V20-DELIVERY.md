@@ -37,6 +37,7 @@ v20.2 的關鍵 MARKET migration：
 - `supabase/migrations/20260716174105_operational_maintenance_control.sql`：維護狀態、Cron 精確暫停／恢復與稽核事件。
 - `supabase/migrations/20260717083846_add_v20_medium_blend_rankings.sql`：不可變 10／20／40 日中期綜合排名與 keyset 分頁。
 - `supabase/migrations/20260717090140_register_v20_2_model_release.sql`：v20.2 正確性修補的 Champion／Challenger 發布與回滾軌跡。
+- `supabase/migrations/20260717094000_wake_v20_on_champion_release.sql`：Champion 版本切換與可重試 partial 狀態會喚醒 Worker，不必等待下一個交易日。
 
 目前 repository 的歷史 migration 仍包含早期 CORE 與 MARKET 檔案；因此不得直接對任一 linked project 執行未檢查的 `db push --include-all`。部署者必須使用獨立目標清單或先完成 migration history reconciliation。
 

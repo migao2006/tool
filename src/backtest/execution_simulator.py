@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 from enum import Enum
+from math import isfinite
+from numbers import Integral
 from typing import Callable, Mapping, Sequence
 
 
@@ -33,14 +35,17 @@ class MarketBar:
     closing_executable_volume_shares: float | None = None
 
     def __post_init__(self) -> None:
+        price_fields = (self.open_price, self.close_price)
         volume_fields = (
             self.volume_shares,
             self.counterparty_volume_shares,
             self.opening_executable_volume_shares,
             self.closing_executable_volume_shares,
         )
-        if any(value is not None and value < 0 for value in volume_fields):
-            raise ValueError("market-bar volumes cannot be negative")
+        if any(value is not None and (not isfinite(value) or value <= 0) for value in price_fields):
+            raise ValueError("market-bar prices must be finite and positive when provided")
+        if any(value is not None and (not isfinite(value) or value < 0) for value in volume_fields):
+            raise ValueError("market-bar volumes must be finite and non-negative")
 
 
 @dataclass(frozen=True)
@@ -52,8 +57,12 @@ class Order:
     quantity_shares: int
 
     def __post_init__(self) -> None:
-        if self.quantity_shares <= 0:
-            raise ValueError("order quantity must be positive")
+        if (
+            isinstance(self.quantity_shares, bool)
+            or not isinstance(self.quantity_shares, Integral)
+            or self.quantity_shares <= 0
+        ):
+            raise ValueError("order quantity must be a positive integer share count")
         if self.expected_execution_date <= self.signal_date:
             raise ValueError("signals cannot execute on the same or an earlier trading date")
 
@@ -64,6 +73,11 @@ class ExecutionCost:
     tax: float
     slippage: float
     market_impact: float
+
+    def __post_init__(self) -> None:
+        values = (self.commission, self.tax, self.slippage, self.market_impact)
+        if any(not isfinite(value) or value < 0 for value in values):
+            raise ValueError("execution costs must be finite and non-negative")
 
     @property
     def total(self) -> float:
@@ -92,14 +106,19 @@ class CompanyAction:
     cash_dividend_per_share: float = 0.0
 
     def __post_init__(self) -> None:
-        if self.share_factor <= 0 or self.cash_dividend_per_share < 0:
+        if (
+            not isfinite(self.share_factor)
+            or not isfinite(self.cash_dividend_per_share)
+            or self.share_factor <= 0
+            or self.cash_dividend_per_share < 0
+        ):
             raise ValueError("company-action factors must be valid")
 
 
 class CashLedger:
     def __init__(self, initial_cash: float) -> None:
-        if initial_cash < 0:
-            raise ValueError("initial cash cannot be negative")
+        if not isfinite(initial_cash) or initial_cash < 0:
+            raise ValueError("initial cash must be finite and non-negative")
         self.settled_cash = float(initial_cash)
         self.unsettled_receivables: list[tuple[date, float]] = []
 
@@ -113,12 +132,16 @@ class CashLedger:
         self.unsettled_receivables = remaining
 
     def debit(self, amount: float) -> bool:
+        if not isfinite(amount) or amount < 0:
+            raise ValueError("cash debit must be finite and non-negative")
         if amount > self.settled_cash:
             return False
         self.settled_cash -= amount
         return True
 
     def credit_unsettled(self, settlement_date: date, amount: float) -> None:
+        if not isfinite(amount) or amount < 0:
+            raise ValueError("unsettled cash amount must be finite and non-negative")
         self.unsettled_receivables.append((settlement_date, amount))
 
 

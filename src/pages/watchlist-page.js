@@ -8,7 +8,7 @@ export function createWatchlistPage({ horizon }) {
     <section class="app-page" data-page="watchlist" data-horizon="${horizon}" aria-labelledby="watchlist-title" hidden>
       <div class="page-heading">
         <div><span class="eyebrow">僅追蹤，不重新計算排名</span><h1 id="watchlist-title">自選股</h1></div>
-        <span class="date-badge">資料日期 <small>as_of_date</small>：<span data-watchlist-date>—</span></span>
+        <span class="date-badge"><small>資料日期 · as_of_date</small><span data-watchlist-date>—</span></span>
       </div>
       <div id="auth-entry" class="auth-entry" aria-live="polite"></div>
       <div data-auth-protected>

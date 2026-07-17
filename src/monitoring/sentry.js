@@ -49,10 +49,9 @@
 
   sentry.init({
     dsn,
-    environment:
-      global.location.hostname === "tool-dun-psi.vercel.app"
-        ? "production"
-        : "development",
+    environment: /^(?:localhost|127\.0\.0\.1)$/u.test(global.location.hostname)
+      ? "development"
+      : "production",
     sendDefaultPii: false,
     sampleRate: 1,
     tracesSampleRate: 0,

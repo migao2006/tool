@@ -6,12 +6,13 @@ import { initializeWatchlistFilters } from "./src/features/watchlist-filters.js"
 import { CURRENT_HORIZON } from "./src/core/five-day-contract.js";
 import { createRouter } from "./src/core/router.js";
 import { UI_STATE, applyUiState, resolveSnapshotUiState } from "./src/core/ui-state.js";
-import { loadPredictionSnapshot } from "./src/data/prediction-api.js";
-import { createUnavailableSnapshot } from "./src/data/prediction-contract.js";
-import { createCandidatesPage, renderCandidatesPage } from "./src/pages/candidates-page.js";
-import { createOverviewPage, renderOverviewPage } from "./src/pages/overview-page.js";
-import { createStockDetailPage, renderStockDetailPage } from "./src/pages/stock-detail-page.js";
-import { createWatchlistPage, renderWatchlistPage } from "./src/pages/watchlist-page.js";
+import { loadPredictionSnapshot } from "./src/data/prediction-api.js?v=api-4";
+import { createUnavailableSnapshot } from "./src/data/prediction-contract.js?v=api-4";
+import { setWatchlistMembership } from "./src/data/watchlist-api.js?v=api-3";
+import { createCandidatesPage, renderCandidatesPage } from "./src/pages/candidates-page.js?v=ui-3";
+import { createOverviewPage, renderOverviewPage } from "./src/pages/overview-page.js?v=ui-3";
+import { createStockDetailPage, renderStockDetailPage } from "./src/pages/stock-detail-page.js?v=ui-3";
+import { createWatchlistPage, renderWatchlistPage } from "./src/pages/watchlist-page.js?v=ui-3";
 
 const appRoot = document.querySelector("#app-content");
 const navigationRoot = document.querySelector("#navigation-root");
@@ -28,6 +29,7 @@ if (appRoot && navigationRoot) {
   const router = createRouter();
   let currentSnapshot = null;
   let selectedSymbol = null;
+  let watchlistSymbols = new Set();
   let requestController = null;
   const candidateFilters = initializeCandidateFilters({
     onChange: (filters) => {
@@ -42,6 +44,7 @@ if (appRoot && navigationRoot) {
 
   function renderSnapshot(snapshot, uiState) {
     currentSnapshot = snapshot;
+    watchlistSymbols = new Set((snapshot.watchlist ?? []).map((record) => record.symbol));
     candidateFilters.setRecords(snapshot.candidates ?? []);
     renderOverviewPage(snapshot, uiState);
     renderCandidatesPage(snapshot, uiState, candidateFilters.getFilters());
@@ -49,7 +52,7 @@ if (appRoot && navigationRoot) {
     if (selectedSymbol) {
       const selected = [...(snapshot.predictions ?? []), ...(snapshot.watchlist ?? [])]
         .find((record) => record.symbol === selectedSymbol);
-      if (selected) renderStockDetailPage(selected);
+      if (selected) renderStockDetailPage(selected, { isWatchlisted: watchlistSymbols.has(selected.symbol) });
     }
   }
 
@@ -68,7 +71,10 @@ if (appRoot && navigationRoot) {
       renderSnapshot(snapshot, uiState);
     } catch (error) {
       if (error?.name === "AbortError") return;
-      const snapshot = createUnavailableSnapshot({ status: "FAIL", reasonCode: "PREDICTION_API_REQUEST_FAILED" });
+      const snapshot = createUnavailableSnapshot({
+        status: "FAIL",
+        reasonCode: error?.code ?? "PREDICTION_API_REQUEST_FAILED",
+      });
       applyUiState(UI_STATE.API_ERROR);
       renderSnapshot(snapshot, UI_STATE.API_ERROR);
       globalThis.Sentry?.captureException?.(error);
@@ -86,8 +92,29 @@ if (appRoot && navigationRoot) {
       .find((record) => record.symbol === button.dataset.symbol);
     if (!prediction) return;
     selectedSymbol = prediction.symbol;
-    renderStockDetailPage(prediction);
+    renderStockDetailPage(prediction, { isWatchlisted: watchlistSymbols.has(prediction.symbol) });
     router.show("stock");
   });
+  document.addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-toggle-watchlist][data-symbol]");
+    if (!button || button.disabled) return;
+    const symbol = button.dataset.symbol;
+    const selected = button.getAttribute("aria-pressed") !== "true";
+    const feedback = document.querySelector("[data-watchlist-feedback]");
+    button.disabled = true;
+    if (feedback) feedback.textContent = selected ? "正在加入自選股…" : "正在移出自選股…";
+    try {
+      await setWatchlistMembership({ symbol, selected });
+      await refreshSnapshot();
+      const refreshedFeedback = document.querySelector("[data-watchlist-feedback]");
+      if (refreshedFeedback) refreshedFeedback.textContent = selected ? "已加入自選股。" : "已移出自選股。";
+    } catch (error) {
+      if (feedback) feedback.textContent = error?.message ?? "無法更新自選股。";
+      globalThis.Sentry?.captureException?.(error);
+    } finally {
+      button.disabled = false;
+    }
+  });
+  globalThis.addEventListener("alpha-lens:auth-change", () => refreshSnapshot());
   refreshSnapshot();
 }

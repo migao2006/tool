@@ -23,7 +23,7 @@ export function createOverviewPage({ horizon }) {
       </section>
 
       <section class="panel" aria-labelledby="market-heading">
-        <div class="panel-heading"><div><span class="eyebrow">市場總曝險</span><h2 id="market-heading">市場判斷</h2></div><span class="data-state">尚無資料</span></div>
+        <div class="panel-heading"><div><span class="eyebrow">市場總曝險</span><h2 id="market-heading">市場判斷</h2></div><span class="data-state" data-market-state>尚無資料</span></div>
         <div class="market-probabilities" aria-label="市場方向機率">
           <div><span>上漲 UP</span><strong data-overview-field="market_p_up">—</strong></div><div><span>中性 NEUTRAL</span><strong data-overview-field="market_p_neutral">—</strong></div><div><span>下跌 DOWN</span><strong data-overview-field="market_p_down">—</strong></div>
         </div>
@@ -81,6 +81,14 @@ export function renderOverviewPage(snapshot, uiState) {
   setText(root, '[data-overview-field="model_version"]', snapshot.modelVersion);
   setText(root, '[data-overview-field="training_end_date"]', snapshot.trainingEndDate);
   setText(root, '[data-overview-field="cost_profile_version"]', snapshot.costProfileVersion);
+  const hasMarketOutput = [
+    snapshot.market.p_up,
+    snapshot.market.p_neutral,
+    snapshot.market.p_down,
+    snapshot.market.forecast_volatility,
+    snapshot.market.exposure_cap,
+  ].every(Number.isFinite) && Boolean(snapshot.market.regime);
+  setText(root, "[data-market-state]", hasMarketOutput ? "已更新" : "尚無資料");
   const counts = decisionCounts(snapshot);
   Object.entries(counts).forEach(([key, value]) => setText(root, `[data-overview-count="${key}"]`, value));
 

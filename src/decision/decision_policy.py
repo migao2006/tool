@@ -14,6 +14,18 @@ from ..calibration.status import (
 from ..core.horizon import require_production_horizon, require_supported_horizon
 
 
+DECISION_GATE_ORDER = (
+    "data_quality_hard_gate",
+    "tradability_gate",
+    "liquidity_capacity_gate",
+    "market_exposure_cap",
+    "calibrated_direction_probabilities",
+    "net_quantile_thresholds",
+    "rank_eligibility",
+    "position_capacity_limits",
+)
+
+
 class Decision(str, Enum):
     CANDIDATE = "CANDIDATE"
     WATCH = "WATCH"

@@ -5,6 +5,31 @@
   gap: 8px;
 }
 
+.date-badge { text-align: right; }
+.date-badge small,
+.date-badge > span { display: block; }
+.date-badge > span { margin-top: 2px; color: var(--text); font-weight: 620; }
+
+.candidate-filters { padding: 0; overflow: hidden; }
+.candidate-filters summary {
+  min-height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 14px;
+  cursor: pointer;
+  list-style: none;
+  font-size: 0.78rem;
+  font-weight: 650;
+}
+.candidate-filters summary::-webkit-details-marker { display: none; }
+.candidate-filters summary::after { content: "+"; color: var(--muted); font-size: 1rem; }
+.candidate-filters[open] summary::after { content: "−"; }
+.candidate-filters summary small { margin-left: auto; }
+.candidate-filter-content { padding: 0 14px 14px; border-top: 0.5px solid var(--separator-soft); }
+.candidate-filter-content > .segmented { margin-top: 14px; }
+
 .contract-meta > div,
 .decision-counts article {
   min-width: 0;
@@ -99,4 +124,5 @@
   .inline-fields { grid-template-columns: 1fr; }
   .watch-filters { display: flex; overflow-x: auto; scrollbar-width: none; }
   .watch-filters button { flex: 0 0 auto; min-width: 92px; }
+  .date-badge { max-width: none; white-space: nowrap; }
 }

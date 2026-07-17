@@ -36,6 +36,7 @@ def test_prediction_contract_rejects_probability_or_quantile_errors():
         as_of_date=date(2026, 7, 17),
         decision_at=datetime(2026, 7, 17, 6, 0, tzinfo=timezone.utc),
         symbol="TEST",
+        name="測試股票",
         market="LISTED",
         industry=None,
         horizon=5,

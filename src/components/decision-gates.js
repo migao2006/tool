@@ -1,14 +1,14 @@
 import { setText } from "../core/html.js";
 
 const GATES = Object.freeze([
-  ["data_quality", "資料品質 hard gate", "DATA_QUALITY_NOT_EVALUATED"],
-  ["tradability", "可交易性 gate", "TRADABILITY_NOT_EVALUATED"],
-  ["liquidity_capacity", "流動性與容量 gate", "CAPACITY_NOT_EVALUATED"],
-  ["market_exposure", "市場總曝險上限", "MARKET_EXPOSURE_NOT_AVAILABLE"],
-  ["direction", "校準後方向機率", "DIRECTION_MODEL_NOT_AVAILABLE"],
-  ["quantile", "淨報酬分位數門檻", "QUANTILE_MODEL_NOT_AVAILABLE"],
-  ["rank", "排名資格", "RANK_MODEL_NOT_AVAILABLE"],
-  ["position", "部位與容量限制", "POSITION_NOT_EVALUATED"],
+  ["data_quality_hard_gate", "資料品質 hard gate", "DATA_QUALITY_NOT_EVALUATED"],
+  ["tradability_gate", "可交易性 gate", "TRADABILITY_NOT_EVALUATED"],
+  ["liquidity_capacity_gate", "流動性與容量 gate", "CAPACITY_NOT_EVALUATED"],
+  ["market_exposure_cap", "市場總曝險上限", "MARKET_EXPOSURE_NOT_AVAILABLE"],
+  ["calibrated_direction_probabilities", "校準後方向機率", "DIRECTION_MODEL_NOT_AVAILABLE"],
+  ["net_quantile_thresholds", "淨報酬分位數門檻", "QUANTILE_MODEL_NOT_AVAILABLE"],
+  ["rank_eligibility", "排名資格", "RANK_MODEL_NOT_AVAILABLE"],
+  ["position_capacity_limits", "部位與容量限制", "POSITION_NOT_EVALUATED"],
 ]);
 
 export function createDecisionGates() {
@@ -23,6 +23,16 @@ export function createDecisionGates() {
   return `<ol class="decision-gates">${rows}</ol>`;
 }
 
+function formatGateValue(value) {
+  if (value === null || value === undefined || value === "") return null;
+  if (typeof value !== "object") return value;
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return "無法顯示";
+  }
+}
+
 export function renderDecisionGates(gates = []) {
   const root = document.querySelector(".decision-gates");
   if (!root) return;
@@ -34,7 +44,7 @@ export function renderDecisionGates(gates = []) {
     row?.classList.toggle("is-fail", gate?.passed === false);
     setText(row, ".gate-main code", gate?.reason_code ?? defaultReason);
     setText(row, "dd:nth-of-type(1)", gate?.passed === true ? "通過" : gate?.passed === false ? "未通過" : "未評估");
-    setText(row, "dl > div:nth-child(2) dd", gate?.actual);
-    setText(row, "dl > div:nth-child(3) dd", gate?.threshold);
+    setText(row, "dl > div:nth-child(2) dd", formatGateValue(gate?.actual));
+    setText(row, "dl > div:nth-child(3) dd", formatGateValue(gate?.threshold));
   });
 }

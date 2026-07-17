@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
+import pytest
+
 from src.backtest.execution_simulator import (
+    ExecutionCost,
     ExecutionSimulator,
     MarketBar,
     Order,
@@ -136,6 +139,18 @@ def test_limit_fill_requires_enough_confirmed_counterparty_volume() -> None:
     assert fill.reason_code == "LIMIT_LOCKED_INSUFFICIENT_COUNTERPARTY"
 
 
+@pytest.mark.parametrize("invalid_value", [float("nan"), float("inf"), float("-inf")])
+def test_execution_rejects_non_finite_market_and_cash_values(invalid_value: float) -> None:
+    with pytest.raises(ValueError, match="initial cash"):
+        ExecutionSimulator(initial_cash=invalid_value, trading_dates=_settlement_calendar())
+    with pytest.raises(ValueError, match="prices"):
+        MarketBar(date(2026, 1, 2), "2330", invalid_value, 100.0, 1_000_000)
+    with pytest.raises(ValueError, match="volumes"):
+        MarketBar(date(2026, 1, 2), "2330", 100.0, 100.0, invalid_value)
+    with pytest.raises(ValueError, match="execution costs"):
+        ExecutionCost(invalid_value, 0.0, 0.0, 0.0)
+
+
 def test_staggered_cohort_holds_five_exchange_dates_and_limits_daily_budget() -> None:
     dates = [date(2026, 1, 1) + timedelta(days=index) for index in range(10)]
     book = StaggeredCohortBook(dates, horizon=5)
@@ -143,8 +158,6 @@ def test_staggered_cohort_holds_five_exchange_dates_and_limits_daily_budget() ->
     cohort = book.open(dates[1], 100_000, {"2330": 1.0}, maximum_capital=100_000)
     assert cohort.exit_date == dates[5]
     assert book.due_to_close(dates[5]) == (cohort,)
-
-    import pytest
 
     with pytest.raises(ValueError, match="daily budget"):
         book.open(dates[2], 100_001, {"2330": 1.0}, maximum_capital=100_000)

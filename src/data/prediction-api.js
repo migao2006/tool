@@ -3,77 +3,62 @@ import {
   isReleasedHorizon,
   normalizeHorizon,
 } from "../core/five-day-contract.js";
-import { createUnavailableSnapshot, normalizePredictionSnapshot } from "./prediction-contract.js";
+import { publicConfig } from "../core/public-config.js?v=api-3";
+import {
+  PredictionApiError,
+  requestPredictionApi,
+  resolvePredictionApiBaseUrl,
+} from "./api-client.js?v=api-3";
+import { createUnavailableSnapshot, normalizePredictionSnapshot } from "./prediction-contract.js?v=api-4";
+import { readSupabaseAccessToken } from "./session-token.js?v=api-3";
 
-/**
- * @typedef {Object} PredictionRecord
- * @property {string|null} as_of_date
- * @property {string|null} decision_at
- * @property {string} symbol
- * @property {string|null} name
- * @property {string} market
- * @property {string} industry
- * @property {number} horizon
- * @property {number|null} rank_score
- * @property {number|null} global_rank
- * @property {number|null} industry_rank
- * @property {number|null} calibrated_p_up
- * @property {number|null} calibrated_p_neutral
- * @property {number|null} calibrated_p_down
- * @property {number|null} net_q10
- * @property {number|null} net_q50
- * @property {number|null} net_q90
- * @property {number|null} estimated_round_trip_cost
- * @property {string} data_quality_status
- * @property {string} decision
- * @property {string[]} reason_codes
- * @property {string|null} model_version
- * @property {string|null} feature_schema_hash
- * @property {string|null} cost_profile_version
- * @property {string|null} training_end_date
- */
+export { PredictionApiError };
 
-function getApiBaseUrl() {
-  return document.documentElement.dataset.predictionApiBaseUrl?.trim() ?? "";
-}
+const RESEARCH_SETTING_KEYS = Object.freeze([
+  "commission_discount",
+  "minimum_fee",
+  "estimated_order_notional_ntd",
+  "max_adv_participation",
+  "cost_profile",
+  "max_single_position",
+  "max_industry_position",
+  "max_market_exposure",
+]);
 
-function addResearchSettings(url, settings) {
-  if (!settings || typeof settings !== "object") return;
-  const allowed = [
-    "commission_discount",
-    "minimum_fee",
-    "estimated_order_notional_ntd",
-    "max_adv_participation",
-    "cost_profile",
-    "max_single_position",
-    "max_industry_position",
-    "max_market_exposure",
-  ];
-  allowed.forEach((key) => {
+function predictionQuery(horizon, settings) {
+  const query = { horizon };
+  if (!settings || typeof settings !== "object") return query;
+  RESEARCH_SETTING_KEYS.forEach((key) => {
     const value = settings[key];
-    if (value !== null && value !== undefined && value !== "") url.searchParams.set(key, String(value));
+    if (value !== null && value !== undefined && value !== "") query[key] = value;
   });
+  return query;
 }
 
 export async function loadPredictionSnapshot({
   horizon = CURRENT_HORIZON,
   settings,
   signal,
+  config = publicConfig,
 } = {}) {
   const normalizedHorizon = normalizeHorizon(horizon);
   if (!isReleasedHorizon(normalizedHorizon)) {
     return createUnavailableSnapshot({ horizon: normalizedHorizon, reasonCode: "MODEL_NOT_RELEASED" });
   }
-
-  const apiBaseUrl = getApiBaseUrl();
-  if (!apiBaseUrl) {
+  if (!resolvePredictionApiBaseUrl(config)) {
     return createUnavailableSnapshot({ horizon: normalizedHorizon, reasonCode: "PREDICTION_API_NOT_CONFIGURED" });
   }
-
-  const url = new URL("prediction-snapshot", `${apiBaseUrl.replace(/\/$/u, "")}/`);
-  url.searchParams.set("horizon", String(normalizedHorizon));
-  addResearchSettings(url, settings);
-  const response = await fetch(url, { headers: { Accept: "application/json" }, signal });
-  if (!response.ok) throw new Error(`預測 API 回應失敗：${response.status}`);
-  return normalizePredictionSnapshot(await response.json(), normalizedHorizon);
+  let accessToken = null;
+  try {
+    accessToken = await readSupabaseAccessToken(config);
+  } catch (error) {
+    globalThis.Sentry?.captureException?.(error);
+  }
+  const payload = await requestPredictionApi("prediction-snapshot", {
+    query: predictionQuery(normalizedHorizon, settings),
+    accessToken,
+    signal,
+    config,
+  });
+  return normalizePredictionSnapshot(payload, normalizedHorizon);
 }

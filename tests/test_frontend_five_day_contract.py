@@ -51,22 +51,69 @@ def test_bottom_navigation_has_exactly_three_product_entries() -> None:
 def test_prediction_client_accepts_horizon_fetches_only_when_configured() -> None:
     contract = read("src/core/five-day-contract.js")
     client = read("src/data/prediction-api.js")
+    transport = read("src/data/api-client.js")
+    public_config = read("src/core/public-config.js")
     assert "CURRENT_HORIZON = 5" in contract
     assert "horizon = CURRENT_HORIZON" in client
     assert "normalizeHorizon(horizon)" in client
     assert "PREDICTION_API_NOT_CONFIGURED" in client
-    assert "dataset.predictionApiBaseUrl" in client
-    assert "fetch(url" in client
-    assert 'url.searchParams.set("horizon", String(normalizedHorizon))' in client
+    assert "predictionApiBaseUrl" in transport
+    assert "config.predictionApiBaseUrl" in transport
+    assert "PREDICTION_API_TIMEOUT" in transport
+    assert "PREDICTION_API_NETWORK_ERROR" in transport
+    assert "PREDICTION_API_INVALID_JSON" in transport
+    assert 'cache: "no-store"' in transport
+    assert 'predictionApiContractVersion: "prediction-snapshot.v1"' in public_config
+    assert 'new URL("./", globalThis.location.href)' in public_config
+    assert "new URL(apiBaseUrl, globalThis.location?.href)" in transport
+    assert "fetch(url" in transport
+    assert "query: predictionQuery(normalizedHorizon, settings)" in client
+    assert "readSupabaseAccessToken" in client
+    assert "accessToken," in client
+
+
+def test_watchlist_api_requires_session_and_refreshes_after_auth_changes() -> None:
+    app = read("app.js")
+    watchlist = read("src/data/watchlist-api.js")
+    stock = read("src/pages/stock-detail-page.js")
+    auth_controller = read("src/auth/auth-controller.js")
+
+    assert "data-toggle-watchlist" in stock
+    assert "readSupabaseAccessToken" in watchlist
+    assert 'method: selected ? "PUT" : "DELETE"' in watchlist
+    assert "WATCHLIST_AUTH_REQUIRED" in watchlist
+    assert 'addEventListener("alpha-lens:auth-change"' in app
+    assert 'new CustomEvent("alpha-lens:auth-change"' in auth_controller
+
+
+def test_decision_gate_renderer_matches_backend_contract_and_formats_objects() -> None:
+    gates = read("src/components/decision-gates.js")
+    for key in (
+        "data_quality_hard_gate",
+        "tradability_gate",
+        "liquidity_capacity_gate",
+        "market_exposure_cap",
+        "calibrated_direction_probabilities",
+        "net_quantile_thresholds",
+        "rank_eligibility",
+        "position_capacity_limits",
+    ):
+        assert key in gates
+    assert "JSON.stringify(value)" in gates
 
 
 def test_prediction_schema_rejects_wrong_horizon_and_invalid_formal_output() -> None:
-    contract = read("src/data/prediction-contract.js")
+    contract = read("src/data/prediction-contract.js") + read("src/data/prediction-validator.js")
     assert "目前只接受 5 個交易日模型輸出" in contract
     assert "horizon 與請求不一致" in contract
     assert "機率總和不等於 1" in contract
     assert "淨報酬分位數不完整或不單調" in contract
-    assert "PASS 快照缺少日期或模型版本稽核欄位" in contract
+    assert "PASS 快照缺少有效日期或模型版本稽核欄位" in contract
+    assert "API 契約版本" in contract
+    assert '["market_direction", "direction"], raw' in contract
+    assert "使用了決策時間之後的資料" in contract
+    assert "決策 gate 缺漏或順序錯誤" in contract
+    assert 'market_regime: nullableString(firstValue(record' in contract
 
 
 def test_forbidden_unverified_outputs_are_absent_from_stock_page() -> None:

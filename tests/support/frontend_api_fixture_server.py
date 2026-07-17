@@ -1,0 +1,194 @@
+"""Local-only server for verifying the frontend against the real API contract."""
+
+from __future__ import annotations
+
+import argparse
+from datetime import date, datetime, timedelta, timezone
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+import json
+from pathlib import Path
+from urllib.parse import parse_qs, urlparse
+
+from src.api import (
+    DecisionGateOutput,
+    ExcludedSecurityOutput,
+    MarketOutput,
+    PredictionSnapshotOutput,
+    StockPredictionOutput,
+)
+
+
+ROOT = Path(__file__).resolve().parents[2]
+AS_OF_DATE = date(2026, 7, 17)
+DECISION_AT = datetime(2026, 7, 17, 16, 0, tzinfo=timezone(timedelta(hours=8)))
+TRAINING_END_DATE = date(2026, 6, 30)
+GATE_NAMES = (
+    "data_quality_hard_gate",
+    "tradability_gate",
+    "liquidity_capacity_gate",
+    "market_exposure_cap",
+    "calibrated_direction_probabilities",
+    "net_quantile_thresholds",
+    "rank_eligibility",
+    "position_capacity_limits",
+)
+
+
+def build_snapshot() -> dict[str, object]:
+    gates = tuple(
+        DecisionGateOutput(
+            gate=name,
+            passed=True,
+            actual={"test_value": index + 1},
+            threshold={"required": True},
+            reason_code="PASS",
+        )
+        for index, name in enumerate(GATE_NAMES)
+    )
+    prediction = StockPredictionOutput(
+        as_of_date=AS_OF_DATE,
+        decision_at=DECISION_AT,
+        symbol="TEST1",
+        name="API 契約測試標的",
+        market="LISTED",
+        industry="TEST_INDUSTRY",
+        horizon=5,
+        rank_score=95.0,
+        global_rank=1,
+        global_rank_percentile=0.99,
+        industry_rank=1,
+        industry_rank_percentile=0.98,
+        calibrated_p_up=0.65,
+        calibrated_p_neutral=0.25,
+        calibrated_p_down=0.10,
+        calibration_version="direction-cal-v1",
+        gross_q10=-0.02,
+        gross_q50=0.02,
+        gross_q90=0.05,
+        net_q10=-0.03,
+        net_q50=0.01,
+        net_q90=0.03,
+        interval_width=0.06,
+        calibration_status="CALIBRATED:quantile-cal-v1",
+        forecast_volatility=0.03,
+        downside_risk=0.02,
+        market_regime="UPTREND_NORMAL_VOL",
+        market_exposure_cap=0.60,
+        estimated_round_trip_cost=0.01,
+        data_quality_status="PASS",
+        decision="CANDIDATE",
+        reason_codes=(),
+        model_version="rank-5d-v1",
+        feature_schema_hash="schema-sha256-v1",
+        cost_profile_version="tw-stock-base-v1",
+        training_end_date=TRAINING_END_DATE,
+        source_dates={"daily_bars": AS_OF_DATE},
+        latest_available_at=DECISION_AT,
+        liquidity_bucket="LARGE_LIQUID",
+        adv20=1_000_000_000.0,
+        max_order_notional_ntd=10_000_000.0,
+        max_single_position=0.10,
+        max_industry_position=0.25,
+        cost_profile="base_cost",
+        previous_global_rank=3,
+        previous_decision="WATCH",
+        gates=gates,
+    )
+    return PredictionSnapshotOutput(
+        as_of_date=AS_OF_DATE,
+        decision_at=DECISION_AT,
+        horizon=5,
+        system_status="PASS",
+        predictions=(prediction,),
+        market=MarketOutput(
+            as_of_date=AS_OF_DATE,
+            decision_at=DECISION_AT,
+            horizon=5,
+            p_up=0.60,
+            p_neutral=0.25,
+            p_down=0.15,
+            market_regime="UPTREND_NORMAL_VOL",
+            forecast_market_volatility=0.18,
+            market_exposure_cap=0.60,
+            model_version="market-5d-v1",
+            training_end_date=TRAINING_END_DATE,
+        ),
+        excluded=(
+            ExcludedSecurityOutput(
+                as_of_date=AS_OF_DATE,
+                symbol="FAIL1",
+                name="API 排除測試標的",
+                market="OTC",
+                horizon=5,
+                reason_codes=("DATA_QUALITY_HARD_FAIL",),
+                latest_available_at=DECISION_AT,
+            ),
+        ),
+        model_version="rank-5d-v1",
+        training_end_date=TRAINING_END_DATE,
+        cost_profile_version="tw-stock-base-v1",
+        validation={"ndcg_10": 0.42, "known_limitations": ["TEST_ONLY_FIXTURE"]},
+    ).to_dict()
+
+
+class FixtureHandler(SimpleHTTPRequestHandler):
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        super().__init__(*args, directory=str(ROOT), **kwargs)
+
+    def _send(self, status: int, body: bytes, content_type: str) -> None:
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self) -> None:  # noqa: N802
+        parsed = urlparse(self.path)
+        if parsed.path == "/api-invalid/prediction-snapshot":
+            self._send(200, b"{invalid-json", "application/json; charset=utf-8")
+            return
+        if parsed.path == "/api/prediction-snapshot":
+            if parse_qs(parsed.query).get("horizon") != ["5"]:
+                self._send(422, b'{"code":"INVALID_HORIZON"}', "application/json")
+                return
+            body = json.dumps(build_snapshot(), ensure_ascii=False, allow_nan=False).encode()
+            self._send(200, body, "application/json; charset=utf-8")
+            return
+        if parsed.path == "/contract-test":
+            html = """<!doctype html><meta charset=\"utf-8\"><body>running</body>
+<script type=\"module\">
+import { normalizePredictionSnapshot } from '/src/data/prediction-contract.js?v=contract-test-3';
+try {
+  const response = await fetch('/api/prediction-snapshot?horizon=5');
+  const snapshot = normalizePredictionSnapshot(await response.json(), 5);
+  document.body.textContent = JSON.stringify({ok: true, status: snapshot.systemStatus});
+} catch (error) {
+  document.body.textContent = JSON.stringify({ok: false, name: error.name, message: error.message});
+}
+</script>"""
+            self._send(200, html.encode(), "text/html; charset=utf-8")
+            return
+        if parsed.path in {"/", "/index.html"}:
+            api_path = "api-invalid" if parse_qs(parsed.query).get("api_mode") == ["invalid-json"] else "api"
+            html = (ROOT / "index.html").read_text(encoding="utf-8").replace(
+                '<html lang="zh-Hant">',
+                f'<html lang="zh-Hant" data-prediction-api-base-url="/{api_path}/">',
+            )
+            self._send(200, html.encode(), "text/html; charset=utf-8")
+            return
+        super().do_GET()
+
+    def log_message(self, _format: str, *args: object) -> None:
+        return
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--port", type=int, default=4180)
+    args = parser.parse_args()
+    ThreadingHTTPServer(("127.0.0.1", args.port), FixtureHandler).serve_forever()
+
+
+if __name__ == "__main__":
+    main()

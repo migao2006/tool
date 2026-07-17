@@ -126,6 +126,7 @@ def _prediction(**overrides: float) -> StockPredictionOutput:
         as_of_date=date(2026, 1, 2),
         decision_at=decision_at,
         symbol="TEST",
+        name="測試股票",
         market="LISTED",
         industry="TEST_ONLY",
         horizon=5,

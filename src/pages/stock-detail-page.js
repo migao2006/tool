@@ -1,4 +1,4 @@
-import { createDecisionGates, renderDecisionGates } from "../components/decision-gates.js";
+import { createDecisionGates, renderDecisionGates } from "../components/decision-gates.js?v=api-3";
 import { createStockAuditSection } from "../components/stock-audit-section.js";
 import { formatCurrency, formatPercent, formatRank, formatRankScore } from "../core/formatters.js";
 import { setText } from "../core/html.js";
@@ -9,8 +9,9 @@ export function createStockDetailPage({ horizon }) {
       <div class="stock-page-heading">
         <button class="back-button" type="button" data-stock-back aria-label="返回上一頁">‹</button>
         <div><span class="eyebrow">${horizon} 個交易日</span><h1 id="stock-title">尚未選擇股票</h1></div>
-        <button class="watch-button" type="button" aria-label="加入自選股" disabled>☆</button>
+        <button class="watch-button" type="button" data-toggle-watchlist aria-label="加入自選股" aria-pressed="false" disabled>☆</button>
       </div>
+      <p class="inline-feedback" data-watchlist-feedback role="status" aria-live="polite"></p>
 
       <section class="decision-hero" aria-label="決策摘要">
         <div><span>決策 <small>decision</small></span><strong data-stock-field="decision">未評估</strong></div>
@@ -19,7 +20,7 @@ export function createStockDetailPage({ horizon }) {
       </section>
 
       <section class="panel" aria-labelledby="gate-title">
-        <div class="panel-heading"><div><span class="eyebrow">固定執行順序</span><h2 id="gate-title">決策政策</h2></div><span class="data-state">尚無資料</span></div>
+        <div class="panel-heading"><div><span class="eyebrow">固定執行順序</span><h2 id="gate-title">決策政策</h2></div><span class="data-state" data-stock-gate-state>尚無資料</span></div>
         ${createDecisionGates()}
       </section>
 
@@ -57,11 +58,22 @@ const PERCENT_FIELDS = [
   "max_single_position", "max_industry_position", "market_exposure_cap",
 ];
 
-export function renderStockDetailPage(prediction) {
+export function renderStockDetailPage(prediction, { isWatchlisted = false } = {}) {
   const root = document.querySelector('[data-page="stock"]');
   if (!root || !prediction) return;
   const title = root.querySelector("#stock-title");
   if (title) title.textContent = [prediction.symbol, prediction.name].filter(Boolean).join(" ") || "尚未選擇股票";
+  const watchButton = root.querySelector("[data-toggle-watchlist]");
+  if (watchButton) {
+    watchButton.disabled = false;
+    watchButton.dataset.symbol = prediction.symbol;
+    watchButton.setAttribute("aria-pressed", String(isWatchlisted));
+    watchButton.setAttribute("aria-label", isWatchlisted ? "移出自選股" : "加入自選股");
+    watchButton.textContent = isWatchlisted ? "★" : "☆";
+  }
+  const feedback = root.querySelector("[data-watchlist-feedback]");
+  if (feedback) feedback.textContent = "";
+  setText(root, "[data-stock-gate-state]", prediction.gates?.length ? "已評估" : "未提供決策稽核");
   const directFields = ["decision", "as_of_date", "decision_at", "horizon", "calibration_version", "calibration_status", "cost_profile"];
   directFields.forEach((field) => setText(root, `[data-stock-field="${field}"]`, prediction[field]));
   setText(root, '[data-stock-field="reason_codes"]', prediction.reason_codes?.join(" · ") || "—");

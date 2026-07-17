@@ -39,14 +39,17 @@ export class AuthController {
   }
 
   applyUser(user) {
+    const previousUserId = this.user?.id ?? null;
     this.user = user;
     this.dialog.setUser(user);
     if (this.ready) {
       document.body.dataset.authState = user ? "authenticated" : "anonymous";
+      if (previousUserId !== (user?.id ?? null)) this.emitAuthState();
     }
   }
 
   setReady(ready) {
+    const wasReady = this.ready;
     this.ready = ready;
     document.body.dataset.authState = !ready
       ? "pending"
@@ -55,6 +58,13 @@ export class AuthController {
           ? "authenticated"
           : "anonymous"
         : "unavailable";
+    if (ready && !wasReady) this.emitAuthState();
+  }
+
+  emitAuthState() {
+    globalThis.dispatchEvent(new CustomEvent("alpha-lens:auth-change", {
+      detail: { authenticated: Boolean(this.user) },
+    }));
   }
 
   authState() {

@@ -1,10 +1,14 @@
-const productionOrigin = "https://tool-dun-psi.vercel.app";
-const runtimeOrigin = globalThis.location?.origin ?? productionOrigin;
+const runtimeBaseUrl = globalThis.location
+  ? new URL("./", globalThis.location.href).toString()
+  : "";
 
 export const publicConfig = Object.freeze({
   supabaseUrl: "https://zuhwkxlmnvwiktcmijup.supabase.co",
   supabasePublishableKey: "sb_publishable_4T3QrbPrb0ZNzXceEYUqig_oWUpaoHd",
-  authConfirmationRedirectUrl: `${runtimeOrigin}/`,
+  authConfirmationRedirectUrl: runtimeBaseUrl,
+  predictionApiBaseUrl: "",
+  predictionApiTimeoutMs: 12_000,
+  predictionApiContractVersion: "prediction-snapshot.v1",
 });
 
 export function hasSupabaseConfig(config = publicConfig) {

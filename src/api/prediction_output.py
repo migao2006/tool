@@ -11,6 +11,7 @@ from src.calibration.status import (
     has_valid_calibration_version,
 )
 from src.core.horizon import require_supported_horizon
+from src.decision.decision_policy import DECISION_GATE_ORDER
 
 
 DECISIONS = {"CANDIDATE", "WATCH", "NO_TRADE"}
@@ -29,10 +30,29 @@ def _require_aware(value: datetime, field_name: str) -> None:
 
 
 @dataclass(frozen=True)
+class DecisionGateOutput:
+    gate: str
+    passed: bool
+    actual: Any
+    threshold: Any
+    reason_code: str
+
+    def __post_init__(self) -> None:
+        _require_text(self.gate, "gate")
+        _require_text(self.reason_code, "reason_code")
+        if not isinstance(self.passed, bool):
+            raise TypeError("gate passed must be boolean")
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
 class StockPredictionOutput:
     as_of_date: date
     decision_at: datetime
     symbol: str
+    name: str
     market: str
     industry: str | None
     horizon: int
@@ -67,6 +87,16 @@ class StockPredictionOutput:
     training_end_date: date
     source_dates: dict[str, date | str]
     latest_available_at: datetime
+    asset_type: str = "STOCK"
+    liquidity_bucket: str | None = None
+    adv20: float | None = None
+    max_order_notional_ntd: float | None = None
+    max_single_position: float | None = None
+    max_industry_position: float | None = None
+    cost_profile: str | None = None
+    previous_global_rank: int | None = None
+    previous_decision: str | None = None
+    gates: tuple[DecisionGateOutput, ...] = ()
 
     def __post_init__(self) -> None:
         require_supported_horizon(self.horizon)
@@ -74,6 +104,7 @@ class StockPredictionOutput:
         _require_aware(self.latest_available_at, "latest_available_at")
         for field_name, value in (
             ("symbol", self.symbol),
+            ("name", self.name),
             ("calibration_version", self.calibration_version),
             ("calibration_status", self.calibration_status),
             ("model_version", self.model_version),
@@ -83,6 +114,8 @@ class StockPredictionOutput:
             _require_text(value, field_name)
         if self.market not in MARKETS:
             raise ValueError("ordinary-stock output market must be LISTED or OTC")
+        if self.asset_type != "STOCK":
+            raise ValueError("ordinary-stock output asset_type must be STOCK")
         if self.decision not in DECISIONS:
             raise ValueError(f"unsupported decision: {self.decision}")
         if not isfinite(self.rank_score) or not 0 <= self.rank_score <= 100:
@@ -134,9 +167,29 @@ class StockPredictionOutput:
         for field_name, value in (
             ("forecast_volatility", self.forecast_volatility),
             ("downside_risk", self.downside_risk),
+            ("adv20", self.adv20),
+            ("max_order_notional_ntd", self.max_order_notional_ntd),
         ):
             if value is not None and (not isfinite(value) or value < 0):
                 raise ValueError(f"{field_name} must be finite and non-negative")
+        for field_name, value in (
+            ("max_single_position", self.max_single_position),
+            ("max_industry_position", self.max_industry_position),
+        ):
+            if value is not None and (not isfinite(value) or not 0 <= value <= 1):
+                raise ValueError(f"{field_name} must be within [0, 1]")
+        if self.previous_global_rank is not None and self.previous_global_rank < 1:
+            raise ValueError("previous_global_rank must be positive when provided")
+        if self.previous_decision is not None and self.previous_decision not in DECISIONS:
+            raise ValueError("previous_decision is invalid")
+        if any(not isinstance(gate, DecisionGateOutput) for gate in self.gates):
+            raise TypeError("gates must contain DecisionGateOutput values")
+        if self.gates and tuple(gate.gate for gate in self.gates) != DECISION_GATE_ORDER:
+            raise ValueError("gates must follow the complete decision policy order")
+        if self.decision == "CANDIDATE" and self.gates and any(
+            not gate.passed for gate in self.gates
+        ):
+            raise ValueError("CANDIDATE cannot contain a failed decision gate")
         if self.data_quality_status not in DATA_QUALITY_STATUSES:
             raise ValueError("data_quality_status must be PASS or FAIL")
         if self.latest_available_at > self.decision_at:
@@ -177,6 +230,7 @@ class StockPredictionOutput:
         for key in ("as_of_date", "decision_at", "training_end_date", "latest_available_at"):
             payload[key] = payload[key].isoformat()
         payload["reason_codes"] = list(self.reason_codes)
+        payload["gates"] = [gate.to_dict() for gate in self.gates]
         payload["source_dates"] = {
             key: value.isoformat() if isinstance(value, date) else value
             for key, value in self.source_dates.items()

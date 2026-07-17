@@ -22,6 +22,8 @@ const calls = [];
 const PUBLICATION_RUN_ID = 701;
 const PUBLICATION_KEY = "a".repeat(64);
 const CONTENT_HASH = "b".repeat(64);
+const SIGNAL_GENERATED_AT = "2026-07-16T09:58:00Z";
+const SIGNAL_UPDATED_AT = "2026-07-16T09:59:00Z";
 const MARKET_CONTEXT_SNAPSHOT = {
   data_date: "2026-07-16",
   model_version: "20.1",
@@ -142,7 +144,11 @@ const rankingRows = [1, 2, 3].map((rank) => ({
   reasons: ["成本後機會值位於前段"],
   risks: ["跌破結構低點則失效"],
   invalidation_conditions: ["法人轉為連續賣超"],
-  source_manifest: { sourceDates: { listed: "2026-07-16" } },
+  source_manifest: {
+    sourceDates: { listed: "2026-07-16", price: "2026-07-16" },
+    signalGeneratedAt: SIGNAL_GENERATED_AT,
+    signalUpdatedAt: SIGNAL_UPDATED_AT,
+  },
   input_hash: "c".repeat(64),
   recorded_at: "2026-07-16T10:00:00Z",
 }));
@@ -162,6 +168,17 @@ const detailSignalRow = {
     evidence_support: true,
     positive_expectancy: true,
     probabilityBasis: "transparent-rule-ranking",
+    quoteSnapshot: {
+      tradeDate: "2026-07-16",
+      close: 1000,
+      change: 1.25,
+      open: 990,
+      high: 1010,
+      low: 985,
+      volume: 20000,
+      value: 20000000,
+      source: "stock_analysis_cache",
+    },
   },
   feature_scores: {
     priceVolumeTrend: 82,
@@ -197,7 +214,21 @@ globalThis.fetch = async (input, init = {}) => {
   }
   if (url.pathname.endsWith("/v20_recommendation_items")) {
     const symbol = String(url.searchParams.get("symbol") || "").replace("eq.", "");
-    if (symbol) return Response.json(symbol === "2330" ? [detailSignalRow] : []);
+    if (symbol) {
+      return Response.json(symbol === "2330" ? [detailSignalRow]
+        : symbol === "2331" ? [rankingRows[1]]
+        : symbol === "2333" ? [
+          detailSignalRow,
+          {
+            ...detailSignalRow,
+            horizon_days: 10,
+            gate_results: {
+              ...detailSignalRow.gate_results,
+              quoteSnapshot: { ...detailSignalRow.gate_results.quoteSnapshot, close: 1001 },
+            },
+          },
+        ] : []);
+    }
     const after = Number(String(url.searchParams.get("rank_position") || "gt.0").replace("gt.", ""));
     const offset = Number(url.searchParams.get("offset") || 0);
     const limit = Number(url.searchParams.get("limit") || 10);
@@ -261,6 +292,22 @@ try {
   const normalized = backend.v20BackendInternals.normalizeRanking(rankingRows[1]);
   assert.equal(normalized.forecasts["5"].upProbability, null);
   assert.equal(normalized.forecasts["5"].dataState, "insufficient_history");
+  assert.equal(normalized.tradeDate, "2026-07-16",
+    "an immutable price source date may be presented without inventing a quote");
+  assert.equal(normalized.quote, null,
+    "a source date alone must never be presented as an immutable close");
+  assert.equal(normalized.analysisGeneratedAt, SIGNAL_GENERATED_AT);
+
+  const updatedOnlyTimestamp = backend.v20BackendInternals.normalizeRanking({
+    ...rankingRows[1],
+    source_manifest: {
+      ...rankingRows[1].source_manifest,
+      signalGeneratedAt: null,
+      signalUpdatedAt: SIGNAL_UPDATED_AT,
+    },
+  });
+  assert.equal(updatedOnlyTimestamp.analysisGeneratedAt, SIGNAL_UPDATED_AT,
+    "signalUpdatedAt is the honest fallback when the immutable item lacks signalGeneratedAt");
 
   const firstPublication = backend.v20BackendInternals.normalizePublication({
     ...recommendationRun,
@@ -350,6 +397,19 @@ try {
   });
   assert.equal(bootstrap.liquidityGrade, "A");
   assert.equal(bootstrap.calibrationSampleCount, 0);
+  assert.deepEqual(bootstrap.quote, {
+    tradeDate: "2026-07-16",
+    close: 1000,
+    change: 1.25,
+    open: 990,
+    high: 1010,
+    low: 985,
+    volume: 20000,
+    value: 20000000,
+    source: "stock_analysis_cache",
+  });
+  assert.equal(bootstrap.tradeDate, "2026-07-16");
+  assert.equal(bootstrap.analysisGeneratedAt, SIGNAL_GENERATED_AT);
   assert.equal(bootstrap.tradePlan.stopLoss, 95);
   assert.equal(bootstrap.gateReasons.find((item) => item.key === "trend_structure")?.status, "fail");
   assert.equal(bootstrap.gateReasons.find((item) => item.key === "score_threshold")?.status, "pass");
@@ -443,6 +503,18 @@ try {
   assert.ok(calls.every((call) => call.url.pathname.endsWith("/v20_recommendation_items")),
     "an empty immutable item read must not fall back to a raw table or browser RPC");
 
+  const oldImmutableStock = await backend.readV20Stock("2331", { publication: firstPublication });
+  assert.equal(oldImmutableStock.tradeDate, "2026-07-16",
+    "an old immutable item may still disclose its verified price source date");
+  assert.equal(oldImmutableStock.quote, null,
+    "an old immutable item without quoteSnapshot must remain honest about its missing close");
+  assert.equal(oldImmutableStock.analysisGeneratedAt, SIGNAL_GENERATED_AT);
+
+  const conflictingImmutableStock = await backend.readV20Stock("2333", { publication: firstPublication });
+  assert.equal(conflictingImmutableStock.quote, null,
+    "conflicting immutable horizon quotes must fail closed instead of choosing one");
+  assert.ok(conflictingImmutableStock.degradedSources.includes("immutable_quote_conflict"));
+
   const missingModel = backend.v20BackendInternals.modelStateFor(
     "medium", [], { publishedDataDate: "2026-07-16" }, false,
   );
@@ -464,7 +536,10 @@ try {
   assert.match(stockDetail.modelStates.medium.reason, /中期模型訊號/);
   assert.equal(stockDetail.runId, PUBLICATION_RUN_ID);
   assert.equal(stockDetail.stock.runId, PUBLICATION_RUN_ID);
-  assert.equal(stockDetail.quote, null);
+  assert.equal(stockDetail.tradeDate, "2026-07-16");
+  assert.equal(stockDetail.analysisGeneratedAt, SIGNAL_GENERATED_AT);
+  assert.deepEqual(stockDetail.quote, bootstrap.quote,
+    "the stock API must expose only the quote copied into the immutable recommendation item");
   assert.equal(stockDetail.analysis, null);
   assert.deepEqual(stockDetail.news, []);
   assert.deepEqual(stockDetail.relatedStocks, []);
@@ -887,6 +962,10 @@ try {
   assert.deepEqual(publicStock.short.map((row) => row.horizon), [5]);
   assert.deepEqual(publicStock.medium.map((row) => row.horizon), [40],
     "the research-only 60-day horizon must not escape through the public stock fallback");
+  assert.equal(publicStock.tradeDate, "2026-07-16");
+  assert.equal(publicStock.analysisGeneratedAt, SIGNAL_GENERATED_AT);
+  assert.deepEqual(publicStock.quote, bootstrap.quote,
+    "the bounded public RPC must preserve the immutable quote snapshot");
 
   const publicBacktest = await publicBackend.readV20Backtest(new URL(
     "https://app.test/api/v20/backtest?model=short&horizon=5",
@@ -949,6 +1028,13 @@ try {
   assert.match(ui, /AI 每日報告/);
   assert.doesNotMatch(ui, /twssV19Benchmarks|officialIndices/,
     "v20 market cards must use only the run's market_context_snapshot");
+  assert.match(ui, /更新完成，部分來源待補/,
+    "a complete publication with degraded sources must use an honest mixed status label");
+  assert.match(ui, /payload\?\.publicationPhase === 'complete' && \(pending > 0 \|\| degraded\.length > 0\)/);
+  assert.match(ui, /此批次未保存收盤價/,
+    "stock details must disclose when the immutable recommendation has no quote snapshot");
+  assert.doesNotMatch(ui, /quoteClose\s*=\s*first\([^;]*(?:stock\?\.close|stock\?\.price)/,
+    "v20 quote rendering must not fall back to a mutable stock adapter");
   const loadV19Start = smart.indexOf("async function loadV19()");
   const loadV19End = smart.indexOf("async function loadWatchRows()", loadV19Start);
   const loadV19Block = smart.slice(loadV19Start, loadV19End);

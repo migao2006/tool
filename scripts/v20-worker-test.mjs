@@ -22,6 +22,14 @@ import {
 } from "../supabase/functions/twss-v20-model/publication-state.js";
 import { buildV20PublicationManifests } from "../supabase/functions/_shared/v20-publication-contract.js";
 import { V20_MODEL_ARTIFACT_HASH } from "../supabase/functions/_shared/v20-model-artifact.js";
+import {
+  enrichMarketContextWithOfficial,
+  normalizeOfficialMarketPayloads,
+} from "../supabase/functions/_shared/v20-market-official.js";
+import {
+  attachQuoteSnapshot,
+  quoteSnapshotForCacheRow,
+} from "../supabase/functions/_shared/v20-quote-snapshot.js";
 
 const latest = { listed: "2026-07-16", otc: "2026-07-16", etf: "2026-07-16" };
 const key = groupDateCycleKey(latest, V20_MODEL_VERSION);
@@ -42,6 +50,77 @@ assert.ok(Object.keys(publicationManifests.sourceManifest.sources).length > 0);
 assert.deepEqual(Object.keys(publicationManifests.modelManifest).slice(0, 2), ["short", "medium"]);
 assert.deepEqual(publicationManifests.modelManifest.medium.publicHorizons, [10, 20, 40]);
 assert.deepEqual(publicationManifests.modelManifest.medium.researchHorizons, [60]);
+
+const officialMarket = normalizeOfficialMarketPayloads({
+  twse: [
+    { Date: "1150715", ClosingIndex: "45,100" },
+    { Date: "1150716", OpeningIndex: "45,511.98", HighestIndex: "45,855.02", LowestIndex: "44,970.64", ClosingIndex: "45,624.98" },
+  ],
+  tpex: [
+    { Date: "20260715", Close: "416.41" },
+    { Date: "20260716", Open: "414.88", High: "414.88", Low: "404.89", Close: "407.01", Change: "-9.40" },
+  ],
+  taifex: [
+    { Date: "20260716", Contract: "TX", "ContractMonth(Week)": "202608", Last: "45700", Change: "-366", "%": "-0.79%", Volume: "70808", SettlementPrice: "45691", OpenInterest: "106669" },
+  ],
+}, "2026-07-16");
+assert.equal(officialMarket.taiex.value, 45_624.98);
+assert.equal(officialMarket.taiex.dataDate, "2026-07-16", "ROC dates must normalize to ISO dates");
+assert.equal(officialMarket.tpex.changePercent, -2.2574);
+assert.equal(officialMarket.txFutures.contractMonth, "202608");
+const officialContext = enrichMarketContextWithOfficial({
+  status: "partial",
+  completeness: 50,
+  degraded_sources: ["taiex_official_index", "tpex_official_index", "tx_futures", "international_context"],
+  source_dates: { snapshots: "2026-07-16" },
+}, officialMarket);
+assert.deepEqual(officialContext.degraded_sources, ["international_context"]);
+assert.equal(officialContext.completeness, 87.5);
+assert.equal(officialContext.status, "partial");
+
+const immutableQuote = quoteSnapshotForCacheRow({
+  data_date: "2026-07-16",
+  stock: { priceDate: "2026-07-16", close: 25.5, change: 0.5917, volume: 17_727.214, value: 450_128_521 },
+});
+assert.deepEqual(immutableQuote, {
+  tradeDate: "2026-07-16",
+  close: 25.5,
+  change: 0.5917,
+  open: null,
+  high: null,
+  low: null,
+  volume: 17_727.214,
+  value: 450_128_521,
+  source: "stock_analysis_cache",
+});
+assert.deepEqual(
+  attachQuoteSnapshot(
+    [{ signal_date: "2026-07-16", gate_results: { data_complete: true } }],
+    { data_date: "2026-07-16", stock: { close: 25.5, priceDate: "2026-07-16" } },
+  )[0].gate_results,
+  { data_complete: true, quoteSnapshot: { tradeDate: "2026-07-16", close: 25.5, change: null, open: null, high: null, low: null, volume: null, value: null, source: "stock_analysis_cache" } },
+  "the worker must hash the exact quote into each immutable signal before publication",
+);
+assert.throws(() => quoteSnapshotForCacheRow({
+  data_date: "2026-07-16",
+  stock: { priceDate: "2026-07-15", close: 25.5 },
+}), /v20_verified_quote_required/, "a mutable or cross-date close must never enter an immutable run");
+assert.throws(() => quoteSnapshotForCacheRow({
+  data_date: "2026-07-16",
+  stock: { priceDate: "2026-07-16", close: 25.5, high: 25 },
+}), /v20_verified_quote_ohlc_invalid/);
+assert.throws(() => attachQuoteSnapshot(
+  [{ signal_date: "2026-07-15", gate_results: {} }],
+  { data_date: "2026-07-16", stock: { priceDate: "2026-07-16", close: 25.5 } },
+), /v20_signal_quote_date_mismatch/);
+const horizonQuotes = attachQuoteSnapshot(
+  [2, 3, 5, 10, 10, 20, 40, 60].map((horizon_days) => ({
+    signal_date: "2026-07-16", horizon_days, gate_results: {},
+  })),
+  { data_date: "2026-07-16", stock: { priceDate: "2026-07-16", close: 25.5 } },
+);
+assert.equal(horizonQuotes.length, 8);
+for (const signal of horizonQuotes) assert.deepEqual(signal.gate_results.quoteSnapshot, horizonQuotes[0].gate_results.quoteSnapshot);
 
 const started = reconcileWorkerCycle({
   latestGroupDates: latest,

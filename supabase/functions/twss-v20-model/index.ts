@@ -34,6 +34,13 @@ import {
 import { buildV20PublicationManifests } from "../_shared/v20-publication-contract.js";
 // @ts-ignore Generated from the deployable model + policy source bundle.
 import { V20_MODEL_ARTIFACT_HASH } from "../_shared/v20-model-artifact.js";
+// @ts-ignore Official-market normalizers are pure ESM and covered by Node tests.
+import {
+  enrichMarketContextWithOfficial,
+  normalizeOfficialMarketPayloads,
+} from "../_shared/v20-market-official.js";
+// @ts-ignore Immutable quote attachment is pure ESM and covered by Node tests.
+import { attachQuoteSnapshot } from "../_shared/v20-quote-snapshot.js";
 
 const PROJECT_URL = Deno.env.get("SUPABASE_URL") || "";
 const JOB_KEY = "v20_model";
@@ -423,13 +430,64 @@ async function loadMarketContext(dataDate: string) {
     `v20_market_context?select=*&data_date=eq.${encodeURIComponent(dataDate)}` +
       `&model_version=eq.${encodeURIComponent(V20_MODEL_VERSION)}&limit=1`,
   );
-  if (Array.isArray(existing) && existing[0]) return existing[0];
+  const current = Array.isArray(existing) ? existing[0] || null : null;
+
+  const needsOfficial = !current || [
+    "taiex_official_index",
+    "tpex_official_index",
+    "tx_futures",
+  ].some((source) => Array.isArray(current?.degraded_sources) && current.degraded_sources.includes(source));
+  let official = {};
+  if (needsOfficial) {
+    const endpoints = {
+      twse: "https://openapi.twse.com.tw/v1/indicesReport/MI_5MINS_HIST",
+      tpex: "https://www.tpex.org.tw/openapi/v1/tpex_index",
+      taifex: "https://openapi.taifex.com.tw/v1/DailyMarketReportFut",
+    };
+    const entries = await Promise.all(Object.entries(endpoints).map(async ([key, url]) => {
+      try {
+        const response = await fetch(url, {
+          headers: { accept: "application/json", "user-agent": "tw-stock-screener-v20/20.1" },
+          signal: AbortSignal.timeout(20_000),
+        });
+        if (!response.ok) return [key, []];
+        return [key, await response.json()];
+      } catch {
+        return [key, []];
+      }
+    }));
+    official = normalizeOfficialMarketPayloads(Object.fromEntries(entries), dataDate);
+  }
+
+  if (current) {
+    if (!needsOfficial) return current;
+    const enriched = {
+      ...enrichMarketContextWithOfficial(current, official),
+      fetched_at: now(),
+    };
+    await rest("v20_market_context?on_conflict=data_date,model_version", {
+      method: "POST",
+      body: [enriched],
+      prefer: "resolution=merge-duplicates,return=minimal",
+    });
+    const { data: reloaded } = await rest(
+      `v20_market_context?select=*&data_date=eq.${encodeURIComponent(dataDate)}` +
+        `&model_version=eq.${encodeURIComponent(V20_MODEL_VERSION)}&limit=1`,
+    );
+    if (!Array.isArray(reloaded) || !reloaded[0]) {
+      throw new Error("v20_market_context_reload_failed");
+    }
+    return reloaded[0];
+  }
 
   const snapshots = await fetchAll(
     "stock_snapshots?select=symbol,market,instrument_type,change_pct,trade_value,volume,institutional_buy" +
       `&trade_date=eq.${encodeURIComponent(dataDate)}&order=symbol.asc`,
   );
-  const context = buildMarketContext(snapshots, dataDate);
+  const context = {
+    ...enrichMarketContextWithOfficial(buildMarketContext(snapshots, dataDate), official),
+    fetched_at: now(),
+  };
   await rest("v20_market_context?on_conflict=data_date,model_version", {
     method: "POST",
     body: [context],
@@ -776,7 +834,8 @@ async function processIncrementalBatch(input: {
     }
     try {
       const scored = scoreCacheRow(row, resources);
-      signalRows.push(...scored.signals.map((signal: Record<string, unknown>) => ({
+      const signals = attachQuoteSnapshot(scored.signals, row);
+      signalRows.push(...signals.map((signal: Record<string, unknown>) => ({
         ...signal,
         calibration_version: calibration.calibrationVersion,
       })));
@@ -1172,7 +1231,8 @@ Deno.serve(async (request: Request) => {
       try {
         const resources = dateResources.get(task.data_date) || {};
         const scored = scoreCacheRow(task.row, resources);
-        signalRows.push(...scored.signals.map((signal: Record<string, unknown>) => ({
+        const signals = attachQuoteSnapshot(scored.signals, task.row);
+        signalRows.push(...signals.map((signal: Record<string, unknown>) => ({
           ...signal,
           calibration_version: resources.calibrationVersion || null,
         })));

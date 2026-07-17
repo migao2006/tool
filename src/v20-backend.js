@@ -308,6 +308,54 @@ function pruneResolvedDegradedSources(sources, row = {}) {
   });
 }
 
+function immutableQuoteFor(row = {}, gateResults = {}, sourceManifest = {}, sourceDates = {}) {
+  const itemTradeDate = isoDate(
+    row.trade_date || row.tradeDate || row.price_date || row.priceDate || sourceDates.price,
+  );
+  const manifestTradeDate = isoDate(
+    cleanObject(sourceManifest.sourceDates || sourceManifest.source_dates).price,
+  );
+  const candidates = [
+    // quoteSnapshot is copied into the immutable recommendation item and is
+    // therefore the strongest available point-in-time quote evidence.
+    [cleanObject(gateResults.quoteSnapshot || gateResults.quote_snapshot), null],
+    [cleanObject(
+      row.quote_snapshot || row.quoteSnapshot || row.quote
+      || row.price_snapshot || row.priceSnapshot,
+    ), itemTradeDate],
+    [cleanObject(
+      sourceManifest.quoteSnapshot || sourceManifest.quote_snapshot || sourceManifest.quote
+      || sourceManifest.priceSnapshot || sourceManifest.price_snapshot,
+    ), manifestTradeDate],
+    [row, itemTradeDate],
+  ];
+
+  for (const [snapshot, fallbackTradeDate] of candidates) {
+    const tradeDate = isoDate(
+      snapshot.tradeDate || snapshot.trade_date || snapshot.priceDate || snapshot.price_date
+      || snapshot.dataDate || snapshot.data_date || snapshot.date || fallbackTradeDate,
+    );
+    const close = numeric(snapshot.close ?? snapshot.price);
+    if (!tradeDate || close == null || close <= 0) continue;
+    return {
+      tradeDate,
+      close,
+      change: numeric(
+        snapshot.change ?? snapshot.changePercent ?? snapshot.change_percent ?? snapshot.change_pct,
+      ),
+      open: numeric(snapshot.open),
+      high: numeric(snapshot.high),
+      low: numeric(snapshot.low),
+      volume: numeric(snapshot.volume),
+      value: numeric(snapshot.value ?? snapshot.tradeValue ?? snapshot.trade_value),
+      source: typeof snapshot.source === "string" && snapshot.source.trim()
+        ? snapshot.source.trim()
+        : null,
+    };
+  }
+  return null;
+}
+
 async function persistGlobalMarket(liveGlobal, token) {
   if (!token || !liveGlobal?.indicators?.length) return false;
   const globalContext = {
@@ -343,6 +391,19 @@ function normalizeRanking(row = {}) {
       : "insufficient_history";
   const gateResults = cleanObject(row.gate_results || row.gates);
   const featureScores = cleanObject(row.feature_scores || row.features);
+  const sourceManifest = cleanObject(row.source_manifest || row.sourceManifest);
+  const sourceDates = cleanObject(
+    row.source_dates || row.sourceDates || sourceManifest.sourceDates || sourceManifest.source_dates,
+  );
+  const quote = immutableQuoteFor(row, gateResults, sourceManifest, sourceDates);
+  const tradeDate = quote?.tradeDate || isoDate(
+    row.trade_date || row.tradeDate || row.price_date || row.priceDate || sourceDates.price,
+  );
+  const signalGeneratedAt = sourceManifest.signalGeneratedAt
+    || sourceManifest.signal_generated_at || null;
+  const signalUpdatedAt = sourceManifest.signalUpdatedAt
+    || sourceManifest.signal_updated_at || null;
+  const analysisGeneratedAt = signalGeneratedAt || signalUpdatedAt;
   const calibratedProbability = numeric(row.calibrated_up_probability ?? row.up_probability);
   const expectedExcessReturnGross = calibrated
     ? numeric(row.expected_excess_return_gross ?? row.expected_return_gross)
@@ -380,6 +441,9 @@ function normalizeRanking(row = {}) {
     model,
     horizon,
     dataDate: isoDate(row.ranking_date || row.signal_date),
+    tradeDate,
+    quote,
+    analysisGeneratedAt,
     group: row.group_name || null,
     market: row.market || null,
     industry: row.industry || null,
@@ -444,11 +508,11 @@ function normalizeRanking(row = {}) {
       riskRewardRatio: numeric(row.risk_reward_ratio),
       recommendedHoldingDays: numeric(row.recommended_holding_days),
     },
-    sourceDates: cleanObject(row.source_dates || cleanObject(row.source_manifest).sourceDates),
-    sourceManifest: cleanObject(row.source_manifest),
+    sourceDates,
+    sourceManifest,
     inputHash: row.input_hash || null,
-    generatedAt: row.generated_at || row.recorded_at || null,
-    updatedAt: row.updated_at || row.recorded_at || row.generated_at || null,
+    generatedAt: signalGeneratedAt || row.generated_at || row.recorded_at || null,
+    updatedAt: signalUpdatedAt || row.updated_at || row.recorded_at || row.generated_at || null,
     legacyReference: false,
   };
 }
@@ -1202,6 +1266,15 @@ export async function readV20Stock(symbol, options = {}) {
     ? completenessValues.reduce((sum, value) => sum + Number(value), 0) / completenessValues.length
     : 0;
   const stock = signals[0] || { symbol: normalized, name: normalized };
+  const quotes = signals.map((row) => row.quote).filter((value) =>
+    value?.tradeDate && finite(value.close));
+  const quoteSignatures = new Set(quotes.map((value) => JSON.stringify(value)));
+  const quoteConflict = quoteSignatures.size > 1;
+  if (quoteConflict) degraded.push("immutable_quote_conflict");
+  const quote = quoteConflict ? null : quotes[0] || null;
+  const tradeDate = quote?.tradeDate
+    || signals.map((row) => row.tradeDate).filter(Boolean).sort().at(-1)
+    || null;
   return {
     ...publicMeta({
       dataState: signals.length ? (degraded.length ? "partial" : "complete") : "error",
@@ -1213,13 +1286,14 @@ export async function readV20Stock(symbol, options = {}) {
       publication,
     }),
     symbol: normalized,
-    tradeDate: null,
+    tradeDate,
     analysisDataDate: signals.map((row) => row.dataDate).filter(Boolean).sort().at(-1) || null,
     newsPublishedAt: null,
-    analysisGeneratedAt: signals.map((row) => row.generatedAt).filter(Boolean).sort().at(-1) || null,
+    analysisGeneratedAt: signals.map((row) => row.analysisGeneratedAt)
+      .filter(Boolean).sort().at(-1) || null,
     pageUpdatedAt: new Date().toISOString(),
     stock,
-    quote: null,
+    quote,
     short: signals.filter((row) => row.model === "short"),
     medium: signals.filter((row) => row.model === "medium"),
     analysis: null,

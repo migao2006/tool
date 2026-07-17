@@ -95,8 +95,8 @@ assert.match(admin, /const modelObservability = payload\.modelObservability \|\|
   "missing observability data must degrade safely");
 assert.match(admin, /if \(!channel \|\| typeof channel !== 'object'\)/,
   "an unconfigured Champion or Challenger must render a safe empty state");
-assert.match(adminHtml, /admin\.js\?v=20\.1\.0/);
-assert.match(adminHtml, /styles\.css\?v=20\.1\.0/);
+assert.match(adminHtml, /admin\.js\?v=20\.1\.1/);
+assert.match(adminHtml, /styles\.css\?v=20\.1\.1/);
 
 assert.match(sharedSource, /JSON\.stringify\(\{ service: "twss-v20-api", \.\.\.payload \}\)/);
 assert.match(sharedSource, /msg: "start"/);

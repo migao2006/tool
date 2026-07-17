@@ -165,10 +165,14 @@
 
   function statusBanner(payload, phase, error = '') {
     const state = error ? 'error' : phase === 'refreshing' ? 'refreshing' : phase === 'cache' ? 'cache' : payload?.publicationPhase || payload?.dataState || 'partial';
-    const [label, className] = stateLabels[state] || stateLabels.partial;
     const date = payload?.dataDate || S.date || '日期待補';
     const degraded = safeArray(payload?.degradedSources);
     const pending = num(payload?.enrichmentPending);
+    const completeWithMissingSources = !error && phase !== 'refreshing'
+      && payload?.publicationPhase === 'complete' && (pending > 0 || degraded.length > 0);
+    const [label, className] = completeWithMissingSources
+      ? ['更新完成，部分來源待補', 'partial']
+      : stateLabels[state] || stateLabels.partial;
     return `<div class="v20-data-status ${className}" role="status"><span class="v20-status-dot"></span><div><b>${label}</b><small>資料日期 ${esc(date)}${pending > 0 ? ` · 背景待補 ${displayNumber(pending, 0)} 筆` : degraded.length ? ` · ${degraded.length} 個來源待補` : ''}</small></div>${state === 'refreshing' || state === 'enriching' ? '<span class="spinner" aria-hidden="true"></span>' : ''}</div>`;
   }
 
@@ -384,7 +388,10 @@
     const rows = watchlistRowsV20();
     return rows.length ? `<div class="v20-card-list">${rows.map(({ item, detail, short, medium, stock }) => {
         const reminder = localizeStrategyText(first(v20.watchErrors.get(String(item.symbol)), safeArray(short?.risks)[0], safeArray(medium?.risks)[0], safeArray(short?.reasons)[0], safeArray(medium?.reasons)[0], detail ? '目前沒有已驗證的新提醒。' : '正在背景載入量化分析。'));
-        return `<article class="card v20-watch-card" data-v20-detail="${esc(item.symbol)}"><div class="head"><div><b>${esc(stock?.name || item.symbol)}</b><small>${esc(item.symbol)} · ${esc(first(stock?.market, '市場待補'))}</small></div><button type="button" class="icon-btn" data-watch="${esc(item.symbol)}">移除</button></div><div class="v20-watch-metrics"><div><small>最新價格</small><b>${displayNumber(first(stock?.close, stock?.price), 2)}</b></div><div><small>短期機會／風險</small><b>${displayNumber(short?.opportunityScore, 0)}／${displayNumber(short?.riskScore, 0)}</b></div><div><small>中期機會／風險</small><b>${displayNumber(medium?.opportunityScore, 0)}／${displayNumber(medium?.riskScore, 0)}</b></div><div><small>資料日期</small><b>${esc(first(detail?.dataDate, stock?.priceDate, S.date, '待補'))}</b></div></div><div class="v20-inline-note"><b>重要提醒：</b>${esc(reminder)}</div><button type="button" class="btn v20-full" data-v20-detail="${esc(item.symbol)}">查看短中期分析</button></article>`;
+        const quote = detail?.quote || {};
+        const quoteClose = quote?.close;
+        const quoteDate = first(quote?.tradeDate, detail?.tradeDate);
+        return `<article class="card v20-watch-card" data-v20-detail="${esc(item.symbol)}"><div class="head"><div><b>${esc(stock?.name || item.symbol)}</b><small>${esc(item.symbol)} · ${esc(first(stock?.market, '市場待補'))}</small></div><button type="button" class="icon-btn" data-watch="${esc(item.symbol)}">移除</button></div><div class="v20-watch-metrics"><div><small>${num(quoteClose) == null ? '此批次未保存收盤價' : '最新價格'}</small><b>${displayNumber(quoteClose, 2)}</b></div><div><small>短期機會／風險</small><b>${displayNumber(short?.opportunityScore, 0)}／${displayNumber(short?.riskScore, 0)}</b></div><div><small>中期機會／風險</small><b>${displayNumber(medium?.opportunityScore, 0)}／${displayNumber(medium?.riskScore, 0)}</b></div><div><small>行情日期</small><b>${esc(first(quoteDate, '此批次未保存'))}</b></div></div><div class="v20-inline-note"><b>重要提醒：</b>${esc(reminder)}</div><button type="button" class="btn v20-full" data-v20-detail="${esc(item.symbol)}">查看短中期分析</button></article>`;
       }).join('')}</div>` : '<div class="card v20-empty"><h3>尚未加入自選股票</h3><p>可在短期、中期排行榜或個股分析中加入。</p></div>';
   }
 
@@ -566,10 +573,17 @@
   function detailHtml(symbol, detail, loading = false, error = '') {
     const stock = detail?.stock || detail?.short?.[0] || detail?.medium?.[0] || { symbol };
     const name = first(stock?.name, detail?.short?.[0]?.name, detail?.medium?.[0]?.name, symbol);
+    const quote = detail?.quote || {};
+    const quoteClose = quote?.close;
+    const quoteChange = quote?.change;
+    const quoteDate = first(quote?.tradeDate, detail?.tradeDate);
+    const quoteCaption = num(quoteClose) == null
+      ? `此批次未保存收盤價${quoteDate ? ` · 行情日期 ${quoteDate}` : ''}`
+      : `最新盤後價格 · ${first(quoteDate, '日期待補')}`;
     return `<div class="modal"><div class="sheet v20-detail-sheet"><button class="sheet-close" type="button" aria-label="關閉">×</button><div class="v20-detail-head"><div><span class="v20-eyebrow">V20 QUANT ANALYSIS</span><h2>${esc(name)} <small>${esc(symbol)}</small></h2><p>${esc(first(stock?.market, stock?.industry, '市場資料待補'))} · 資料日期 ${esc(first(detail?.dataDate, stock?.priceDate, S.date, '待補'))}</p></div><button class="btn secondary" type="button" data-watch="${esc(symbol)}">${isWatched(symbol) ? '✓ 已自選' : '＋ 自選'}</button></div>
       ${statusBanner(detail || {}, loading ? 'refreshing' : detail?.dataState, error)}
-      <div class="v20-quote"><div><small>最新盤後價格 · ${esc(first(detail?.tradeDate, stock?.priceDate, '日期待補'))}</small><strong>${displayNumber(first(stock?.close, stock?.price), 2)}</strong></div><div><small>當日漲跌</small><b class="${num(stock?.change) > 0 ? 'up' : num(stock?.change) < 0 ? 'down' : 'muted'}">${displayPercent(stock?.change, 2)}</b></div><div><small>資料完整度</small><b>${probability(detail?.completeness)}</b></div></div>
-      <div class="card v20-factor-grid"><div><small>交易日期</small><b>${esc(first(detail?.tradeDate, '此批次未保存價格快照'))}</b></div><div><small>分析資料日期</small><b>${esc(first(detail?.analysisDataDate, '待補'))}</b></div><div><small>新聞與公告</small><b>${esc(first(detail?.newsPublishedAt?.slice?.(0, 16), detail?.newsState?.reason, '此批次未收錄'))}</b></div><div><small>分析產生時間</small><b>${esc(first(detail?.analysisGeneratedAt?.slice?.(0, 16), '待補'))}</b></div></div>
+      <div class="v20-quote"><div><small>${esc(quoteCaption)}</small><strong>${displayNumber(quoteClose, 2)}</strong></div><div><small>當日漲跌</small><b class="${num(quoteChange) > 0 ? 'up' : num(quoteChange) < 0 ? 'down' : 'muted'}">${displayPercent(quoteChange, 2)}</b></div><div><small>資料完整度</small><b>${probability(detail?.completeness)}</b></div></div>
+      <div class="card v20-factor-grid"><div><small>交易日期</small><b>${esc(first(quoteDate, '此批次未保存價格日期'))}</b></div><div><small>分析資料日期</small><b>${esc(first(detail?.analysisDataDate, '待補'))}</b></div><div><small>新聞與公告</small><b>${esc(first(detail?.newsPublishedAt?.slice?.(0, 16), detail?.newsState?.reason, '此批次未收錄'))}</b></div><div><small>分析產生時間</small><b>${esc(first(detail?.analysisGeneratedAt?.slice?.(0, 16), '待補'))}</b></div></div>
       ${signalSection(safeArray(detail?.short), 'short', detail?.modelStates?.short)}${signalSection(safeArray(detail?.medium), 'medium', detail?.modelStates?.medium)}${detailResearchSections(detail)}${positionCalculator(detail)}
       ${safeArray(detail?.news).length ? `<section><h3>重要新聞與公告</h3><div class="card v20-news-list">${detail.news.slice(0, 8).map(item => `<article><div><b>${esc(item.title || '未命名公告')}</b><small>${esc(first(item.source, '公開來源'))} · ${esc(first(item.eventDate, item.publishedAt?.slice?.(0, 10), '日期待補'))}</small></div></article>`).join('')}</div></section>` : ''}
       ${disclaimer()}</div></div>`;

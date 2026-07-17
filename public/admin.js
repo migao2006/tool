@@ -411,7 +411,7 @@
     const modelAnomalies = modelObservability.anomalies || {};
     const channels = modelObservability.channels || {};
     return [
-      `台股智選 v${payload.version || '20.1.0'} 管理後台修復報告`,
+      `台股智選 v${payload.version || '20.1.1'} 管理後台修復報告`,
       `產生時間：${timestamp(payload.generatedAt)}`,
       `資料日期：${summary.latestDataDate || payload.health?.dataDate || '—'}`,
       '',

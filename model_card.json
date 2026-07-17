@@ -1,0 +1,29 @@
+{
+  "model_name": "alpha_lens_five_day_mvp",
+  "status": "RESEARCH_ONLY",
+  "production_horizon": 5,
+  "model_version": null,
+  "training_end_date": null,
+  "locked_holdout_executed": false,
+  "ranking_is_only_sort_source": true,
+  "entry_rule": "t_plus_1_executable_open",
+  "exit_rule": "entry_plus_5_trading_days_close",
+  "labels": {
+    "rank": "net_executable_return_minus_versioned_market_benchmark",
+    "direction": "UP_NEUTRAL_DOWN_using_dynamic_no_trade_band",
+    "quantiles": [0.1, 0.5, 0.9]
+  },
+  "data_requirements": {
+    "available_at_audit_required": true,
+    "historical_universe_required": true,
+    "corporate_actions_required": true,
+    "unadjusted_ohlc_for_execution": true
+  },
+  "published_metrics": null,
+  "limitations": [
+    "No real point-in-time market dataset has been imported",
+    "Walk-forward and locked holdout have not been executed",
+    "No production predictions or backtest performance are available"
+  ]
+}
+

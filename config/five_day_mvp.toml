@@ -1,0 +1,54 @@
+[mvp]
+horizon = 5
+status = "RESEARCH_ONLY"
+
+[benchmarks]
+listed = "TWSE_TAIEX_V1"
+otc = "TPEx_OTC_INDEX_V1"
+
+[data]
+available_at_policy = "feature.available_at <= decision_at"
+
+[cost]
+asset_type = "COMMON_STOCK"
+commission_rate = 0.001425
+commission_discount = 1.0
+minimum_fee = 20.0
+sell_tax_rate = 0.003
+estimated_order_notional_ntd = 100000.0
+spread_model = "tick_liquidity_adv20_v1"
+slippage_scenario = "base"
+market_impact_parameter = 0.10
+max_adv_participation = 0.01
+profile_version = "tw_stock_swing_v1"
+
+[rank]
+objective = "lambdarank"
+relevance_levels = 10
+eval_at = [10, 20, 50]
+lambdarank_truncation_level = 53
+seed = 20260718
+
+[decision]
+minimum_p_up = 0.55
+minimum_probability_spread = 0.15
+minimum_net_q50 = 0.0
+maximum_net_q10_loss = 0.05
+top_k = 20
+
+[portfolio]
+maximum_single_name_weight = 0.10
+maximum_industry_weight = 0.25
+maximum_market_exposure = 1.0
+minimum_holdings = 5
+maximum_daily_turnover = 0.40
+
+[validation]
+minimum_training_years = 5
+calibration_months = 6
+test_months = 3
+purge_trading_days = 10
+locked_holdout_months = 12
+step_months = 3
+bootstrap_block_days = 10
+

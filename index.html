@@ -3,273 +3,37 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <meta name="theme-color" content="#07110e" />
+    <meta name="theme-color" content="#000000" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="format-detection" content="telephone=no" />
-    <meta name="description" content="台股 2～10 日短波段預測儀表板" />
-    <title>Alpha Lens｜台股短波段預測</title>
+    <meta
+      name="description"
+      content="Alpha Lens 台股 5 個交易日短波段選股研究系統"
+    />
+    <title>Alpha Lens｜5 日短波段選股</title>
     <script src="./src/vendor/sentry-10.66.0.min.js" defer></script>
     <script src="./src/monitoring/sentry.js" defer></script>
     <script src="./src/vendor/supabase-2.110.7.min.js" defer></script>
     <link rel="stylesheet" href="./styles.css?v=ios-1" />
+    <link rel="stylesheet" href="./src/styles/five-day-mvp.css?v=five-day-1" />
     <link rel="stylesheet" href="./src/styles/auth.css?v=auth-4" />
-    <script src="./app.js?v=ios-1" defer></script>
+    <script type="module" src="./app.js?v=five-day-1"></script>
     <script type="module" src="./src/auth/bootstrap.js?v=auth-4"></script>
   </head>
-  <body data-auth-state="pending">
+  <body data-auth-state="pending" data-system-status="RESEARCH_ONLY">
     <a class="skip-link" href="#app-content">跳到主要內容</a>
 
     <header class="topbar">
-      <a class="brand" href="#home" data-route="home" aria-label="回到首頁">
+      <a class="brand" href="#home" data-route="home" aria-label="回到今日總覽">
         <strong>Alpha Lens</strong>
       </a>
-      <span class="top-status" aria-label="資料狀態">尚未更新</span>
+      <span class="top-status" data-system-status-label>RESEARCH_ONLY</span>
     </header>
 
-    <main id="app-content" class="app-shell">
-      <section class="app-page is-active" data-page="home" aria-labelledby="home-title">
-        <div class="page-heading">
-          <div>
-            <h1 id="home-title">首頁</h1>
-          </div>
-          <span class="date-badge">資料日期：尚未提供</span>
-        </div>
-        <section class="summary-grid" aria-label="市場摘要">
-          <article class="summary-card market-card">
-            <span>市場狀態</span>
-            <strong>尚無資料</strong>
-            <small>等待市場模型</small>
-          </article>
-          <article class="summary-card exposure-card">
-            <span>建議持股比例</span>
-            <strong>—</strong>
-            <small>尚未計算</small>
-          </article>
-          <article class="summary-card trend-card">
-            <div><span>加權指數</span><strong>—</strong></div>
-            <div><span>櫃買指數</span><strong>—</strong></div>
-            <small>尚無趨勢資料</small>
-          </article>
-        </section>
-
-        <section class="panel" aria-labelledby="opportunity-summary-title">
-          <div class="panel-heading">
-            <div>
-              <h2 id="opportunity-summary-title">最佳機會股</h2>
-            </div>
-            <button class="text-button" type="button" data-route="opportunities">查看全部</button>
-          </div>
-          <div class="horizon-summary-grid">
-            <button class="horizon-summary" type="button" data-route="opportunities" data-horizon="2">
-              <span>2 日</span><strong>—</strong><small>尚無資料</small>
-            </button>
-            <button class="horizon-summary" type="button" data-route="opportunities" data-horizon="3">
-              <span>3 日</span><strong>—</strong><small>尚無資料</small>
-            </button>
-            <button class="horizon-summary is-selected" type="button" data-route="opportunities" data-horizon="5">
-              <span>5 日</span><strong>—</strong><small>尚無資料</small>
-            </button>
-            <button class="horizon-summary" type="button" data-route="opportunities" data-horizon="10">
-              <span>10 日</span><strong>—</strong><small>尚無資料</small>
-            </button>
-          </div>
-        </section>
-
-        <section class="panel compact-panel" aria-labelledby="alert-title">
-          <div class="panel-heading">
-            <div>
-              <h2 id="alert-title">自選股警示</h2>
-            </div>
-            <button class="text-button" type="button" data-route="watchlist">查看自選股</button>
-          </div>
-          <div class="empty-row">
-            <span class="empty-symbol" aria-hidden="true">!</span>
-            <div><strong>尚無警示</strong><small>自選股資料尚未連接</small></div>
-          </div>
-        </section>
-
-        <section class="status-row" aria-label="更新狀態">
-          <div><span>資料狀態</span><strong>未連接</strong></div>
-          <div><span>模型版本</span><strong>尚未提供</strong></div>
-          <div><span>最後更新</span><strong>—</strong></div>
-        </section>
-
-        <details class="model-details">
-          <summary>模型說明</summary>
-          <div class="model-copy">
-            <p>核心輸出為超額報酬排名、方向機率、報酬區間與風險。</p>
-            <p>模型尚未連接前，不產生任何交易建議。</p>
-          </div>
-        </details>
-      </section>
-
-      <section class="app-page" data-page="opportunities" aria-labelledby="opportunities-title" hidden>
-        <div class="page-heading">
-          <div>
-            <h1 id="opportunities-title">機會股</h1>
-          </div>
-          <span class="date-badge">更新：—</span>
-        </div>
-
-        <div class="segmented four-up" data-segment="opportunity-horizon" aria-label="預測期間">
-          <button type="button" data-value="2" aria-pressed="false">2 日</button>
-          <button type="button" data-value="3" aria-pressed="false">3 日</button>
-          <button type="button" class="is-active" data-value="5" aria-pressed="true">5 日</button>
-          <button type="button" data-value="10" aria-pressed="false">10 日</button>
-        </div>
-
-        <section class="filter-panel" aria-label="機會股篩選">
-          <div class="segmented three-up" data-segment="market" aria-label="市場">
-            <button type="button" class="is-active" data-value="listed" aria-pressed="true">上市</button>
-            <button type="button" data-value="otc" aria-pressed="false">上櫃</button>
-            <button type="button" data-value="etf" aria-pressed="false">ETF</button>
-          </div>
-          <div class="filter-grid">
-            <label><span>產業</span><select><option>全部產業</option></select></label>
-            <label><span>風險</span><select><option>全部風險</option></select></label>
-            <label><span>模型信心</span><select><option>全部信心</option></select></label>
-          </div>
-        </section>
-
-        <section class="panel ranking-list-panel" aria-labelledby="ranking-list-title">
-          <div class="panel-heading">
-            <div><p class="page-label" id="opportunity-context">上市 · 5 日</p><h2 id="ranking-list-title">預測排名</h2></div>
-            <span class="count-badge">0 筆</span>
-          </div>
-          <div class="ranking-header" aria-hidden="true">
-            <span>排名／股票</span><span>上漲機率</span><span>超額報酬</span><span>風險</span><span>持有</span>
-          </div>
-          <div class="large-empty-state">
-            <span class="empty-symbol" aria-hidden="true">↗</span>
-            <strong>尚無機會股資料</strong>
-            <p>完成資料與模型連接後顯示排名。</p>
-          </div>
-        </section>
-      </section>
-
-      <section class="app-page" data-page="stock" aria-labelledby="stock-title" hidden>
-        <div class="stock-page-heading">
-          <button class="back-button" type="button" data-stock-back aria-label="返回上一頁">‹</button>
-          <div>
-            <h1 id="stock-title">尚未選擇股票</h1>
-          </div>
-          <button class="watch-button" type="button" aria-label="加入自選股" disabled>☆</button>
-        </div>
-
-        <div class="segmented four-up" data-segment="stock-horizon" aria-label="個股預測期間">
-          <button type="button" data-value="2" aria-pressed="false">2 日</button>
-          <button type="button" data-value="3" aria-pressed="false">3 日</button>
-          <button type="button" class="is-active" data-value="5" aria-pressed="true">5 日</button>
-          <button type="button" data-value="10" aria-pressed="false">10 日</button>
-        </div>
-
-        <section class="metric-grid stock-metrics" aria-label="排名與預期報酬">
-          <article><span>全市場排名</span><strong>—</strong></article>
-          <article><span>產業排名</span><strong>—</strong></article>
-          <article><span>Alpha Score</span><strong>—</strong></article>
-          <article><span>預期超額報酬</span><strong>—</strong></article>
-        </section>
-
-        <div class="analysis-grid">
-          <section class="panel" aria-labelledby="probability-title">
-            <div class="panel-heading"><h2 id="probability-title">方向機率</h2><span class="confidence-badge">信心：—</span></div>
-            <div class="probability-list">
-              <div><span><i class="dot up"></i>有效上漲</span><strong>—</strong></div>
-              <div><span><i class="dot neutral"></i>中性</span><strong>—</strong></div>
-              <div><span><i class="dot down"></i>有效下跌</span><strong>—</strong></div>
-            </div>
-          </section>
-
-          <section class="panel" aria-labelledby="distribution-title">
-            <div class="panel-heading"><h2 id="distribution-title">報酬區間</h2><span class="confidence-badge">預期：—</span></div>
-            <div class="distribution-row">
-              <div><span>P10</span><strong>—</strong></div>
-              <div class="median"><span>P50</span><strong>—</strong></div>
-              <div><span>P90</span><strong>—</strong></div>
-            </div>
-          </section>
-
-          <section class="panel" aria-labelledby="path-title">
-            <div class="panel-heading"><h2 id="path-title">風險與路徑</h2><span class="confidence-badge">持有：—</span></div>
-            <div class="key-value-grid">
-              <div><span>MFE</span><strong>—</strong></div>
-              <div><span>MAE</span><strong>—</strong></div>
-              <div><span>停利先到</span><strong>—</strong></div>
-              <div><span>停損先到</span><strong>—</strong></div>
-              <div><span>持有到期</span><strong>—</strong></div>
-              <div><span>風險等級</span><strong>—</strong></div>
-            </div>
-          </section>
-        </div>
-
-        <section class="factor-section" aria-label="個股分析因子">
-          <details open><summary>技術面</summary><p>尚無技術面資料。</p></details>
-          <details><summary>籌碼面</summary><p>尚無籌碼面資料。</p></details>
-          <details><summary>基本面</summary><p>尚無基本面資料。</p></details>
-        </section>
-
-        <section class="panel factor-summary" aria-labelledby="factor-summary-title">
-          <h2 id="factor-summary-title">影響因素</h2>
-          <div class="factor-columns">
-            <div><span class="positive-label">正面因素</span><p>尚無資料</p></div>
-            <div><span class="negative-label">負面因素</span><p>尚無資料</p></div>
-          </div>
-          <div class="invalidation"><span>預測失效條件</span><strong>尚未定義</strong></div>
-        </section>
-      </section>
-
-      <section class="app-page" data-page="watchlist" aria-labelledby="watchlist-title" hidden>
-        <div class="page-heading">
-          <div>
-            <h1 id="watchlist-title">自選股</h1>
-          </div>
-          <span class="date-badge">更新：—</span>
-        </div>
-        <div id="auth-entry" class="auth-entry" aria-live="polite"></div>
-
-        <div class="segmented two-up" data-auth-protected data-segment="watch-mode" aria-label="自選股內容">
-          <button type="button" class="is-active" data-value="watchlist" aria-pressed="true">自選清單</button>
-          <button type="button" data-value="portfolio" aria-pressed="false">我的持倉</button>
-        </div>
-
-        <section class="panel watch-panel" data-auth-protected data-watch-view="watchlist" aria-labelledby="watch-list-heading">
-          <div class="panel-heading"><h2 id="watch-list-heading">自選清單</h2><span class="count-badge">0 檔</span></div>
-          <div class="watch-columns" aria-hidden="true"><span>股票</span><span>最新排名</span><span>機率變化</span><span>預期報酬</span><span>警示</span></div>
-          <div class="large-empty-state">
-            <span class="empty-symbol" aria-hidden="true">☆</span>
-            <strong>尚未加入自選股</strong>
-            <p>從機會股或個股分析加入。</p>
-            <button type="button" class="primary-button" data-route="opportunities">瀏覽機會股</button>
-          </div>
-        </section>
-
-        <section class="panel watch-panel" data-auth-protected data-watch-view="portfolio" aria-labelledby="portfolio-heading" hidden>
-          <div class="panel-heading"><h2 id="portfolio-heading">我的持倉</h2><span class="count-badge">0 檔</span></div>
-          <div class="watch-columns portfolio-columns" aria-hidden="true"><span>股票</span><span>持有成本</span><span>損益</span><span>風險狀態</span></div>
-          <div class="large-empty-state">
-            <span class="empty-symbol" aria-hidden="true">◎</span>
-            <strong>尚無持倉資料</strong>
-            <p>持倉功能尚未連接。</p>
-          </div>
-        </section>
-      </section>
-    </main>
-
+    <main id="app-content" class="app-shell"></main>
     <div id="auth-root"></div>
-
-    <nav class="bottom-nav" aria-label="主要導覽">
-      <button type="button" class="is-active" data-route="home" aria-current="page">
-        <span class="tab-icon tab-icon-home" aria-hidden="true"></span><span class="tab-label">首頁</span>
-      </button>
-      <button type="button" data-route="opportunities">
-        <span class="tab-icon tab-icon-opportunities" aria-hidden="true"></span><span class="tab-label">機會股</span>
-      </button>
-      <button type="button" data-route="watchlist">
-        <span class="tab-icon tab-icon-watchlist" aria-hidden="true"></span><span class="tab-label">自選股</span>
-      </button>
-    </nav>
-
-    <footer class="legal-note">僅供介面預覽，不構成投資建議。</footer>
+    <div id="navigation-root"></div>
+    <footer class="legal-note">研究用途，不構成投資建議或獲利保證。</footer>
   </body>
 </html>

@@ -4,30 +4,28 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="theme-color" content="#07110e" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="format-detection" content="telephone=no" />
     <meta name="description" content="台股 2～10 日短波段預測儀表板" />
     <title>Alpha Lens｜台股短波段預測</title>
-    <link rel="stylesheet" href="./styles.css" />
-    <script src="./app.js" defer></script>
+    <link rel="stylesheet" href="./styles.css?v=ios-1" />
+    <script src="./app.js?v=ios-1" defer></script>
   </head>
   <body>
     <a class="skip-link" href="#app-content">跳到主要內容</a>
 
     <header class="topbar">
       <a class="brand" href="#home" data-route="home" aria-label="回到首頁">
-        <span class="brand-mark" aria-hidden="true">AL</span>
         <strong>Alpha Lens</strong>
       </a>
-      <div class="top-status" aria-label="資料狀態">
-        <span class="status-dot" aria-hidden="true"></span>
-        <span>尚未更新</span>
-      </div>
+      <span class="top-status" aria-label="資料狀態">尚未更新</span>
     </header>
 
     <main id="app-content" class="app-shell">
       <section class="app-page is-active" data-page="home" aria-labelledby="home-title">
         <div class="page-heading">
           <div>
-            <p class="page-label">今日概況</p>
             <h1 id="home-title">首頁</h1>
           </div>
           <span class="date-badge">資料日期：尚未提供</span>
@@ -54,8 +52,7 @@
         <section class="panel" aria-labelledby="opportunity-summary-title">
           <div class="panel-heading">
             <div>
-              <p class="page-label">最佳機會股</p>
-              <h2 id="opportunity-summary-title">各期間摘要</h2>
+              <h2 id="opportunity-summary-title">最佳機會股</h2>
             </div>
             <button class="text-button" type="button" data-route="opportunities">查看全部</button>
           </div>
@@ -78,8 +75,7 @@
         <section class="panel compact-panel" aria-labelledby="alert-title">
           <div class="panel-heading">
             <div>
-              <p class="page-label">自選股</p>
-              <h2 id="alert-title">警示</h2>
+              <h2 id="alert-title">自選股警示</h2>
             </div>
             <button class="text-button" type="button" data-route="watchlist">查看自選股</button>
           </div>
@@ -107,7 +103,6 @@
       <section class="app-page" data-page="opportunities" aria-labelledby="opportunities-title" hidden>
         <div class="page-heading">
           <div>
-            <p class="page-label">Alpha Ranking</p>
             <h1 id="opportunities-title">機會股</h1>
           </div>
           <span class="date-badge">更新：—</span>
@@ -145,7 +140,6 @@
             <span class="empty-symbol" aria-hidden="true">↗</span>
             <strong>尚無機會股資料</strong>
             <p>完成資料與模型連接後顯示排名。</p>
-            <button type="button" class="secondary-button" data-open-stock>查看個股分析版型</button>
           </div>
         </section>
       </section>
@@ -154,7 +148,6 @@
         <div class="stock-page-heading">
           <button class="back-button" type="button" data-stock-back aria-label="返回上一頁">‹</button>
           <div>
-            <p class="page-label">個股分析</p>
             <h1 id="stock-title">尚未選擇股票</h1>
           </div>
           <button class="watch-button" type="button" aria-label="加入自選股" disabled>☆</button>
@@ -225,7 +218,6 @@
       <section class="app-page" data-page="watchlist" aria-labelledby="watchlist-title" hidden>
         <div class="page-heading">
           <div>
-            <p class="page-label">追蹤與持倉</p>
             <h1 id="watchlist-title">自選股</h1>
           </div>
           <span class="date-badge">更新：—</span>
@@ -261,13 +253,13 @@
 
     <nav class="bottom-nav" aria-label="主要導覽">
       <button type="button" class="is-active" data-route="home" aria-current="page">
-        <span class="nav-icon" aria-hidden="true">⌂</span><span>首頁</span>
+        <span class="tab-icon tab-icon-home" aria-hidden="true"></span><span class="tab-label">首頁</span>
       </button>
       <button type="button" data-route="opportunities">
-        <span class="nav-icon" aria-hidden="true">↗</span><span>機會股</span>
+        <span class="tab-icon tab-icon-opportunities" aria-hidden="true"></span><span class="tab-label">機會股</span>
       </button>
       <button type="button" data-route="watchlist">
-        <span class="nav-icon" aria-hidden="true">☆</span><span>自選股</span>
+        <span class="tab-icon tab-icon-watchlist" aria-hidden="true"></span><span class="tab-label">自選股</span>
       </button>
     </nav>
 

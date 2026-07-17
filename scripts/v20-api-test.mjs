@@ -1067,12 +1067,28 @@ try {
       });
     }
     if (url.pathname.endsWith("/rpc/twss_v20_read_stock_snapshot")) {
+      const symbol = JSON.parse(init.body).p_query.symbol;
       return Response.json({
         run: publicRun,
-        symbol: "2330",
-        found: true,
-        items: [publicShortItem, publicMediumItem, researchOnly60DayItem],
+        symbol,
+        found: symbol === "2330",
+        items: symbol === "2330" ? [publicShortItem, publicMediumItem, researchOnly60DayItem] : [],
       });
+    }
+    if (url.pathname.endsWith("/rpc/twss_v20_public_stock_reference")) {
+      const symbol = JSON.parse(init.body).p_symbol;
+      return Response.json(symbol === "5880" ? {
+        snapshot: {
+          stock: { symbol, name: "合庫金", market: "上市", priceDate: "2026-07-16", close: 25.5 },
+          quote: { tradeDate: "2026-07-16", close: 25.5, change: 0.59, source: "stored market snapshot" },
+          sourceDates: { price: "2026-07-16" },
+          fetchedAt: "2026-07-16T10:00:00Z",
+        },
+        signals: [
+          { ...detailSignalRow, symbol, name: "合庫金", model_version: "20.1", signal_date: "2026-07-16", outside_publication: true, reference_only: true },
+          { ...detailSignalRow, symbol, name: "合庫金", model_key: "medium", horizon_days: 20, model_version: "20.1", signal_date: "2026-07-16", outside_publication: true, reference_only: true },
+        ],
+      } : { snapshot: {}, signals: [] });
     }
     if (url.pathname.endsWith("/rpc/twss_v20_read_validation_summary")) {
       return Response.json({
@@ -1108,6 +1124,13 @@ try {
   assert.deepEqual(publicStock.quote, bootstrap.quote,
     "the bounded public RPC must preserve the immutable quote snapshot");
 
+  const publicReferenceStock = await publicBackend.readV20Stock("5880");
+  assert.equal(publicReferenceStock.dataState, "partial");
+  assert.equal(publicReferenceStock.publicationCoverage.status, "outside_current_publication");
+  assert.equal(publicReferenceStock.publicationCoverage.referenceSignalsUsed, true);
+  assert.equal(publicReferenceStock.quote.close, 25.5);
+  assert.equal(publicReferenceStock.short[0].legacyReference, true);
+
   const publicBacktest = await publicBackend.readV20Backtest(new URL(
     "https://app.test/api/v20/backtest?model=short&horizon=5",
   ));
@@ -1120,6 +1143,7 @@ try {
     "/rpc/twss_v20_read_rankings",
     "/rpc/twss_v20_read_stock_snapshot",
     "/rpc/twss_v20_read_validation_summary",
+    "/rpc/twss_v20_public_stock_reference",
   ]) {
     assert.ok(publicRpcPaths.some((path) => path.endsWith(rpc)), `missing public fallback ${rpc}`);
   }
@@ -1128,7 +1152,8 @@ try {
     assert.equal(call.init.headers.apikey, "test-public-key");
     assert.equal(call.init.headers.authorization, undefined,
       "a public Supabase key must never be copied into an Authorization header");
-    assert.ok(call.url.pathname.includes("/rpc/twss_v20_read_"),
+    assert.ok(call.url.pathname.includes("/rpc/twss_v20_read_")
+      || call.url.pathname.endsWith("/rpc/twss_v20_public_stock_reference"),
       "public fallback must use bounded read RPCs instead of direct tables");
   }
   const publicRankingCall = publicCalls.find((call) =>
@@ -1145,7 +1170,7 @@ try {
   assert.ok(publicCalls.every((call) => JSON.parse(call.init.body || "{}").p_query?.horizonDays !== 60),
     "the server must never request the research-only 60-day horizon through a public RPC");
 
-  const [html, ui, smart, sw, manifest, generator, backendSource] = await Promise.all([
+  const [html, ui, smart, sw, manifest, generator, backendSource, referenceMigration] = await Promise.all([
     readFile(new URL("../public/index.html", import.meta.url), "utf8"),
     readFile(new URL("../public/v20.js", import.meta.url), "utf8"),
     readFile(new URL("../public/smart.js", import.meta.url), "utf8"),
@@ -1153,7 +1178,13 @@ try {
     readFile(new URL("../public/manifest.webmanifest", import.meta.url), "utf8"),
     readFile(new URL("./generate-worker.mjs", import.meta.url), "utf8"),
     readFile(new URL("../src/v20-backend.js", import.meta.url), "utf8"),
+    readFile(new URL("../supabase/migrations/20260717193000_public_stock_reference_fallback.sql", import.meta.url), "utf8"),
   ]);
+  assert.match(referenceMigration,
+    /revoke all on function public\.twss_v20_public_stock_reference\(text\)[\s\S]*grant execute[\s\S]*to anon, authenticated, service_role;/,
+    "the bounded single-stock reference RPC must have an explicit public grant");
+  assert.match(referenceMigration, /- 'up_probability'[\s\S]*- 'target_first_probability'/,
+    "uncalibrated prediction fields must not escape through the reference RPC");
   for (const tab of ["home", "short", "medium", "watchlist", "validation"]) {
     assert.match(html, new RegExp(`data-tab="${tab}"`));
   }

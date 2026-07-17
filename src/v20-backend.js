@@ -1406,6 +1406,17 @@ async function loadReferenceSignals(symbol, publication = {}) {
     }));
 }
 
+async function loadPublicStockReference(symbol) {
+  const { data } = await publicRpcRequest("twss_v20_public_stock_reference", {
+    p_symbol: symbol,
+  });
+  const payload = cleanObject(Array.isArray(data) ? data[0] : data);
+  return {
+    snapshot: cleanObject(payload.snapshot),
+    signals: (Array.isArray(payload.signals) ? payload.signals : []).map(normalizeRanking),
+  };
+}
+
 async function loadLatestStockSnapshot(symbol, publication = {}) {
   if (!marketServiceKey) return null;
   const params = new URLSearchParams({
@@ -1516,13 +1527,23 @@ export async function readV20Stock(symbol, options = {}) {
     loadFugleQuote(normalized).catch(() => null),
   ]);
   const immutableSignals = signalsResult.status === "fulfilled" ? signalsResult.value : [];
-  const referenceSignals = immutableSignals.length
+  let referenceSignals = immutableSignals.length
     ? []
     : await cached(
       `v20:stock-reference:${normalized}:${publication.publishedDataDate || "latest"}`,
       STOCK_TTL_MS,
       () => loadReferenceSignals(normalized, publication),
     ).catch(() => []);
+  let publicReference = null;
+  if (!immutableSignals.length && (!referenceSignals.length || !snapshotResult)) {
+    publicReference = await cached(
+      `v20:stock-public-reference:${normalized}:${publication.publishedDataDate || "latest"}`,
+      STOCK_TTL_MS,
+      () => loadPublicStockReference(normalized),
+    ).catch(() => null);
+    if (!referenceSignals.length) referenceSignals = publicReference?.signals || [];
+  }
+  const resolvedSnapshot = snapshotResult || publicReference?.snapshot || null;
   const signals = immutableSignals.length ? immutableSignals : referenceSignals;
   const referenceOnly = !immutableSignals.length && referenceSignals.length > 0;
   const publicationMember = immutableSignals.length > 0;
@@ -1538,7 +1559,7 @@ export async function readV20Stock(symbol, options = {}) {
     ...(!signals.length ? ["v20_model_not_generated"] : []),
   ];
   const sourceDates = {
-    ...cleanObject(snapshotResult?.sourceDates),
+    ...cleanObject(resolvedSnapshot?.sourceDates),
     ...sourceDatesFromRows(signals),
     ...(fugleResult?.quote?.tradeDate ? { quote: fugleResult.quote.tradeDate } : {}),
   };
@@ -1550,7 +1571,7 @@ export async function readV20Stock(symbol, options = {}) {
   const stock = {
     symbol: normalized,
     name: normalized,
-    ...cleanObject(snapshotResult?.stock),
+    ...cleanObject(resolvedSnapshot?.stock),
     ...cleanObject(signals[0]),
     ...cleanObject(fugleResult?.stock),
   };
@@ -1560,7 +1581,7 @@ export async function readV20Stock(symbol, options = {}) {
   const quoteConflict = quoteSignatures.size > 1;
   if (quoteConflict) degraded.push("immutable_quote_conflict");
   const immutableQuote = quoteConflict ? null : quotes[0] || null;
-  const quote = newestQuote(fugleResult?.quote, snapshotResult?.quote, immutableQuote);
+  const quote = newestQuote(fugleResult?.quote, resolvedSnapshot?.quote, immutableQuote);
   if (!quote) degraded.push("quote_unavailable");
   const tradeDate = quote?.tradeDate
     || signals.map((row) => row.tradeDate).filter(Boolean).sort().at(-1)
@@ -1572,7 +1593,7 @@ export async function readV20Stock(symbol, options = {}) {
       sourceDates,
       fetchedAt: [
         ...signals.map((row) => row.updatedAt),
-        snapshotResult?.fetchedAt,
+        resolvedSnapshot?.fetchedAt,
         fugleResult?.fetchedAt,
       ].filter(Boolean).sort().at(-1) || null,
       completeness,

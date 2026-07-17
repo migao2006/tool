@@ -8,7 +8,7 @@ import {
   PredictionApiError,
   requestPredictionApi,
   resolvePredictionApiBaseUrl,
-} from "./api-client.js?v=api-3";
+} from "./api-client.js?v=api-4";
 import { createUnavailableSnapshot, normalizePredictionSnapshot } from "./prediction-contract.js?v=api-4";
 import { readSupabaseAccessToken } from "./session-token.js?v=api-3";
 
@@ -60,5 +60,13 @@ export async function loadPredictionSnapshot({
     signal,
     config,
   });
-  return normalizePredictionSnapshot(payload, normalizedHorizon);
+  try {
+    return normalizePredictionSnapshot(payload, normalizedHorizon);
+  } catch (error) {
+    throw new PredictionApiError(
+      "PREDICTION_API_CONTRACT_ERROR",
+      "預測 API 回傳內容不符合目前契約。",
+      { cause: error },
+    );
+  }
 }

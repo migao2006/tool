@@ -6,13 +6,14 @@ const ROUTE_TITLES = Object.freeze({
   watchlist: "自選股",
 });
 
-export function createRouter() {
+export function createRouter({ canActivate = () => true } = {}) {
   let currentRoute = "home";
   let previousMainRoute = "home";
   const scrollPositions = new Map();
 
   function show(route, { updateHash = true, restoreScroll = false } = {}) {
-    const targetRoute = ROUTE_TITLES[route] ? route : "home";
+    const requestedRoute = ROUTE_TITLES[route] ? route : "home";
+    const targetRoute = canActivate(requestedRoute) ? requestedRoute : "home";
     const target = document.querySelector(`[data-page="${targetRoute}"]`);
     if (!target) return;
 
@@ -37,6 +38,8 @@ export function createRouter() {
     document.title = `Alpha Lens｜${ROUTE_TITLES[targetRoute]}`;
     if (updateHash && window.location.hash !== `#${targetRoute}`) {
       window.history.pushState({ route: targetRoute }, "", `#${targetRoute}`);
+    } else if (!updateHash && window.location.hash && window.location.hash !== `#${targetRoute}`) {
+      window.history.replaceState({ route: targetRoute }, "", `#${targetRoute}`);
     }
 
     const nextScroll = restoreScroll ? scrollPositions.get(targetRoute) ?? 0 : 0;
@@ -64,5 +67,5 @@ export function createRouter() {
     show(window.location.hash.slice(1), { updateHash: false });
   }
 
-  return Object.freeze({ show, start });
+  return Object.freeze({ current: () => currentRoute, show, start });
 }

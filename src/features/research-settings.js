@@ -1,13 +1,14 @@
 const STORAGE_KEY = "alpha-lens:five-day-research-settings";
-const NUMERIC_FIELDS = new Set([
-  "commission_discount",
-  "minimum_fee",
-  "estimated_order_notional_ntd",
-  "max_adv_participation",
-  "max_single_position",
-  "max_industry_position",
-  "max_market_exposure",
-]);
+const NUMERIC_RULES = Object.freeze({
+  commission_discount: { minimum: Number.EPSILON, maximum: 1 },
+  minimum_fee: { minimum: 0 },
+  estimated_order_notional_ntd: { minimum: Number.EPSILON },
+  max_adv_participation: { minimum: Number.EPSILON, maximum: 1 },
+  max_single_position: { minimum: 0, maximum: 1 },
+  max_industry_position: { minimum: 0, maximum: 1 },
+  max_market_exposure: { minimum: 0, maximum: 1 },
+});
+const COST_PROFILES = new Set(["low_cost", "base_cost", "stressed_cost", "extreme_cost"]);
 
 function loadStoredValues() {
   try {
@@ -22,12 +23,19 @@ function normalizedSettings(values) {
   const settings = {};
   Object.entries(values).forEach(([name, value]) => {
     if (value === "" || value === null || value === undefined) return;
-    if (NUMERIC_FIELDS.has(name)) {
+    const rule = NUMERIC_RULES[name];
+    if (rule) {
       const numeric = Number(value);
-      if (Number.isFinite(numeric)) settings[name] = numeric;
+      if (Number.isFinite(numeric)
+        && numeric >= rule.minimum
+        && (rule.maximum === undefined || numeric <= rule.maximum)) {
+        settings[name] = numeric;
+      }
       return;
     }
-    settings[name] = String(value);
+    if (name === "cost_profile" && COST_PROFILES.has(String(value))) {
+      settings[name] = String(value);
+    }
   });
   return Object.freeze(settings);
 }
@@ -48,7 +56,11 @@ export function initializeResearchSettings({ onChange } = {}) {
   form.addEventListener("submit", (event) => {
     event.preventDefault();
     const feedback = form.querySelector("[data-settings-feedback]");
-    if (!form.reportValidity()) return;
+    if (feedback) feedback.textContent = "";
+    if (!form.reportValidity()) {
+      if (feedback) feedback.textContent = "請修正超出允許範圍的設定。";
+      return;
+    }
     const settings = normalizedSettings(Object.fromEntries(new FormData(form).entries()));
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));

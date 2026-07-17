@@ -1,8 +1,19 @@
-function setDrawerOpen(drawer, isOpen) {
+const drawerTriggers = new WeakMap();
+
+function setDrawerOpen(drawer, isOpen, trigger = null) {
+  if (isOpen && trigger) drawerTriggers.set(drawer, trigger);
   drawer.hidden = !isOpen;
   drawer.setAttribute("aria-hidden", String(!isOpen));
-  document.body.classList.toggle("has-open-drawer", isOpen);
-  if (isOpen) drawer.querySelector("[data-close-drawer]")?.focus();
+  document.body.classList.toggle(
+    "has-open-drawer",
+    Boolean(document.querySelector("[data-drawer]:not([hidden])")),
+  );
+  if (isOpen) {
+    drawer.querySelector("[data-close-drawer]")?.focus();
+  } else {
+    drawerTriggers.get(drawer)?.focus();
+    drawerTriggers.delete(drawer);
+  }
 }
 
 export function initializeDrawers() {
@@ -10,7 +21,7 @@ export function initializeDrawers() {
     const openButton = event.target.closest("[data-open-drawer]");
     if (openButton) {
       const drawer = document.querySelector(`[data-drawer="${openButton.dataset.openDrawer}"]`);
-      if (drawer) setDrawerOpen(drawer, true);
+      if (drawer) setDrawerOpen(drawer, true, openButton);
       return;
     }
 

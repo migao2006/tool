@@ -1,6 +1,6 @@
 import { createEmptyState } from "../components/empty-state.js";
 import { createCandidateCard } from "../components/candidate-card.js";
-import { createResearchSettingsDrawer } from "../components/research-settings-drawer.js";
+import { createResearchSettingsDrawer } from "../components/research-settings-drawer.js?v=debug-1";
 import { createStatusBanner } from "../components/status-banner.js";
 import { createValidationReportDrawer, renderValidationReport } from "../components/validation-report-drawer.js";
 import { formatDateTime, formatPercent } from "../core/formatters.js";

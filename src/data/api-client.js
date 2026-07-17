@@ -56,6 +56,30 @@ function buildUrl(path, query, config) {
   return url;
 }
 
+const HTTP_ERRORS = Object.freeze({
+  401: ["PREDICTION_API_UNAUTHORIZED", "登入狀態已失效，請重新登入。"],
+  403: ["PREDICTION_API_FORBIDDEN", "沒有權限使用此資料。"],
+  404: ["PREDICTION_API_NOT_FOUND", "預測 API 端點不存在。"],
+  409: ["PREDICTION_API_VERSION_CONFLICT", "資料與模型版本不一致。"],
+  422: ["PREDICTION_API_INVALID_REQUEST", "研究設定或查詢參數不合法。"],
+  429: ["PREDICTION_API_RATE_LIMITED", "請求過於頻繁，請稍後再試。"],
+});
+
+async function createHttpError(response) {
+  const [fallbackCode, message] = HTTP_ERRORS[response.status]
+    ?? ["PREDICTION_API_HTTP_ERROR", "預測服務暫時無法使用。"];
+  let serverCode = null;
+  try {
+    const payload = await response.json();
+    if (typeof payload?.code === "string" && /^[A-Z][A-Z0-9_]{0,79}$/u.test(payload.code)) {
+      serverCode = payload.code;
+    }
+  } catch {
+    // Error bodies are optional and never replace the stable user-facing copy.
+  }
+  return new PredictionApiError(serverCode ?? fallbackCode, message, { status: response.status });
+}
+
 export async function requestPredictionApi(path, {
   method = "GET",
   query,
@@ -85,12 +109,7 @@ export async function requestPredictionApi(path, {
       signal: request.signal,
     });
     if (!response.ok) {
-      const code = response.status === 401
-        ? "PREDICTION_API_UNAUTHORIZED"
-        : response.status === 403
-          ? "PREDICTION_API_FORBIDDEN"
-          : "PREDICTION_API_HTTP_ERROR";
-      throw new PredictionApiError(code, `預測 API 回應失敗：${response.status}`, { status: response.status });
+      throw await createHttpError(response);
     }
     if (response.status === 204) return null;
     try {

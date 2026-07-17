@@ -148,6 +148,16 @@ class FixtureHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api-invalid/prediction-snapshot":
             self._send(200, b"{invalid-json", "application/json; charset=utf-8")
             return
+        if parsed.path == "/api-contract-error/prediction-snapshot":
+            payload = build_snapshot()
+            payload["predictions"][0]["global_rank"] = 0
+            body = json.dumps(payload, ensure_ascii=False, allow_nan=False).encode()
+            self._send(200, body, "application/json; charset=utf-8")
+            return
+        if parsed.path == "/api-conflict/prediction-snapshot":
+            body = b'{"code":"MODEL_DATA_VERSION_CONFLICT"}'
+            self._send(409, body, "application/json; charset=utf-8")
+            return
         if parsed.path == "/api/prediction-snapshot":
             if parse_qs(parsed.query).get("horizon") != ["5"]:
                 self._send(422, b'{"code":"INVALID_HORIZON"}', "application/json")
@@ -170,7 +180,12 @@ try {
             self._send(200, html.encode(), "text/html; charset=utf-8")
             return
         if parsed.path in {"/", "/index.html"}:
-            api_path = "api-invalid" if parse_qs(parsed.query).get("api_mode") == ["invalid-json"] else "api"
+            mode = parse_qs(parsed.query).get("api_mode", [""])[0]
+            api_path = {
+                "invalid-json": "api-invalid",
+                "contract-error": "api-contract-error",
+                "conflict": "api-conflict",
+            }.get(mode, "api")
             html = (ROOT / "index.html").read_text(encoding="utf-8").replace(
                 '<html lang="zh-Hant">',
                 f'<html lang="zh-Hant" data-prediction-api-base-url="/{api_path}/">',

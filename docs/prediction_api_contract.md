@@ -95,6 +95,7 @@ X-Alpha-Lens-Contract: prediction-snapshot.v1
 - `422`：query 或研究設定不合法。
 - `429`：請求過於頻繁。
 - `5xx`：服務失敗；不得回傳舊資料冒充成功。
+- API 若回傳符合 `A-Z0-9_` 格式的 `code`，前端會保留該 reason code 供稽核；畫面仍使用固定的安全錯誤文案。
 - 若 API 與前端不同網域，CORS 只允許正式前端 origin、必要 method 與 `Authorization`、`Content-Type`、`X-Alpha-Lens-Contract` headers。
 - `prediction-snapshot` 應回傳 `Cache-Control: no-store`，或使用包含 `as_of_date`、設定與使用者身分的正確快取鍵。
 

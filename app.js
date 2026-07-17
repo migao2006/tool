@@ -1,16 +1,16 @@
 import { createBottomNavigation } from "./src/components/bottom-navigation.js";
-import { initializeDrawers } from "./src/components/drawer-controller.js";
-import { initializeResearchSettings, readResearchSettings } from "./src/features/research-settings.js";
+import { initializeDrawers } from "./src/components/drawer-controller.js?v=debug-1";
+import { initializeResearchSettings, readResearchSettings } from "./src/features/research-settings.js?v=debug-2";
 import { initializeCandidateFilters } from "./src/features/candidate-filters.js";
 import { initializeWatchlistFilters } from "./src/features/watchlist-filters.js";
 import { CURRENT_HORIZON } from "./src/core/five-day-contract.js";
-import { createRouter } from "./src/core/router.js";
+import { createRouter } from "./src/core/router.js?v=debug-1";
 import { UI_STATE, applyUiState, resolveSnapshotUiState } from "./src/core/ui-state.js";
-import { loadPredictionSnapshot } from "./src/data/prediction-api.js?v=api-4";
+import { loadPredictionSnapshot } from "./src/data/prediction-api.js?v=api-5";
 import { createUnavailableSnapshot } from "./src/data/prediction-contract.js?v=api-4";
-import { setWatchlistMembership } from "./src/data/watchlist-api.js?v=api-3";
+import { setWatchlistMembership } from "./src/data/watchlist-api.js?v=api-4";
 import { createCandidatesPage, renderCandidatesPage } from "./src/pages/candidates-page.js?v=ui-3";
-import { createOverviewPage, renderOverviewPage } from "./src/pages/overview-page.js?v=ui-3";
+import { createOverviewPage, renderOverviewPage } from "./src/pages/overview-page.js?v=ui-4";
 import { createStockDetailPage, renderStockDetailPage } from "./src/pages/stock-detail-page.js?v=ui-3";
 import { createWatchlistPage, renderWatchlistPage } from "./src/pages/watchlist-page.js?v=ui-3";
 
@@ -26,11 +26,13 @@ if (appRoot && navigationRoot) {
   ].join("");
   navigationRoot.innerHTML = createBottomNavigation();
 
-  const router = createRouter();
   let currentSnapshot = null;
   let selectedSymbol = null;
   let watchlistSymbols = new Set();
   let requestController = null;
+  const router = createRouter({
+    canActivate: (route) => route !== "stock" || Boolean(selectedSymbol),
+  });
   const candidateFilters = initializeCandidateFilters({
     onChange: (filters) => {
       if (currentSnapshot) renderCandidatesPage(currentSnapshot, resolveSnapshotUiState(currentSnapshot), filters);
@@ -52,7 +54,12 @@ if (appRoot && navigationRoot) {
     if (selectedSymbol) {
       const selected = [...(snapshot.predictions ?? []), ...(snapshot.watchlist ?? [])]
         .find((record) => record.symbol === selectedSymbol);
-      if (selected) renderStockDetailPage(selected, { isWatchlisted: watchlistSymbols.has(selected.symbol) });
+      if (selected) {
+        renderStockDetailPage(selected, { isWatchlisted: watchlistSymbols.has(selected.symbol) });
+      } else {
+        selectedSymbol = null;
+        if (router.current() === "stock") router.show("opportunities");
+      }
     }
   }
 

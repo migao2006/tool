@@ -9,10 +9,10 @@ export function createResearchSettingsDrawer() {
         </header>
         <form class="settings-form" data-research-settings>
           <p class="form-note">只保存允許的研究偏好，不會修改模型、校準或 locked holdout。</p>
-          <label><span>券商折扣 commission_discount</span><input name="commission_discount" type="number" min="0" max="1" step="0.01" inputmode="decimal" placeholder="尚未設定" /></label>
+          <label><span>券商折扣 commission_discount</span><input name="commission_discount" type="number" min="0.01" max="1" step="0.01" inputmode="decimal" placeholder="尚未設定" /></label>
           <label><span>最低手續費 minimum_fee</span><input name="minimum_fee" type="number" min="0" step="1" inputmode="numeric" placeholder="新台幣" /></label>
-          <label><span>估計下單金額 estimated_order_notional_ntd</span><input name="estimated_order_notional_ntd" type="number" min="0" step="1000" inputmode="numeric" placeholder="新台幣" /></label>
-          <label><span>ADV 最大參與率 max_adv_participation</span><input name="max_adv_participation" type="number" min="0" max="1" step="0.001" inputmode="decimal" placeholder="尚未設定" /></label>
+          <label><span>估計下單金額 estimated_order_notional_ntd</span><input name="estimated_order_notional_ntd" type="number" min="1" step="1000" inputmode="numeric" placeholder="新台幣" /></label>
+          <label><span>ADV 最大參與率 max_adv_participation</span><input name="max_adv_participation" type="number" min="0.001" max="1" step="0.001" inputmode="decimal" placeholder="尚未設定" /></label>
           <label><span>成本情境 cost_profile</span><select name="cost_profile"><option value="">尚未設定</option><option value="low_cost">low_cost</option><option value="base_cost">base_cost</option><option value="stressed_cost">stressed_cost</option><option value="extreme_cost">extreme_cost</option></select></label>
           <label><span>單股部位上限</span><input name="max_single_position" type="number" min="0" max="1" step="0.01" inputmode="decimal" placeholder="尚未設定" /></label>
           <label><span>單產業上限</span><input name="max_industry_position" type="number" min="0" max="1" step="0.01" inputmode="decimal" placeholder="尚未設定" /></label>

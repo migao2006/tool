@@ -61,6 +61,8 @@ def test_prediction_client_accepts_horizon_fetches_only_when_configured() -> Non
     assert "config.predictionApiBaseUrl" in transport
     assert "PREDICTION_API_TIMEOUT" in transport
     assert "PREDICTION_API_NETWORK_ERROR" in transport
+    assert "PREDICTION_API_VERSION_CONFLICT" in transport
+    assert "PREDICTION_API_RATE_LIMITED" in transport
     assert "PREDICTION_API_INVALID_JSON" in transport
     assert 'cache: "no-store"' in transport
     assert 'predictionApiContractVersion: "prediction-snapshot.v1"' in public_config
@@ -70,6 +72,7 @@ def test_prediction_client_accepts_horizon_fetches_only_when_configured() -> Non
     assert "query: predictionQuery(normalizedHorizon, settings)" in client
     assert "readSupabaseAccessToken" in client
     assert "accessToken," in client
+    assert "PREDICTION_API_CONTRACT_ERROR" in client
 
 
 def test_watchlist_api_requires_session_and_refreshes_after_auth_changes() -> None:
@@ -100,6 +103,30 @@ def test_decision_gate_renderer_matches_backend_contract_and_formats_objects() -
     ):
         assert key in gates
     assert "JSON.stringify(value)" in gates
+
+
+def test_stock_route_and_saved_research_settings_are_guarded() -> None:
+    app = read("app.js")
+    router = read("src/core/router.js")
+    settings = read("src/features/research-settings.js")
+    form = read("src/components/research-settings-drawer.js")
+
+    assert 'canActivate: (route) => route !== "stock" || Boolean(selectedSymbol)' in app
+    assert 'router.current() === "stock"' in app
+    assert "canActivate(requestedRoute)" in router
+    assert "history.replaceState" in router
+    assert "NUMERIC_RULES" in settings
+    assert "COST_PROFILES" in settings
+    assert "請修正超出允許範圍的設定" in settings
+    assert 'min="0.01" max="1"' in form
+    assert 'name="estimated_order_notional_ntd" type="number" min="1"' in form
+
+
+def test_drawer_restores_focus_to_its_opening_control() -> None:
+    drawer = read("src/components/drawer-controller.js")
+    assert "drawerTriggers = new WeakMap()" in drawer
+    assert "drawerTriggers.set(drawer, trigger)" in drawer
+    assert "drawerTriggers.get(drawer)?.focus()" in drawer
 
 
 def test_prediction_schema_rejects_wrong_horizon_and_invalid_formal_output() -> None:

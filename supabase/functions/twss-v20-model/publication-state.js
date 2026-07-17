@@ -125,7 +125,94 @@ export function publicationPhaseFor(summary = {}) {
   return "enriching";
 }
 
-/** Full-market work is keyed only by point-in-time source data and model code. */
-export function shouldRunFullMarket({ force = false, completedCycleKey = "", sourceKey = "" } = {}) {
-  return force === true || !sourceKey || String(completedCycleKey || "") !== String(sourceKey);
+export function publicationProgressStatus({
+  hasError = false,
+  publicationSucceeded = false,
+  awaitingInitialPublication = false,
+  fallbackStatus = "success",
+} = {}) {
+  if (hasError) return "partial";
+  if (publicationSucceeded) return "success";
+  if (awaitingInitialPublication) return "running";
+  return text(fallbackStatus) || "success";
+}
+
+export function finalizePublicationState({
+  state = {},
+  priorDetails = {},
+  sourceDate = "",
+  sourceKey = "",
+  enrichment = {},
+  publication = {},
+  publishedAt = "",
+  dataCompleteness = 0,
+} = {}) {
+  const finalSourceDate = isoDate(sourceDate);
+  const finalSourceKey = text(sourceKey);
+  const finalPublishedAt = text(publishedAt);
+  if (!finalSourceDate || !finalSourceKey || !finalPublishedAt) {
+    throw new Error("v20_finalized_publication_state_invalid");
+  }
+  const normalizedEnrichment = normalizeEnrichmentSummary(enrichment);
+  const publicationPhase = publicationPhaseFor(normalizedEnrichment);
+  const samePublishedDate = isoDate(priorDetails?.publishedDataDate) === finalSourceDate;
+  const workerCycle = priorDetails?.workerCycle && typeof priorDetails.workerCycle === "object"
+    ? { ...priorDetails.workerCycle, completed: true }
+    : priorDetails?.workerCycle;
+  return {
+    statePatch: {
+      last_success_at: finalPublishedAt,
+      next_run_at: null,
+      last_symbol: null,
+      cycle_number: Math.max(0, Math.trunc(Number(state?.cycle_number) || 0)) + 1,
+    },
+    details: {
+      ...priorDetails,
+      workerCycle,
+      scoredCycleKey: finalSourceKey,
+      scoredCycleAt: priorDetails?.scoredCycleAt || finalPublishedAt,
+      completedCycleKey: finalSourceKey,
+      completedCycleStatus: "success",
+      completedCycleAt: samePublishedDate && priorDetails?.completedCycleAt
+        ? priorDetails.completedCycleAt
+        : finalPublishedAt,
+      publishedCycleKey: finalSourceKey,
+      publishedDataDate: finalSourceDate,
+      publicationPhase,
+      baseCompletedAt: samePublishedDate && priorDetails?.baseCompletedAt
+        ? priorDetails.baseCompletedAt
+        : finalPublishedAt,
+      enrichmentCompletedAt: publicationPhase === "complete"
+        ? samePublishedDate && priorDetails?.enrichmentCompletedAt
+          ? priorDetails.enrichmentCompletedAt
+          : finalPublishedAt
+        : null,
+      enrichmentPending: normalizedEnrichment.unresolved,
+      enrichmentFingerprint: enrichmentFingerprint(normalizedEnrichment),
+      sourceDates: priorDetails?.targetSourceDates || priorDetails?.sourceDates || {},
+      dataCompleteness: Number(dataCompleteness) || 0,
+      publishedAt: finalPublishedAt,
+      publicationRunId: publication?.runId || null,
+      publicationKey: publication?.publicationKey || null,
+      contentHash: publication?.contentHash || null,
+    },
+  };
+}
+
+/**
+ * Full-market scoring is keyed only by point-in-time source data and model
+ * code. A cycle that has finished scoring but is still draining coalesced
+ * dirty work must continue through the incremental path; re-running the full
+ * scan would never settle the queue and therefore could never publish.
+ */
+export function shouldRunFullMarket({
+  force = false,
+  completedCycleKey = "",
+  scoredCycleKey = "",
+  sourceKey = "",
+} = {}) {
+  if (force === true || !sourceKey) return true;
+  return ![completedCycleKey, scoredCycleKey]
+    .map((value) => String(value || ""))
+    .includes(String(sourceKey));
 }

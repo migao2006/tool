@@ -20,8 +20,10 @@ import {
 // @ts-ignore Pure publication guards are exercised by Node behavioral tests.
 import {
   enrichmentFingerprint,
+  finalizePublicationState,
   normalizeEnrichmentSummary,
   publicationPhaseFor,
+  publicationProgressStatus,
   resolveReadySourceCycle,
   shouldRunFullMarket,
 } from "./publication-state.js";
@@ -430,6 +432,30 @@ async function publishImmutableRun(input: {
   });
   if (!data || typeof data !== "object") throw new Error("v20_publication_result_missing");
   return data;
+}
+
+async function finalizedPublicationDetails(input: {
+  state: Record<string, unknown>;
+  priorDetails: Record<string, unknown>;
+  sourceDate: string;
+  sourceKey: string;
+  enrichment: ReturnType<typeof normalizeEnrichmentSummary>;
+  publication: Record<string, unknown>;
+}) {
+  const { state, priorDetails, sourceDate, sourceKey, enrichment, publication } = input;
+  const publishedAt = now();
+  const dataCompleteness = await cycleCompleteness(sourceDate)
+    .catch(() => Number(priorDetails.dataCompleteness) || 0);
+  return finalizePublicationState({
+    state,
+    priorDetails,
+    sourceDate,
+    sourceKey,
+    enrichment,
+    publication,
+    publishedAt,
+    dataCompleteness,
+  });
 }
 
 function priorTurnoverContexts(rows: any[]) {
@@ -859,15 +885,52 @@ function compactError(
 async function processIncrementalBatch(input: {
   owner: string;
   sourceDate: string;
+  sourceKey: string;
   limit: number;
   state: any;
   priorDetails: Record<string, unknown>;
   enrichment: ReturnType<typeof normalizeEnrichmentSummary>;
 }) {
-  const { owner, sourceDate, limit, state, priorDetails, enrichment } = input;
+  const { owner, sourceDate, sourceKey, limit, state, priorDetails, enrichment } = input;
+  const awaitingInitialPublication = String(priorDetails.scoredCycleKey || "") === sourceKey
+    && String(priorDetails.completedCycleKey || "") !== sourceKey;
   const claims = await claimDirtyBatch(owner, V20_MODEL_VERSION, sourceDate, limit);
   if (!claims.length) {
     const phase = publicationPhaseFor(enrichment);
+    const outstanding = await outstandingDirtyCount(sourceDate);
+    let immutablePublication: Record<string, unknown> | null = null;
+    let publicationError: string | null = null;
+    if (awaitingInitialPublication && outstanding === 0) {
+      try {
+        const [expectedSymbolCount, marketContext, calibration] = await Promise.all([
+          activeUniverseCount(sourceDate),
+          loadMarketContext(sourceDate),
+          loadCalibrations(sourceDate),
+        ]);
+        const priorCycle = priorDetails.workerCycle && typeof priorDetails.workerCycle === "object"
+          ? priorDetails.workerCycle as Record<string, any>
+          : {};
+        immutablePublication = await publishImmutableRun({
+          dataDate: sourceDate,
+          expectedSymbolCount,
+          sourceDates: {
+            ...Object.fromEntries(V20_WORKER_GROUPS.map((group) => [group, sourceDate])),
+            universe: sourceDate,
+          },
+          completionKeys: (priorDetails.sourceReadiness as Record<string, unknown> | undefined)?.completionKeys,
+          groupCounts: Object.fromEntries(V20_WORKER_GROUPS.map((group) => [
+            group,
+            Number(priorCycle.groups?.[group]?.total || 0),
+          ])),
+          enrichment,
+          marketContext,
+          calibrationVersion: calibration.calibrationVersion,
+        }) as Record<string, unknown>;
+      } catch (error) {
+        publicationError = `immutable publication: ${error instanceof Error ? error.message : String(error)}`
+          .slice(0, 500);
+      }
+    }
     let outcomeEvaluation: unknown = null;
     let outcomeEvaluationError: string | null = null;
     let calibrationRefresh: unknown = null;
@@ -884,19 +947,43 @@ async function processIncrementalBatch(input: {
         calibrationRefreshError = String(error instanceof Error ? error.message : error).slice(0, 500);
       }
     }
-    const maintenanceError = outcomeEvaluationError
+    const maintenanceError = publicationError || (outcomeEvaluationError
       ? `outcome_evaluation: ${outcomeEvaluationError}`
-      : calibrationRefreshError ? `calibration_refresh: ${calibrationRefreshError}` : null;
+      : calibrationRefreshError ? `calibration_refresh: ${calibrationRefreshError}` : null);
+    const finalizedPublication = immutablePublication
+      ? await finalizedPublicationDetails({
+        state,
+        priorDetails,
+        sourceDate,
+        sourceKey,
+        enrichment,
+        publication: immutablePublication,
+      })
+      : null;
+    const publicationDetails = finalizedPublication?.details || priorDetails;
+    const status = publicationProgressStatus({
+      hasError: Boolean(maintenanceError),
+      publicationSucceeded: Boolean(immutablePublication),
+      awaitingInitialPublication,
+      fallbackStatus: priorDetails.completedCycleStatus || state?.status || "success",
+    });
     await patchState({
-      status: maintenanceError ? "partial" : priorDetails.completedCycleStatus || state?.status || "success",
+      ...(finalizedPublication?.statePatch || {}),
+      status,
       last_error: maintenanceError,
-      next_run_at: null,
+      last_success_at: finalizedPublication?.statePatch?.last_success_at || state?.last_success_at || null,
+      next_run_at: publicationError || outstanding > 0
+        ? new Date(Date.now() + 2 * 60_000).toISOString()
+        : finalizedPublication?.statePatch?.next_run_at ?? null,
       details: {
-        ...priorDetails,
+        ...publicationDetails,
         publicationPhase: phase,
         enrichmentPending: enrichment.unresolved,
         enrichmentFingerprint: enrichmentFingerprint(enrichment),
         lastIncrementalCheckAt: now(),
+        dirtyQueuePending: outstanding,
+        immutablePublication: immutablePublication || publicationDetails.immutablePublication || null,
+        publicationError,
         outcomeEvaluation,
         outcomeEvaluationError,
         calibrationRefresh,
@@ -904,13 +991,19 @@ async function processIncrementalBatch(input: {
       },
     });
     return json({
-      status: "maintenance",
-      reason: "cycle_complete_no_dirty_symbols",
+      status: maintenanceError ? "partial" : immutablePublication ? "success" : "maintenance",
+      reason: publicationError
+        ? "scored_cycle_publication_retry"
+        : outstanding > 0 ? "dirty_queue_waiting" : "cycle_complete_no_dirty_symbols",
       modelVersion: V20_MODEL_VERSION,
-      publishedDataDate: priorDetails.publishedDataDate || sourceDate,
+      publishedDataDate: publicationDetails.publishedDataDate || null,
+      completedCycleKey: publicationDetails.completedCycleKey || null,
       publicationPhase: phase,
       enrichmentPending: enrichment.unresolved,
+      dirtyQueuePending: outstanding,
       incrementalClaimed: 0,
+      immutablePublication,
+      publicationError,
       outcomeEvaluation,
       outcomeEvaluationError,
       calibrationRefresh,
@@ -1030,6 +1123,8 @@ async function processIncrementalBatch(input: {
     completeDirtyBatch(owner, successfulIds),
     retryDirtyBatch(owner, failedIds, retryError),
   ]);
+  const incrementalDirtyPending = await outstandingDirtyCount(sourceDate)
+    .catch(() => Math.max(0, failedIds.length));
   let outcomeEvaluation: unknown = null;
   let outcomeEvaluationError: string | null = null;
   let calibrationRefresh: unknown = null;
@@ -1052,16 +1147,36 @@ async function processIncrementalBatch(input: {
     : outcomeEvaluationError
       ? `outcome_evaluation: ${outcomeEvaluationError}`
       : calibrationRefreshError ? `calibration_refresh: ${calibrationRefreshError}` : null;
+  const finalizedPublication = ranking && typeof ranking === "object"
+    ? await finalizedPublicationDetails({
+      state,
+      priorDetails,
+      sourceDate,
+      sourceKey,
+      enrichment,
+      publication: ranking as Record<string, unknown>,
+    })
+    : null;
+  const publicationDetails = finalizedPublication?.details || priorDetails;
+  const status = publicationProgressStatus({
+    hasError: Boolean(incrementalError),
+    publicationSucceeded: Boolean(ranking),
+    awaitingInitialPublication,
+    fallbackStatus: priorDetails.completedCycleStatus || "success",
+  });
   await patchState({
-    status: incrementalError ? "partial" : priorDetails.completedCycleStatus || "success",
+    ...(finalizedPublication?.statePatch || {}),
+    status,
     last_error: incrementalError,
-    last_success_at: successfulIds.length ? now() : state?.last_success_at || null,
+    last_success_at: finalizedPublication?.statePatch?.last_success_at
+      || (successfulIds.length ? now() : state?.last_success_at || null),
     next_run_at: failedIds.length ? new Date(Date.now() + 2 * 60_000).toISOString() : null,
     details: {
-      ...priorDetails,
+      ...publicationDetails,
       publicationPhase: phase,
       enrichmentPending: enrichment.unresolved,
       enrichmentFingerprint: enrichmentFingerprint(enrichment),
+      dirtyQueuePending: incrementalDirtyPending,
       lastIncrementalAt: now(),
       lastIncremental: {
         claimed: claims.length,
@@ -1082,12 +1197,14 @@ async function processIncrementalBatch(input: {
     },
   });
   return json({
-    status: incrementalError ? "partial" : "success",
+    status,
     reason: "incremental_dirty_symbols",
     modelVersion: V20_MODEL_VERSION,
-    publishedDataDate: priorDetails.publishedDataDate || sourceDate,
+    publishedDataDate: publicationDetails.publishedDataDate || null,
+    completedCycleKey: publicationDetails.completedCycleKey || null,
     publicationPhase: phase,
     enrichmentPending: enrichment.unresolved,
+    dirtyQueuePending: incrementalDirtyPending,
     incrementalClaimed: claims.length,
     incrementalCompleted: completedDirty,
     incrementalRetried: retriedDirty,
@@ -1159,11 +1276,13 @@ Deno.serve(async (request: Request) => {
     if (!shouldRunFullMarket({
       force,
       completedCycleKey: String(priorDetails.completedCycleKey || ""),
+      scoredCycleKey: String(priorDetails.scoredCycleKey || ""),
       sourceKey,
     })) {
       return await processIncrementalBatch({
         owner,
         sourceDate,
+        sourceKey,
         limit,
         state,
         priorDetails,
@@ -1408,7 +1527,8 @@ Deno.serve(async (request: Request) => {
     let outcomeEvaluation: unknown = null;
     let calibrationRefresh: unknown = null;
     let immutablePublication: Record<string, unknown> | null = null;
-    if (readyToPublish) {
+    const dirtyQueuePending = readyToPublish ? await outstandingDirtyCount(sourceDate) : 0;
+    if (readyToPublish && dirtyQueuePending === 0) {
       try {
         const marketContext = (dateResources.get(sourceDate)?.marketContext || null) as Record<string, unknown> | null;
         immutablePublication = await publishImmutableRun({
@@ -1491,7 +1611,14 @@ Deno.serve(async (request: Request) => {
       calibrationStatus: dateResources.get(sourceDate)?.calibrationStatus || "collecting",
       calibrationReason: dateResources.get(sourceDate)?.calibrationReason || null,
       workerCycle: cycle,
+      dirtyQueuePending,
     };
+    if (readyToPublish) {
+      details.scoredCycleKey = cycle.cycleKey;
+      details.scoredCycleAt = priorDetails.scoredCycleKey === cycle.cycleKey && priorDetails.scoredCycleAt
+        ? priorDetails.scoredCycleAt
+        : now();
+    }
     if (complete) {
       const publishedAt = now();
       const samePublishedDate = String(priorDetails.publishedDataDate || "") === sourceDate;
@@ -1559,6 +1686,7 @@ Deno.serve(async (request: Request) => {
       outcomeEvaluation,
       calibrationRefresh,
       maintenanceErrors,
+      dirtyQueuePending,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

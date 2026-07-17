@@ -15,8 +15,10 @@ import {
 } from "../supabase/functions/_shared/v20-model.js";
 import {
   enrichmentFingerprint,
+  finalizePublicationState,
   normalizeEnrichmentSummary,
   publicationPhaseFor,
+  publicationProgressStatus,
   resolveReadySourceCycle,
   shouldRunFullMarket,
 } from "../supabase/functions/twss-v20-model/publication-state.js";
@@ -269,10 +271,44 @@ assert.notEqual(
 );
 assert.equal(shouldRunFullMarket({ completedCycleKey: key, sourceKey: key }), false,
   "same-date enrichment progress must never restart the full-market scan");
+assert.equal(shouldRunFullMarket({ scoredCycleKey: key, sourceKey: key }), false,
+  "a fully scored but unpublished cycle must drain dirty work incrementally");
 assert.equal(shouldRunFullMarket({ completedCycleKey: key, sourceKey: `${key}-new` }), true,
   "a new source cycle must run the full market");
+assert.equal(shouldRunFullMarket({ scoredCycleKey: key, sourceKey: `${key}-new` }), true,
+  "an older scored marker must not suppress a new full-market cycle");
 assert.equal(shouldRunFullMarket({ completedCycleKey: key, sourceKey: key, force: true }), true,
   "an explicit force request must run the full market");
+assert.equal(publicationProgressStatus({
+  awaitingInitialPublication: true,
+  fallbackStatus: "success",
+}), "running", "a scored cycle waiting for dirty work must not reuse the previous success status");
+
+const recoveredSourceDates = { listed: "2026-07-17", otc: "2026-07-17", etf: "2026-07-17" };
+const recoveredKey = groupDateCycleKey(recoveredSourceDates, V20_MODEL_VERSION);
+const recoveredPublication = finalizePublicationState({
+  state: { cycle_number: 8, last_symbol: "listed|2026-07-17|9999" },
+  priorDetails: {
+    publishedDataDate: "2026-07-16",
+    scoredCycleKey: recoveredKey,
+    completedCycleKey: key,
+    targetSourceDates: { ...recoveredSourceDates, universe: "2026-07-17" },
+    workerCycle: { cycleKey: recoveredKey, completed: false },
+  },
+  sourceDate: "2026-07-17",
+  sourceKey: recoveredKey,
+  enrichment: { total: 100, success: 90, pending: 10, unresolved: 10 },
+  publication: { runId: 77, publicationKey: "publication-77", contentHash: "a".repeat(64) },
+  publishedAt: "2026-07-17T10:00:00.000Z",
+  dataCompleteness: 96.5,
+});
+assert.equal(recoveredPublication.details.publishedDataDate, "2026-07-17");
+assert.equal(recoveredPublication.details.completedCycleKey, recoveredKey);
+assert.equal(recoveredPublication.details.workerCycle.completed, true);
+assert.equal(recoveredPublication.statePatch.cycle_number, 9,
+  "an incremental publication must count as a completed worker cycle");
+assert.equal(recoveredPublication.statePatch.last_symbol, null,
+  "a recovered publication must clear the stale progress cursor");
 
 const regimes = [
   buildMarketContext([{ market: "listed", change_pct: 10, volume: 1 }], "2026-07-16", { available: true, score: 100 }).regime,
@@ -338,13 +374,14 @@ const recoveredMarket = buildMarketContext(
 assert.ok(!recoveredMarket.degraded_sources.includes("turnover_baseline"),
   "stored price history must recover a missing turnover baseline without inventing zero values");
 
-const [workerSource, migration, incrementalMigration, staleQueueMigration, verifiableMigration, championWakeMigration] = await Promise.all([
+const [workerSource, migration, incrementalMigration, staleQueueMigration, verifiableMigration, championWakeMigration, publicationTimeoutMigration] = await Promise.all([
   readFile(new URL("../supabase/functions/twss-v20-model/index.ts", import.meta.url), "utf8"),
   readFile(new URL("../supabase/migrations/20260716021553_add_v20_quant_models.sql", import.meta.url), "utf8"),
   readFile(new URL("../supabase/migrations/20260716131155_v20_incremental_dirty_queue.sql", import.meta.url), "utf8"),
   readFile(new URL("../supabase/migrations/20260717025202_supersede_stale_v20_dirty_queue.sql", import.meta.url), "utf8"),
   readFile(new URL("../supabase/migrations/20260716173332_verifiable_opportunity_snapshots.sql", import.meta.url), "utf8"),
   readFile(new URL("../supabase/migrations/20260717094000_wake_v20_on_champion_release.sql", import.meta.url), "utf8"),
+  readFile(new URL("../supabase/migrations/20260717222000_scope_v20_publication_timeout.sql", import.meta.url), "utf8"),
 ]);
 assert.doesNotMatch(workerSource, /latestGroupDates\(\)/);
 assert.match(workerSource, /loadSourceReadiness\(\)/);
@@ -433,6 +470,19 @@ assert.match(workerSource, /\.slice\(0, 20\)/,
 assert.match(workerSource, /shouldRunFullMarket/);
 assert.match(workerSource, /twss_claim_v20_dirty_batch/);
 assert.match(workerSource, /incremental_dirty_symbols/);
+assert.match(workerSource, /scoredCycleKey/,
+  "worker must persist a scored-cycle marker before draining coalesced dirty work");
+assert.match(workerSource, /dirtyQueuePending === 0/,
+  "initial immutable publication must wait for the dirty queue to settle");
+assert.match(workerSource, /dirtyQueuePending: incrementalDirtyPending/,
+  "incremental completion must replace the pre-publication dirty count in worker observability");
+assert.match(
+  publicationTimeoutMigration,
+  /alter function public\.twss_v20_publish_recommendation_run\(jsonb\)[\s\S]*set statement_timeout = '120s'/,
+  "the bounded atomic publisher needs a function-scoped timeout above the Data API default",
+);
+assert.doesNotMatch(publicationTimeoutMigration, /alter\s+role/i,
+  "publication runtime must never weaken the role-wide API timeout");
 assert.match(workerSource, /maintenanceDisposition\(rest\)/);
 assert.match(workerSource, /body\?\.maintenanceVerification === true/);
 assert.match(workerSource, /row\?\.enabled === true && row\?\.phase === "verifying"/,

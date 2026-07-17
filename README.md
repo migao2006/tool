@@ -31,6 +31,10 @@
 
 市場成交值基準至少使用 5 個已完成交易日，母體固定為 TWSE／TPEx 股票並排除 ETF。若 `v20_market_context` 的歷史日期不足，Worker 會讀取既有 `stock_price_history` 回補；無法驗證時維持 `partial`，不以 0 代替。
 
+v20 Worker 將全市場計分、增量 Dirty Queue 與不可變發布分開處理。完整掃描完成後會保存 `scoredCycleKey`；同週期補齊資料所產生的 dirty 工作由增量路徑重算並結清，之後才建立新的不可變 run／revision（發布批次）並原子切換公開 head。這可避免公開日期因反覆全市場重算而停留在前一交易日，同時不會用尚未結清的資料繞過發布閘門。
+
+完整市場的原子發布可能超過 Data API 預設 8 秒，因此 migration 只對 `twss_v20_publish_recommendation_run(jsonb)` 設定 120 秒 function-scoped statement timeout；不修改 `authenticator` 的全域限制。回滾時 reset 該函式的 `statement_timeout` 即可。
+
 ## 技術架構
 
 ### 前端

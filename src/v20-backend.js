@@ -34,7 +34,8 @@ const SORTS = Object.freeze({
 const memoryCache = new Map();
 const serverEnv = globalThis.process?.env || {};
 const marketServiceKey = String(
-  serverEnv.SUPABASE_SECRET_KEY || serverEnv.SUPABASE_SERVICE_ROLE_KEY || "",
+  serverEnv.MARKET_SUPABASE_SERVICE_ROLE_KEY || serverEnv.MARKET_SUPABASE_SECRET_KEY
+  || serverEnv.SUPABASE_SERVICE_ROLE_KEY || serverEnv.SUPABASE_SECRET_KEY || "",
 ).trim();
 const PUBLICATION_PHASES = new Set(["cached", "base_ready", "enriching", "complete"]);
 const MODEL_FEATURES_V21 = Object.freeze({
@@ -90,6 +91,24 @@ function serviceRequest(path, options = {}) {
     ...options,
     headers: { ...serviceHeaders(), ...cleanObject(options.headers) },
   });
+}
+
+function publicRpcRequest(name, args = {}) {
+  return backendStoreInternals.request(`rpc/${name}`, {
+    method: "POST",
+    body: JSON.stringify(args),
+  });
+}
+
+function rpcRow(row = {}) {
+  const normalized = Object.fromEntries(Object.entries(cleanObject(row)).map(([key, value]) => [
+    key.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`),
+    value,
+  ]));
+  if (normalized.expected_return_net == null && normalized.expected_net_return != null) {
+    normalized.expected_return_net = normalized.expected_net_return;
+  }
+  return { ...normalized, ...row };
 }
 
 export class V20PublicError extends Error {
@@ -160,10 +179,15 @@ function publicationCacheIdentity(publication = {}) {
   return "unpublished";
 }
 
+async function loadPublicPublicationState() {
+  const { data } = await publicRpcRequest("twss_v20_read_publication_state");
+  return normalizePublication(rpcRow(data));
+}
+
 async function loadPublicationState() {
   return cached("v20:publication", PUBLICATION_TTL_MS, async () => {
-    if (!marketServiceKey) return normalizePublication({});
     try {
+      if (!marketServiceKey) return loadPublicPublicationState();
       const { data: headRows } = await serviceRequest(
         "v20_publication_head?select=run_id,publication_key,content_hash,data_date,revision,published_at,updated_at&audience=eq.public&limit=1",
       );
@@ -179,7 +203,7 @@ async function loadPublicationState() {
       // An immutable publication is all-or-nothing. Never substitute the
       // mutable worker state when the publication head or run cannot be read.
     }
-    return normalizePublication({});
+    return loadPublicPublicationState().catch(() => normalizePublication({}));
   }).catch(() => normalizePublication({}));
 }
 
@@ -664,10 +688,116 @@ export function parseV20RankingQuery(params) {
   };
 }
 
+function normalizeRpcRanking(row, runId) {
+  const normalized = rpcRow(row);
+  return normalizeRanking({
+    ...normalized,
+    run_id: normalized.run_id ?? runId,
+    expected_return_net: normalized.expected_return_net ?? normalized.expected_net_return,
+    is_eligible: normalized.is_eligible ?? true,
+    public_visible: normalized.public_visible ?? true,
+    research_only: normalized.research_only ?? false,
+  });
+}
+
+function isPublicModelHorizon(item) {
+  return MODEL_HORIZONS[item?.model]?.includes(Number(item?.horizon)) === true;
+}
+
+function compareNullable(left, right, direction = "desc") {
+  const leftMissing = left == null || !Number.isFinite(Number(left));
+  const rightMissing = right == null || !Number.isFinite(Number(right));
+  if (leftMissing || rightMissing) return leftMissing === rightMissing ? 0 : leftMissing ? 1 : -1;
+  return direction === "asc" ? Number(left) - Number(right) : Number(right) - Number(left);
+}
+
+function sortPublicRankings(rows, sort) {
+  return [...rows].sort((left, right) => {
+    let order = 0;
+    if (sort === "risk_asc") order = compareNullable(left.riskScore, right.riskScore, "asc");
+    else if (sort === "change_desc") order = compareNullable(left.rankDelta, right.rankDelta);
+    else order = compareNullable(left.netOpportunityScore, right.netOpportunityScore);
+    if (order) return order;
+    order = compareNullable(left.netOpportunityScore, right.netOpportunityScore);
+    return order || left.symbol.localeCompare(right.symbol, "en");
+  });
+}
+
+async function loadPublicRankingPage(query) {
+  const keyset = query.sort === "net_opportunity_desc";
+  const requiresCompleteSet = !keyset || Boolean(query.strategy || query.search);
+  const groupName = query.market === "twse" ? "listed" : query.market === "tpex" ? "otc" : query.market || null;
+  const baseQuery = {
+    modelKey: query.model,
+    horizonDays: query.horizon,
+    runId: query.runId,
+    groupName,
+    industry: query.industry || null,
+  };
+
+  if (!requiresCompleteSet) {
+    const { data } = await publicRpcRequest("twss_v20_read_rankings", {
+      p_query: { ...baseQuery, afterRank: query.afterRank, limit: query.limit },
+    });
+    const payload = cleanObject(data);
+    const run = cleanObject(payload.run);
+    return {
+      items: arrays(payload.items)
+        .map((row) => normalizeRpcRanking(row, query.runId))
+        .filter((item) => item.symbol && isPublicModelHorizon(item)
+          && item.model === query.model && item.horizon === query.horizon
+          && item.publicVisible && !item.researchOnly && item.official),
+      total: null,
+      hasMore: payload.hasMore === true,
+      rankingDate: isoDate(run.dataDate || run.data_date) || query.rankingDate,
+      runId: numeric(run.runId ?? run.run_id) || query.runId,
+      paginationMode: "keyset",
+    };
+  }
+
+  const collected = [];
+  let afterRank = keyset ? query.afterRank : 0;
+  let run = {};
+  for (let page = 0; page < 100; page += 1) {
+    const { data } = await publicRpcRequest("twss_v20_read_rankings", {
+      p_query: { ...baseQuery, afterRank, limit: 200 },
+    });
+    const payload = cleanObject(data);
+    run = cleanObject(payload.run);
+    collected.push(...arrays(payload.items));
+    if (payload.hasMore !== true) break;
+    const nextAfterRank = numeric(payload.nextAfterRank ?? payload.next_after_rank);
+    if (!nextAfterRank || nextAfterRank <= afterRank) throw new Error("invalid_public_ranking_cursor");
+    afterRank = nextAfterRank;
+    if (page === 99) throw new Error("public_ranking_page_limit_exceeded");
+  }
+
+  const search = query.search.replace(/[.*]/g, "").toLocaleLowerCase("en");
+  const filtered = collected
+    .map((row) => normalizeRpcRanking(row, query.runId))
+    .filter((item) => item.symbol && isPublicModelHorizon(item)
+      && item.model === query.model && item.horizon === query.horizon
+      && item.publicVisible && !item.researchOnly && item.official)
+    .filter((item) => !query.strategy || item.strategy === query.strategy)
+    .filter((item) => !search || `${item.symbol} ${item.name}`.toLocaleLowerCase("en").includes(search));
+  const sorted = sortPublicRankings(filtered, query.sort);
+  const offset = keyset ? 0 : query.offset;
+  const items = sorted.slice(offset, offset + query.limit);
+  return {
+    items,
+    total: null,
+    hasMore: offset + items.length < sorted.length,
+    rankingDate: isoDate(run.dataDate || run.data_date) || query.rankingDate,
+    runId: numeric(run.runId ?? run.run_id) || query.runId,
+    paginationMode: keyset ? "keyset" : "offset",
+  };
+}
+
 async function loadRankingPage(query) {
   if (!query.runId) {
     return { items: [], total: 0, hasMore: false, rankingDate: null, runId: null };
   }
+  if (!marketServiceKey) return loadPublicRankingPage(query);
   const params = new URLSearchParams({
     select: "*",
     run_id: `eq.${query.runId}`,
@@ -693,7 +823,12 @@ async function loadRankingPage(query) {
   if (!keyset && query.offset > 0) params.set("offset", String(query.offset));
   params.set("limit", String(query.limit + 1));
 
-  const { data } = await serviceRequest(`v20_recommendation_items?${params}`);
+  let data;
+  try {
+    ({ data } = await serviceRequest(`v20_recommendation_items?${params}`));
+  } catch {
+    return loadPublicRankingPage(query);
+  }
   const rawRows = (Array.isArray(data) ? data : []).filter((row) =>
     row.public_visible === true && row.research_only !== true && row.is_eligible === true);
   const hasMore = rawRows.length > query.limit;
@@ -965,8 +1100,20 @@ export async function readV20Home() {
   };
 }
 
+async function loadPublicSignals(symbol, publication) {
+  const { data } = await publicRpcRequest("twss_v20_read_stock_snapshot", {
+    p_query: { symbol, runId: publication.runId },
+  });
+  const payload = cleanObject(data);
+  return arrays(payload.items)
+    .map((row) => normalizeRpcRanking(row, publication.runId))
+    .filter((item) => item.symbol && isPublicModelHorizon(item)
+      && item.publicVisible && !item.researchOnly);
+}
+
 async function loadSignals(symbol, publication = {}) {
   if (!publication.runId) return [];
+  if (!marketServiceKey) return loadPublicSignals(symbol, publication);
   const params = new URLSearchParams({
     select: "*",
     run_id: `eq.${publication.runId}`,
@@ -976,7 +1123,12 @@ async function loadSignals(symbol, publication = {}) {
     order: "model_key.asc,horizon_days.asc",
     limit: "20",
   });
-  const { data } = await serviceRequest(`v20_recommendation_items?${params}`);
+  let data;
+  try {
+    ({ data } = await serviceRequest(`v20_recommendation_items?${params}`));
+  } catch {
+    return loadPublicSignals(symbol, publication);
+  }
   return (Array.isArray(data) ? data : [])
     .filter((row) => row.public_visible === true && row.research_only !== true)
     .map(normalizeRanking);
@@ -1115,11 +1267,19 @@ export async function readV20Backtest(url) {
   };
   const backtestCacheKey = `v20:validation:${JSON.stringify(query)}`;
   try {
-    const { data } = await cached(backtestCacheKey, PAGE_TTL_MS, () =>
-      serviceRequest("rpc/twss_v20_read_validation_summary", {
-        method: "POST",
-        body: JSON.stringify({ p_query: query }),
-      }));
+    const { data } = await cached(backtestCacheKey, PAGE_TTL_MS, async () => {
+      if (marketServiceKey) {
+        try {
+          return await serviceRequest("rpc/twss_v20_read_validation_summary", {
+            method: "POST",
+            body: JSON.stringify({ p_query: query }),
+          });
+        } catch {
+          // Fall through to the bounded public read RPC.
+        }
+      }
+      return publicRpcRequest("twss_v20_read_validation_summary", { p_query: query });
+    });
     if (data && typeof data === "object" && !Array.isArray(data)) {
       result = { ...result, ...data, items: Array.isArray(data.items) ? data.items : [] };
     }

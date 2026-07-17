@@ -3,10 +3,18 @@ import { readFile } from "node:fs/promises";
 
 const originalFetch = globalThis.fetch;
 const originalInternalKey = process.env.TWSS_V20_INTERNAL_KEY;
+const originalMarketSecretKey = process.env.MARKET_SUPABASE_SECRET_KEY;
+const originalMarketServiceKey = process.env.MARKET_SUPABASE_SERVICE_ROLE_KEY;
+const originalSecretKey = process.env.SUPABASE_SECRET_KEY;
 const originalServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const originalPublishableKey = process.env.SUPABASE_PUBLISHABLE_KEY;
 const originalFinnhubKey = process.env.FINNHUB_API_KEY;
 const originalAlphaVantageKey = process.env.ALPHA_VANTAGE_API_KEY;
+delete process.env.SUPABASE_SECRET_KEY;
+delete process.env.MARKET_SUPABASE_SECRET_KEY;
+delete process.env.MARKET_SUPABASE_SERVICE_ROLE_KEY;
 process.env.SUPABASE_SERVICE_ROLE_KEY = "test-service-role-key";
+process.env.SUPABASE_PUBLISHABLE_KEY = "test-public-key";
 process.env.FINNHUB_API_KEY = "";
 process.env.ALPHA_VANTAGE_API_KEY = "";
 const calls = [];
@@ -714,6 +722,209 @@ try {
   const method = await shared.handleV20(new Request("https://app.test/api/v20/home", { method: "POST" }), async () => ({}));
   assert.equal(method.status, 405);
 
+  // A Vercel deployment can legitimately have only the public Supabase key.
+  // In that mode every public v20 read must stay available through the
+  // bounded immutable RPCs, without silently restoring mutable table reads.
+  delete process.env.SUPABASE_SECRET_KEY;
+  delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+  delete process.env.MARKET_SUPABASE_SECRET_KEY;
+  delete process.env.MARKET_SUPABASE_SERVICE_ROLE_KEY;
+  const publicCalls = [];
+  const publicPublication = {
+    publicationPhase: "complete",
+    publishedDataDate: "2026-07-16",
+    publishedAt: "2026-07-16T10:00:00Z",
+    runId: PUBLICATION_RUN_ID,
+    publicationKey: PUBLICATION_KEY,
+    contentHash: CONTENT_HASH,
+    revision: 3,
+    modelVersion: "20.1",
+    featureVersion: "twss-v20.1-features",
+    costModelVersion: "tw-market-cost-2026-07",
+    calibrationVersion: null,
+    sourceManifest: recommendationRun.source_manifest,
+    marketContext: MARKET_CONTEXT_SNAPSHOT,
+    expectedSymbolCount: 3,
+    scoredSymbolCount: 3,
+    dataCompleteness: 100,
+  };
+  const publicRun = {
+    runId: PUBLICATION_RUN_ID,
+    dataDate: "2026-07-16",
+    revision: 3,
+    modelVersion: "20.1",
+    featureVersion: "twss-v20.1-features",
+    costModelVersion: "tw-market-cost-2026-07",
+    calibrationVersion: null,
+    contentHash: CONTENT_HASH,
+    marketRegime: "sideways",
+    publishedAt: "2026-07-16T10:00:00Z",
+  };
+  const publicRpcItem = (row, overrides = {}) => ({
+    symbol: row.symbol,
+    name: row.name,
+    signalDate: row.signal_date,
+    modelKey: row.model_key,
+    horizonDays: row.horizon_days,
+    modelVersion: row.model_version,
+    groupName: row.group_name,
+    market: row.market,
+    industry: row.industry,
+    instrumentType: row.instrument_type,
+    strategyKey: row.strategy_key,
+    isEligible: row.is_eligible,
+    rankPosition: row.rank_position,
+    previousRank: row.previous_rank,
+    rankDelta: row.rank_delta,
+    marketPercentile: row.market_percentile,
+    rawOpportunityScore: row.raw_opportunity_score,
+    netOpportunityScore: row.net_opportunity_score,
+    riskScore: row.risk_score,
+    confidence: row.confidence,
+    completeness: row.completeness,
+    estimatedCommissionPct: row.estimated_commission_pct,
+    estimatedTaxPct: row.estimated_tax_pct,
+    estimatedSlippagePct: row.estimated_slippage_pct,
+    estimatedSpreadPct: row.estimated_spread_pct,
+    estimatedTotalCostPct: row.estimated_total_cost_pct,
+    downsidePenaltyScore: row.downside_penalty_score,
+    turnoverPenaltyScore: row.turnover_penalty_score,
+    costPenaltyScore: row.cost_penalty_score,
+    turnoverExposure: row.turnover_exposure,
+    liquidityGrade: row.liquidity_grade,
+    opportunityState: row.opportunity_state,
+    predictionBasis: row.prediction_basis,
+    calibratedUpProbability: row.calibrated_up_probability,
+    expectedNetReturn: row.expected_return_net,
+    expectedExcessReturnGross: row.expected_excess_return_gross,
+    expectedExcessReturnNet: row.expected_excess_return_net,
+    calibrationSampleCount: row.calibration_sample_count,
+    benchmarkKey: row.benchmark_key,
+    recommendedHoldingDays: row.recommended_holding_days,
+    recommendedAction: row.recommended_action,
+    entryLow: row.entry_low,
+    entryHigh: row.entry_high,
+    stopLoss: row.stop_loss,
+    takeProfit1: row.take_profit_1,
+    takeProfit2: row.take_profit_2,
+    riskRewardRatio: row.risk_reward_ratio,
+    featureScores: row.feature_scores,
+    gateResults: row.gate_results,
+    reasons: row.reasons,
+    risks: row.risks,
+    invalidationConditions: row.invalidation_conditions,
+    sourceManifest: row.source_manifest,
+    inputHash: row.input_hash,
+    ...overrides,
+  });
+  const publicShortItem = publicRpcItem(detailSignalRow);
+  const publicMediumItem = publicRpcItem(detailSignalRow, {
+    modelKey: "medium",
+    horizonDays: 40,
+    rankPosition: 1,
+    isEligible: true,
+  });
+  const researchOnly60DayItem = publicRpcItem(detailSignalRow, {
+    modelKey: "medium",
+    horizonDays: 60,
+    rankPosition: 2,
+    isEligible: true,
+  });
+
+  globalThis.fetch = async (input, init = {}) => {
+    const url = new URL(String(input));
+    publicCalls.push({ url, init });
+    if (url.hostname !== "lfkdkdyaatdlizryiyon.supabase.co") {
+      throw new Error(`unexpected public fallback request: ${url}`);
+    }
+    if (url.pathname.endsWith("/rpc/twss_v20_read_publication_state")) {
+      return Response.json(publicPublication);
+    }
+    if (url.pathname.endsWith("/rpc/twss_v20_read_rankings")) {
+      return Response.json({
+        run: publicRun,
+        items: [publicMediumItem, researchOnly60DayItem],
+        total: 2,
+        pageCount: 2,
+        hasMore: false,
+        nextAfterRank: 2,
+      });
+    }
+    if (url.pathname.endsWith("/rpc/twss_v20_read_stock_snapshot")) {
+      return Response.json({
+        run: publicRun,
+        symbol: "2330",
+        found: true,
+        items: [publicShortItem, publicMediumItem, researchOnly60DayItem],
+      });
+    }
+    if (url.pathname.endsWith("/rpc/twss_v20_read_validation_summary")) {
+      return Response.json({
+        status: "insufficient_data",
+        source: "immutable_forward_observations",
+        sampleCount: 0,
+        minimumSampleCount: 100,
+        sufficient: false,
+        topN: 50,
+        items: [],
+      });
+    }
+    throw new Error(`unexpected public Supabase path: ${url.pathname}`);
+  };
+
+  const publicBackend = await import(`../src/v20-backend.js?public-rpc=${Date.now()}`);
+  const publicState = await publicBackend.v20BackendInternals.loadPublicationState();
+  assert.equal(publicState.runId, PUBLICATION_RUN_ID);
+  assert.deepEqual(publicState.marketContext, MARKET_CONTEXT_SNAPSHOT);
+
+  const publicRankings = await publicBackend.readV20Rankings(new URL(
+    "https://app.test/api/v20/rankings?model=medium&horizon=40&limit=10",
+  ));
+  assert.deepEqual(publicRankings.items.map((row) => row.horizon), [40]);
+  assert.equal(publicRankings.items[0].opportunityScore, detailSignalRow.net_opportunity_score);
+
+  const publicStock = await publicBackend.readV20Stock("2330");
+  assert.deepEqual(publicStock.short.map((row) => row.horizon), [5]);
+  assert.deepEqual(publicStock.medium.map((row) => row.horizon), [40],
+    "the research-only 60-day horizon must not escape through the public stock fallback");
+
+  const publicBacktest = await publicBackend.readV20Backtest(new URL(
+    "https://app.test/api/v20/backtest?model=short&horizon=5",
+  ));
+  assert.equal(publicBacktest.status, "insufficient_data");
+  assert.equal(publicBacktest.runId, PUBLICATION_RUN_ID);
+
+  const publicRpcPaths = publicCalls.map((call) => call.url.pathname);
+  for (const rpc of [
+    "/rpc/twss_v20_read_publication_state",
+    "/rpc/twss_v20_read_rankings",
+    "/rpc/twss_v20_read_stock_snapshot",
+    "/rpc/twss_v20_read_validation_summary",
+  ]) {
+    assert.ok(publicRpcPaths.some((path) => path.endsWith(rpc)), `missing public fallback ${rpc}`);
+  }
+  for (const call of publicCalls) {
+    assert.equal(call.init.method, "POST");
+    assert.equal(call.init.headers.apikey, "test-public-key");
+    assert.equal(call.init.headers.authorization, undefined,
+      "a public Supabase key must never be copied into an Authorization header");
+    assert.ok(call.url.pathname.includes("/rpc/twss_v20_read_"),
+      "public fallback must use bounded read RPCs instead of direct tables");
+  }
+  const publicRankingCall = publicCalls.find((call) =>
+    call.url.pathname.endsWith("/rpc/twss_v20_read_rankings"));
+  assert.deepEqual(JSON.parse(publicRankingCall.init.body).p_query, {
+    modelKey: "medium",
+    horizonDays: 40,
+    runId: PUBLICATION_RUN_ID,
+    groupName: null,
+    industry: null,
+    afterRank: 0,
+    limit: 10,
+  });
+  assert.ok(publicCalls.every((call) => JSON.parse(call.init.body || "{}").p_query?.horizonDays !== 60),
+    "the server must never request the research-only 60-day horizon through a public RPC");
+
   const [html, ui, smart, sw, manifest, generator, backendSource] = await Promise.all([
     readFile(new URL("../public/index.html", import.meta.url), "utf8"),
     readFile(new URL("../public/v20.js", import.meta.url), "utf8"),
@@ -799,8 +1010,16 @@ try {
   globalThis.fetch = originalFetch;
   if (originalInternalKey === undefined) delete process.env.TWSS_V20_INTERNAL_KEY;
   else process.env.TWSS_V20_INTERNAL_KEY = originalInternalKey;
+  if (originalMarketSecretKey === undefined) delete process.env.MARKET_SUPABASE_SECRET_KEY;
+  else process.env.MARKET_SUPABASE_SECRET_KEY = originalMarketSecretKey;
+  if (originalMarketServiceKey === undefined) delete process.env.MARKET_SUPABASE_SERVICE_ROLE_KEY;
+  else process.env.MARKET_SUPABASE_SERVICE_ROLE_KEY = originalMarketServiceKey;
+  if (originalSecretKey === undefined) delete process.env.SUPABASE_SECRET_KEY;
+  else process.env.SUPABASE_SECRET_KEY = originalSecretKey;
   if (originalServiceKey === undefined) delete process.env.SUPABASE_SERVICE_ROLE_KEY;
   else process.env.SUPABASE_SERVICE_ROLE_KEY = originalServiceKey;
+  if (originalPublishableKey === undefined) delete process.env.SUPABASE_PUBLISHABLE_KEY;
+  else process.env.SUPABASE_PUBLISHABLE_KEY = originalPublishableKey;
   if (originalFinnhubKey === undefined) delete process.env.FINNHUB_API_KEY;
   else process.env.FINNHUB_API_KEY = originalFinnhubKey;
   if (originalAlphaVantageKey === undefined) delete process.env.ALPHA_VANTAGE_API_KEY;

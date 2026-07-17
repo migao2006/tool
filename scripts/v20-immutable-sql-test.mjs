@@ -13,6 +13,10 @@ const pointInTimeValidationMigrationUrl = new URL(
   "../supabase/migrations/20260716185000_fix_v20_point_in_time_validation_summary.sql",
   import.meta.url,
 );
+const publicReadRpcMigrationUrl = new URL(
+  "../supabase/migrations/20260716190000_enable_v20_public_read_rpc.sql",
+  import.meta.url,
+);
 
 const db = new PGlite({ extensions: { pgcrypto } });
 const prerequisiteSql = `
@@ -326,6 +330,7 @@ try {
   await db.exec(prerequisiteSql);
   await db.exec(await readFile(migrationUrl, "utf8"));
   await db.exec(await readFile(pointInTimeValidationMigrationUrl, "utf8"));
+  await db.exec(await readFile(publicReadRpcMigrationUrl, "utf8"));
   await db.exec(seedSql);
 
   const dates = (
@@ -719,6 +724,18 @@ try {
           'service_role', 'public.twss_v20_read_rankings(jsonb)', 'execute'
         ) service_read,
         has_function_privilege(
+          'anon', 'public.twss_v20_read_publication_state()', 'execute'
+        ) anon_publication_read,
+        has_function_privilege(
+          'anon', 'public.twss_v20_read_rankings(jsonb)', 'execute'
+        ) anon_ranking_read,
+        has_function_privilege(
+          'authenticated', 'public.twss_v20_read_stock_snapshot(jsonb)', 'execute'
+        ) authenticated_stock_read,
+        has_function_privilege(
+          'authenticated', 'public.twss_v20_read_validation_summary(jsonb)', 'execute'
+        ) authenticated_validation_read,
+        has_function_privilege(
           'anon', 'public.twss_v20_signal_data_cutoff(jsonb)', 'execute'
         ) public_cutoff,
         has_function_privilege(
@@ -730,9 +747,72 @@ try {
     raw_select: false,
     raw_rpc: false,
     service_read: true,
+    anon_publication_read: true,
+    anon_ranking_read: true,
+    authenticated_stock_read: true,
+    authenticated_validation_read: true,
     public_cutoff: false,
     service_cutoff: true,
   });
+
+  const publicReadDefinitions = (
+    await db.query(`
+      select
+        pg_catalog.bool_and(p.prosecdef) security_definer,
+        pg_catalog.bool_and(
+          pg_catalog.array_to_string(coalesce(p.proconfig, '{}'::text[]), ',')
+            in ('search_path=', 'search_path=""')
+        ) empty_search_path
+      from pg_catalog.pg_proc p
+      where p.oid in (
+        'public.twss_v20_read_publication_state()'::regprocedure,
+        'public.twss_v20_read_rankings(jsonb)'::regprocedure,
+        'public.twss_v20_read_stock_snapshot(jsonb)'::regprocedure,
+        'public.twss_v20_read_validation_summary(jsonb)'::regprocedure
+      )
+    `)
+  ).rows[0];
+  assert.deepEqual(publicReadDefinitions, {
+    security_definer: true,
+    empty_search_path: true,
+  });
+
+  await db.exec("set role anon");
+  const anonPublicationState = (
+    await db.query("select public.twss_v20_read_publication_state() result")
+  ).rows[0].result;
+  const anonRankings = (
+    await db.query(`
+      select public.twss_v20_read_rankings(
+        '{"modelKey":"short","horizonDays":2,"limit":2}'::jsonb
+      ) result
+    `)
+  ).rows[0].result;
+  const anonStock = (
+    await db.query(`
+      select public.twss_v20_read_stock_snapshot('{"symbol":"1001"}'::jsonb) result
+    `)
+  ).rows[0].result;
+  const anonValidation = (
+    await db.query(`
+      select public.twss_v20_read_validation_summary(
+        '{"modelKey":"short","horizonDays":2,"topN":100}'::jsonb
+      ) result
+    `)
+  ).rows[0].result;
+  await assert.rejects(
+    db.query(`select public.twss_v20_read_rankings(
+      '{"modelKey":"medium","horizonDays":60}'::jsonb
+    )`),
+    /v20_research_horizon_not_public/,
+  );
+  await db.exec("reset role");
+  assert.equal(anonPublicationState.runId, publication.runId);
+  assert.equal(anonRankings.items.length, 2);
+  assert.equal(anonRankings.items.every((item) => item.horizonDays !== 60), true);
+  assert.equal(anonStock.items.length, 7);
+  assert.equal(anonStock.items.every((item) => item.horizonDays !== 60), true);
+  assert.equal(anonValidation.status, "ready");
 
   await db.exec("set role service_role");
   const servicePublicationState = (

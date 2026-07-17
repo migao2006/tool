@@ -2,9 +2,10 @@ const DEFAULT_URL = "https://lfkdkdyaatdlizryiyon.supabase.co";
 const DEFAULT_PUBLIC_KEY = "sb_publishable_r3h9eQIYdIqScvmc77avAg_OLgBT6lh";
 
 const env = globalThis.process?.env || {};
-const SUPABASE_URL = env.SUPABASE_URL || DEFAULT_URL;
+const SUPABASE_URL = env.MARKET_SUPABASE_URL || env.SUPABASE_URL || DEFAULT_URL;
 const SUPABASE_PUBLIC_KEY =
-  env.SUPABASE_PUBLISHABLE_KEY || env.SUPABASE_ANON_KEY || DEFAULT_PUBLIC_KEY;
+  env.MARKET_SUPABASE_PUBLISHABLE_KEY || env.SUPABASE_PUBLISHABLE_KEY
+  || env.SUPABASE_ANON_KEY || DEFAULT_PUBLIC_KEY;
 const EXPECTED_ANALYSIS_VERSION = "16.3-ultimate-data-audit";
 const SCORE_MODEL_VERSION = "16.3";
 const PUBLIC_API_VERSION = "17.2";

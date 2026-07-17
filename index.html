@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#07110e" />
+    <meta
+      name="description"
+      content="台股 2～10 個交易日短波段預測系統介面，聚焦超額報酬排名、方向機率、報酬區間與風險。"
+    />
+    <title>台股 Alpha Lens｜短波段預測儀表板</title>
+    <link rel="stylesheet" href="./styles.css" />
+    <script src="./app.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">跳到主要內容</a>
+
+    <header class="topbar">
+      <div class="brand" aria-label="台股 Alpha Lens">
+        <span class="brand-mark" aria-hidden="true">AL</span>
+        <span>
+          <strong>Alpha Lens</strong>
+          <small>台股短波段決策台</small>
+        </span>
+      </div>
+      <div class="topbar-meta">
+        <span class="status-dot" aria-hidden="true"></span>
+        <span>UI 預覽模式</span>
+        <span class="meta-divider" aria-hidden="true"></span>
+        <span>資料日期：尚未提供</span>
+      </div>
+    </header>
+
+    <main id="main-content" class="shell">
+      <section class="hero" aria-labelledby="page-title">
+        <div>
+          <p class="eyebrow">CROSS-SECTIONAL ALPHA WORKSPACE</p>
+          <h1 id="page-title">找出相對強勢，而不是猜明天股價。</h1>
+          <p class="hero-copy">
+            以超額報酬排名、成本後方向機率、報酬分布與風險，整理 2、3、5、10 個交易日的決策資訊。
+          </p>
+        </div>
+        <div class="hero-actions" aria-label="資料狀態">
+          <span class="pill pill-muted">模型版本：尚未提供</span>
+          <span class="pill pill-warning">目前建議：不交易</span>
+        </div>
+      </section>
+
+      <section class="market-strip" aria-label="市場狀態摘要">
+        <article class="market-regime">
+          <div>
+            <span class="section-kicker">MARKET REGIME</span>
+            <h2>市場狀態</h2>
+          </div>
+          <div class="regime-value">
+            <strong>尚無資料</strong>
+            <span>等待市場模型輸入</span>
+          </div>
+        </article>
+        <article class="metric-tile">
+          <span>建議曝險</span>
+          <strong>—</strong>
+          <small>依市場狀態動態調整</small>
+        </article>
+        <article class="metric-tile">
+          <span>預期波動</span>
+          <strong>—</strong>
+          <small>尚未取得風險預測</small>
+        </article>
+        <article class="metric-tile">
+          <span>資料完整度</span>
+          <strong>—</strong>
+          <small>資料源尚未連接</small>
+        </article>
+      </section>
+
+      <section class="workspace" aria-label="選股工作區">
+        <aside class="ranking-panel" aria-labelledby="ranking-title">
+          <div class="panel-heading">
+            <div>
+              <span class="section-kicker">ALPHA RANKING</span>
+              <h2 id="ranking-title">超額報酬排名</h2>
+            </div>
+            <span class="count-badge" id="ranking-count">Top 20</span>
+          </div>
+
+          <div class="control-group">
+            <span class="control-label">市場</span>
+            <div class="segmented" data-control="market" aria-label="市場分類">
+              <button type="button" class="is-active" data-value="listed" aria-pressed="true">上市</button>
+              <button type="button" data-value="otc" aria-pressed="false">上櫃</button>
+              <button type="button" data-value="etf" aria-pressed="false">ETF</button>
+            </div>
+          </div>
+
+          <div class="control-group">
+            <span class="control-label">預測期間</span>
+            <div class="segmented horizon-tabs" data-control="horizon" aria-label="預測期間">
+              <button type="button" data-value="2" aria-pressed="false">2日</button>
+              <button type="button" data-value="3" aria-pressed="false">3日</button>
+              <button type="button" class="is-active" data-value="5" aria-pressed="true">5日</button>
+              <button type="button" data-value="10" aria-pressed="false">10日</button>
+            </div>
+          </div>
+
+          <div class="ranking-tools">
+            <label class="search-field">
+              <span class="visually-hidden">搜尋股票代號或名稱</span>
+              <span aria-hidden="true">⌕</span>
+              <input type="search" placeholder="搜尋代號或名稱" disabled />
+            </label>
+            <label class="select-field">
+              <span class="visually-hidden">排名數量</span>
+              <select id="top-limit" aria-label="排名數量">
+                <option value="10">Top 10</option>
+                <option value="20" selected>Top 20</option>
+                <option value="50">Top 50</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="ranking-table" role="table" aria-label="股票超額報酬排名">
+            <div class="table-head" role="row">
+              <span role="columnheader">排名／股票</span>
+              <span role="columnheader">Alpha</span>
+              <span role="columnheader">上漲機率</span>
+            </div>
+            <div class="empty-state compact" role="row">
+              <span class="empty-icon" aria-hidden="true">↗</span>
+              <strong>尚無可排名資料</strong>
+              <p>資料與模型尚未連接，因此不顯示推估名單。</p>
+            </div>
+          </div>
+
+          <div class="panel-note">
+            <span aria-hidden="true">i</span>
+            <p>低流動性、處置、全額交割、停止買賣與資料不足標的將在推薦前排除。</p>
+          </div>
+        </aside>
+
+        <section class="detail-panel" aria-labelledby="stock-title">
+          <div class="stock-header">
+            <div class="stock-identity">
+              <span class="stock-avatar" aria-hidden="true">—</span>
+              <div>
+                <span class="section-kicker">SELECTED SECURITY</span>
+                <h2 id="stock-title">尚未選擇股票</h2>
+                <p id="detail-context">上市 · 5 個交易日預測</p>
+              </div>
+            </div>
+            <div class="decision-badge">
+              <span>建議動作</span>
+              <strong>不交易</strong>
+            </div>
+          </div>
+
+          <div class="overview-grid">
+            <article class="score-card accent-card">
+              <span>Alpha Score</span>
+              <strong>—</strong>
+              <small>預期超額報酬排名分數</small>
+            </article>
+            <article class="score-card">
+              <span>全市場百分位</span>
+              <strong>—</strong>
+              <small>尚無全市場比較資料</small>
+            </article>
+            <article class="score-card">
+              <span>同產業排名</span>
+              <strong>—</strong>
+              <small>尚無產業分類資料</small>
+            </article>
+            <article class="score-card">
+              <span>預期超額報酬</span>
+              <strong>—</strong>
+              <small>尚無對應基準資料</small>
+            </article>
+          </div>
+
+          <div class="detail-grid">
+            <article class="data-card probability-card">
+              <div class="card-title-row">
+                <div>
+                  <span class="section-kicker">DIRECTION</span>
+                  <h3>成本後方向機率</h3>
+                </div>
+                <span class="confidence">信心：尚未提供</span>
+              </div>
+              <div class="probability-stack">
+                <div class="probability-row up">
+                  <div><span class="legend-dot"></span><span>有效上漲</span></div>
+                  <strong>—</strong>
+                </div>
+                <div class="probability-bar"><span style="width: 0%"></span></div>
+                <div class="probability-row neutral">
+                  <div><span class="legend-dot"></span><span>中性／不交易</span></div>
+                  <strong>—</strong>
+                </div>
+                <div class="probability-bar"><span style="width: 0%"></span></div>
+                <div class="probability-row down">
+                  <div><span class="legend-dot"></span><span>有效下跌</span></div>
+                  <strong>—</strong>
+                </div>
+                <div class="probability-bar"><span style="width: 0%"></span></div>
+              </div>
+            </article>
+
+            <article class="data-card distribution-card">
+              <div class="card-title-row">
+                <div>
+                  <span class="section-kicker">RETURN RANGE</span>
+                  <h3>報酬分布</h3>
+                </div>
+                <span class="muted-label">預測區間：—</span>
+              </div>
+              <div class="range-visual" aria-label="P10、P50、P90 報酬分布">
+                <div class="range-line"></div>
+                <div class="range-point p10"><span>P10</span><strong>—</strong></div>
+                <div class="range-point p50"><span>P50</span><strong>—</strong></div>
+                <div class="range-point p90"><span>P90</span><strong>—</strong></div>
+              </div>
+              <div class="mini-metrics">
+                <div><span>預期報酬</span><strong>—</strong></div>
+                <div><span>上行潛力</span><strong>—</strong></div>
+                <div><span>下行風險</span><strong>—</strong></div>
+              </div>
+            </article>
+
+            <article class="data-card risk-card">
+              <div class="card-title-row">
+                <div>
+                  <span class="section-kicker">RISK MAP</span>
+                  <h3>風險概況</h3>
+                </div>
+                <span class="risk-grade">風險等級：—</span>
+              </div>
+              <div class="risk-list">
+                <div><span>預期波動度</span><strong>—</strong></div>
+                <div><span>最大不利變動 MAE</span><strong>—</strong></div>
+                <div><span>最大有利變動 MFE</span><strong>—</strong></div>
+                <div><span>跳空風險</span><strong>—</strong></div>
+                <div><span>流動性風險</span><strong>—</strong></div>
+                <div><span>Risk Adjusted Score</span><strong>—</strong></div>
+              </div>
+            </article>
+
+            <article class="data-card path-card">
+              <div class="card-title-row">
+                <div>
+                  <span class="section-kicker">TRADE PATH</span>
+                  <h3>交易路徑</h3>
+                </div>
+                <span class="muted-label">建議持有：—</span>
+              </div>
+              <div class="path-grid">
+                <div class="path-item positive"><span>停利先到</span><strong>—</strong></div>
+                <div class="path-item negative"><span>停損先到</span><strong>—</strong></div>
+                <div class="path-item neutral-path"><span>持有到期</span><strong>—</strong></div>
+              </div>
+              <div class="unavailable-callout">
+                <span aria-hidden="true">⌁</span>
+                <p>Triple Barrier 路徑模型尚未啟用，此區不提供推估數字。</p>
+              </div>
+            </article>
+          </div>
+
+          <div class="integrity-grid">
+            <article>
+              <span>資料完整度</span>
+              <strong>—</strong>
+              <small>資料源尚未連接</small>
+            </article>
+            <article>
+              <span>模型可信度</span>
+              <strong>尚未評估</strong>
+              <small>需完成樣本外驗證</small>
+            </article>
+            <article>
+              <span>預測失效條件</span>
+              <strong>尚未定義</strong>
+              <small>需由正式模型與風控規則提供</small>
+            </article>
+          </div>
+        </section>
+      </section>
+
+      <section class="methodology" aria-labelledby="method-title">
+        <div>
+          <span class="section-kicker">DECISION STANDARD</span>
+          <h2 id="method-title">這個介面如何支援決策</h2>
+        </div>
+        <div class="method-grid">
+          <article><span>01</span><h3>先看排名</h3><p>比較股票相對市場或產業基準的超額報酬潛力。</p></article>
+          <article><span>02</span><h3>再看機率</h3><p>交易成本後沒有足夠優勢時，明確輸出中性與不交易。</p></article>
+          <article><span>03</span><h3>檢查區間</h3><p>以 P10、P50、P90 理解不確定性，不使用精確股價作為核心預測。</p></article>
+          <article><span>04</span><h3>控制風險</h3><p>用波動、MAE、MFE、流動性與市場曝險調整最終決策。</p></article>
+        </div>
+      </section>
+
+      <footer class="footer">
+        <p>本頁僅為 UI 介面，尚未連接正式資料或模型，不構成投資建議，也不保證獲利。</p>
+        <span>Alpha Lens · UI v0.1</span>
+      </footer>
+    </main>
+  </body>
+</html>

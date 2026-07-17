@@ -2,8 +2,8 @@ const productionOrigin = "https://tool-dun-psi.vercel.app";
 const runtimeOrigin = globalThis.location?.origin ?? productionOrigin;
 
 export const publicConfig = Object.freeze({
-  supabaseUrl: "",
-  supabasePublishableKey: "",
+  supabaseUrl: "https://zuhwkxlmnvwiktcmijup.supabase.co",
+  supabasePublishableKey: "sb_publishable_4T3QrbPrb0ZNzXceEYUqig_oWUpaoHd",
   authRedirectUrl: `${runtimeOrigin}/?auth=recovery`,
 });
 

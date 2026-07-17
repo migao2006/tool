@@ -1,7 +1,9 @@
+from dataclasses import replace
 from datetime import date, datetime, timezone
 
 import pytest
 
+from src.api.market_output import MarketOutput
 from src.api.prediction_output import StockPredictionOutput
 from src.config import load_mvp_config
 from src.core.horizon import require_production_horizon, require_supported_horizon
@@ -16,6 +18,7 @@ def test_mvp_config_is_five_day_research_only() -> None:
     assert config.rank.objective == "lambdarank"
     assert config.rank.eval_at == (10, 20, 50)
     assert config.cost.profile_version == "tw_stock_swing_v1"
+    assert config.cost.market_impact_parameter == 0.001
 
 
 def test_horizon_interfaces_are_extensible_but_production_is_five_only() -> None:
@@ -49,6 +52,47 @@ def test_prediction_output_contains_no_ev_or_final_score() -> None:
     assert "ev" not in payload
     assert "final_score" not in payload
     assert "model_raw_score" not in payload
+
+
+def test_candidate_output_requires_oos_calibration_and_valid_audit_fields() -> None:
+    research_output = _prediction()
+    with pytest.raises(ValueError, match="calibrated return intervals"):
+        replace(research_output, decision="CANDIDATE", reason_codes=())
+
+    candidate = replace(
+        research_output,
+        decision="CANDIDATE",
+        calibration_status="CALIBRATED:interval-cal-v1",
+        reason_codes=(),
+    )
+    assert candidate.decision == "CANDIDATE"
+
+    with pytest.raises(ValueError, match="non-negative"):
+        replace(research_output, estimated_round_trip_cost=-0.001)
+    with pytest.raises(ValueError, match="source date"):
+        replace(research_output, source_dates={"daily_bars": "2026-01-03"})
+
+
+def test_market_output_rejects_future_model_or_invalid_risk_fields() -> None:
+    common = dict(
+        as_of_date=date(2026, 1, 2),
+        decision_at=datetime(2026, 1, 2, 10, tzinfo=timezone.utc),
+        horizon=5,
+        p_up=0.6,
+        p_neutral=0.3,
+        p_down=0.1,
+        market_regime="UPTREND_LOW_VOL_BROAD",
+        forecast_market_volatility=0.02,
+        market_exposure_cap=0.6,
+        model_version="market-v1",
+        training_end_date=date(2025, 12, 31),
+    )
+    assert MarketOutput(**common).market_exposure_cap == 0.6
+
+    with pytest.raises(ValueError, match="earlier than as_of_date"):
+        MarketOutput(**{**common, "training_end_date": date(2026, 1, 2)})
+    with pytest.raises(ValueError, match="non-negative"):
+        MarketOutput(**{**common, "forecast_market_volatility": -0.01})
 
 
 def test_model_metadata_is_saved_per_horizon(tmp_path) -> None:

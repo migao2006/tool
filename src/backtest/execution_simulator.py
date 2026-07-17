@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 from enum import Enum
-from typing import Callable, Mapping
+from typing import Callable, Mapping, Sequence
 
 
 class OrderSide(str, Enum):
@@ -29,6 +29,18 @@ class MarketBar:
     counterparty_volume_shares: float | None = None
     disposition: bool = False
     periodic_auction: bool = False
+    opening_executable_volume_shares: float | None = None
+    closing_executable_volume_shares: float | None = None
+
+    def __post_init__(self) -> None:
+        volume_fields = (
+            self.volume_shares,
+            self.counterparty_volume_shares,
+            self.opening_executable_volume_shares,
+            self.closing_executable_volume_shares,
+        )
+        if any(value is not None and value < 0 for value in volume_fields):
+            raise ValueError("market-bar volumes cannot be negative")
 
 
 @dataclass(frozen=True)
@@ -115,16 +127,36 @@ class ExecutionSimulator:
 
     _ZERO_COST = ExecutionCost(0.0, 0.0, 0.0, 0.0)
 
-    def __init__(self, initial_cash: float, maximum_volume_participation: float = 0.01) -> None:
+    def __init__(
+        self,
+        initial_cash: float,
+        trading_dates: Sequence[date],
+        maximum_volume_participation: float = 0.01,
+    ) -> None:
         if not 0 < maximum_volume_participation <= 1:
             raise ValueError("maximum volume participation must lie in (0, 1]")
+        normalized_dates = tuple(trading_dates)
+        if len(normalized_dates) < 3:
+            raise ValueError("T+2 settlement requires at least three trading dates")
+        if normalized_dates != tuple(sorted(set(normalized_dates))):
+            raise ValueError("trading dates must be sorted and unique")
         self.cash = CashLedger(initial_cash)
+        self.trading_dates = normalized_dates
+        self._trading_date_positions = {
+            trading_date: position for position, trading_date in enumerate(normalized_dates)
+        }
         self.maximum_volume_participation = maximum_volume_participation
         self.positions: dict[str, int] = {}
 
     @staticmethod
     def _reject(order: Order, reason_code: str) -> Fill:
         return Fill(order, False, None, 0.0, ExecutionSimulator._ZERO_COST, reason_code)
+
+    def _t2_settlement_date(self, trading_date: date) -> date | None:
+        position = self._trading_date_positions.get(trading_date)
+        if position is None or position + 2 >= len(self.trading_dates):
+            return None
+        return self.trading_dates[position + 2]
 
     def execute_at_open(
         self,
@@ -135,7 +167,14 @@ class ExecutionSimulator:
     ) -> Fill:
         if order.side != OrderSide.BUY:
             return self._reject(order, "EXIT_MUST_EXECUTE_AT_CLOSE")
-        return self._execute(order, bar, cost_quote, bar.open_price, settlement_date)
+        return self._execute(
+            order,
+            bar,
+            cost_quote,
+            bar.open_price,
+            bar.opening_executable_volume_shares,
+            settlement_date,
+        )
 
     def execute_at_close(
         self,
@@ -146,7 +185,14 @@ class ExecutionSimulator:
     ) -> Fill:
         if order.side != OrderSide.SELL:
             return self._reject(order, "ENTRY_MUST_EXECUTE_AT_OPEN")
-        return self._execute(order, bar, cost_quote, bar.close_price, settlement_date)
+        return self._execute(
+            order,
+            bar,
+            cost_quote,
+            bar.close_price,
+            bar.closing_executable_volume_shares,
+            settlement_date,
+        )
 
     def _execute(
         self,
@@ -154,10 +200,16 @@ class ExecutionSimulator:
         bar: MarketBar,
         cost_quote: CostQuote,
         executable_price: float | None,
+        executable_volume_shares: float | None,
         settlement_date: date | None,
     ) -> Fill:
         if bar.symbol != order.symbol or bar.trading_date != order.expected_execution_date:
             return self._reject(order, "EXECUTION_BAR_MISMATCH")
+        expected_settlement_date = self._t2_settlement_date(bar.trading_date)
+        if expected_settlement_date is None:
+            return self._reject(order, "T2_SETTLEMENT_DATE_UNAVAILABLE")
+        if settlement_date is not None and settlement_date != expected_settlement_date:
+            return self._reject(order, "INVALID_T2_SETTLEMENT_DATE")
         self.cash.settle_through(bar.trading_date)
         if bar.suspended or bar.stopped:
             return self._reject(order, "TRADING_SUSPENDED_OR_STOPPED")
@@ -169,7 +221,11 @@ class ExecutionSimulator:
             return self._reject(order, "NO_EXECUTABLE_OPEN" if order.side == OrderSide.BUY else "NO_EXECUTABLE_CLOSE")
         if bar.limit_locked and (bar.counterparty_volume_shares is None or bar.counterparty_volume_shares <= 0):
             return self._reject(order, "LIMIT_LOCKED_NO_COUNTERPARTY")
-        maximum_quantity = bar.volume_shares * self.maximum_volume_participation
+        if bar.limit_locked and order.quantity_shares > float(bar.counterparty_volume_shares):
+            return self._reject(order, "LIMIT_LOCKED_INSUFFICIENT_COUNTERPARTY")
+        if executable_volume_shares is None:
+            return self._reject(order, "EXECUTABLE_VOLUME_MISSING")
+        maximum_quantity = executable_volume_shares * self.maximum_volume_participation
         if order.quantity_shares > maximum_quantity:
             return self._reject(order, "VOLUME_CAPACITY_EXCEEDED")
         price = float(executable_price)
@@ -181,15 +237,29 @@ class ExecutionSimulator:
             if not self.cash.debit(notional + cost.total):
                 return self._reject(order, "INSUFFICIENT_SETTLED_CASH")
             self.positions[order.symbol] = self.positions.get(order.symbol, 0) + order.quantity_shares
-            return Fill(order, True, price, notional, cost, "FILLED")
+            return Fill(
+                order,
+                True,
+                price,
+                notional,
+                cost,
+                "FILLED",
+                expected_settlement_date,
+            )
         held = self.positions.get(order.symbol, 0)
         if held < order.quantity_shares:
             return self._reject(order, "INSUFFICIENT_POSITION")
-        if settlement_date is None or settlement_date < bar.trading_date:
-            raise ValueError("sell execution requires a valid T+2 settlement date")
         self.positions[order.symbol] = held - order.quantity_shares
-        self.cash.credit_unsettled(settlement_date, notional - cost.total)
-        return Fill(order, True, price, notional, cost, "FILLED", settlement_date)
+        self.cash.credit_unsettled(expected_settlement_date, notional - cost.total)
+        return Fill(
+            order,
+            True,
+            price,
+            notional,
+            cost,
+            "FILLED",
+            expected_settlement_date,
+        )
 
     def apply_company_action(self, action: CompanyAction) -> None:
         """Apply a point-in-time corporate action to the live unadjusted ledger."""

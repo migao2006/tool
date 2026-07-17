@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
+from itertools import groupby
 from typing import Iterable, Mapping, Sequence
 
 from src.core.horizon import (
@@ -114,16 +115,18 @@ class ExecutablePrice:
 
 @dataclass(frozen=True)
 class CorporateAction:
-    """An entitlement expressed per share held before the action.
+    """An ex-date entitlement expressed per pre-action share.
 
-    ``entitlement_date`` controls whether the position owns the entitlement;
-    ``effective_date`` controls whether the action changes value within the return
-    window. Both are needed to avoid treating adjusted prices as executable prices.
+    A position bought at the open on ``ex_date`` is too late to receive the
+    entitlement. A position already held before ``ex_date`` keeps a cash-dividend
+    receivable even when ``payable_date`` falls after the modeled exit. This maps
+    directly to the point-in-time corporate-action ``ex_date``/``payable_date``
+    storage contract and avoids using adjusted prices as executable prices.
     """
 
     action_id: str
-    entitlement_date: date
-    effective_date: date
+    ex_date: date
+    payable_date: date | None = None
     cash_per_share: Decimal = ZERO
     share_multiplier: Decimal = ONE
     source_available_at: datetime | None = None
@@ -133,6 +136,8 @@ class CorporateAction:
         object.__setattr__(self, "share_multiplier", _decimal(self.share_multiplier))
         if self.cash_per_share < ZERO or self.share_multiplier <= ZERO:
             raise ValueError("corporate-action cash cannot be negative and multiplier must be positive")
+        if self.payable_date is not None and self.payable_date < self.ex_date:
+            raise ValueError("payable_date cannot precede ex_date")
         if self.source_available_at is not None:
             _require_aware(self.source_available_at, "source_available_at")
 
@@ -213,14 +218,31 @@ class LabelFactory:
         shares = ONE
         cash = ZERO
         applied: list[str] = []
-        ordered_actions = sorted(corporate_actions, key=lambda action: action.effective_date)
-        for action in ordered_actions:
-            # Realized actions define the future target cash flow. They are deliberately
-            # separate from feature_available_ats and cannot enter decision features.
-            entitled = window.entry_date <= action.entitlement_date <= window.exit_date
-            in_window = window.entry_date <= action.effective_date <= window.exit_date
-            if entitled and in_window:
-                cash += shares * action.cash_per_share
+        entitled_actions = sorted(
+            (
+                action
+                for action in corporate_actions
+                if window.entry_date < action.ex_date <= window.exit_date
+            ),
+            key=lambda action: action.ex_date,
+        )
+        # Realized actions define the future target cash flow. They are deliberately
+        # separate from feature_available_ats and cannot enter decision features.
+        # Buying at the ex-date open is not entitled. Once entitled, a later
+        # payable date does not erase the dividend receivable from total return.
+        # Cash and share entitlements on one ex-date are both based on pre-action
+        # shares, so their result cannot depend on input record ordering.
+        for _, same_date_actions in groupby(
+            entitled_actions,
+            key=lambda action: action.ex_date,
+        ):
+            actions = tuple(same_date_actions)
+            pre_action_shares = shares
+            cash += pre_action_shares * sum(
+                (action.cash_per_share for action in actions),
+                start=ZERO,
+            )
+            for action in actions:
                 shares *= action.share_multiplier
                 applied.append(action.action_id)
 

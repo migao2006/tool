@@ -17,18 +17,49 @@ from src.backtest.walk_forward_backtest import (
 )
 
 
+def _settlement_calendar() -> list[date]:
+    return [
+        date(2026, 1, 1),
+        date(2026, 1, 2),
+        date(2026, 1, 5),
+        date(2026, 1, 6),
+        date(2026, 1, 7),
+        date(2026, 1, 8),
+        date(2026, 1, 9),
+        date(2026, 1, 12),
+    ]
+
+
 def test_signal_executes_only_at_next_configured_open() -> None:
-    simulator = ExecutionSimulator(initial_cash=1_000_000, maximum_volume_participation=0.01)
+    simulator = ExecutionSimulator(
+        initial_cash=1_000_000,
+        trading_dates=_settlement_calendar(),
+        maximum_volume_participation=0.01,
+    )
     order = Order(date(2026, 1, 1), date(2026, 1, 2), "2330", OrderSide.BUY, 1000)
-    wrong_bar = MarketBar(date(2026, 1, 3), "2330", 100.0, 101.0, 1_000_000)
+    wrong_bar = MarketBar(
+        date(2026, 1, 3),
+        "2330",
+        100.0,
+        101.0,
+        1_000_000,
+        opening_executable_volume_shares=1_000_000,
+    )
     assert simulator.execute_at_open(order, wrong_bar, fixed_cost_quote(0.001425, 1, 20, 0.003)).filled is False
 
 
 def test_limit_lock_without_counterparty_is_conservatively_unfilled() -> None:
-    simulator = ExecutionSimulator(initial_cash=1_000_000)
+    simulator = ExecutionSimulator(initial_cash=1_000_000, trading_dates=_settlement_calendar())
     order = Order(date(2026, 1, 1), date(2026, 1, 2), "2330", OrderSide.BUY, 100)
     bar = MarketBar(
-        date(2026, 1, 2), "2330", 100.0, 100.0, 1_000_000, limit_locked=True, counterparty_volume_shares=None
+        date(2026, 1, 2),
+        "2330",
+        100.0,
+        100.0,
+        1_000_000,
+        limit_locked=True,
+        counterparty_volume_shares=None,
+        opening_executable_volume_shares=1_000_000,
     )
     fill = simulator.execute_at_open(order, bar, fixed_cost_quote(0.001425, 1, 20, 0.003))
     assert fill.filled is False
@@ -36,18 +67,73 @@ def test_limit_lock_without_counterparty_is_conservatively_unfilled() -> None:
 
 
 def test_t2_sell_proceeds_are_not_immediately_spendable() -> None:
-    simulator = ExecutionSimulator(initial_cash=1_000_000)
+    simulator = ExecutionSimulator(initial_cash=1_000_000, trading_dates=_settlement_calendar())
     quote = fixed_cost_quote(0.001425, 1, 20, 0.003)
     buy = Order(date(2026, 1, 1), date(2026, 1, 2), "2330", OrderSide.BUY, 100)
-    bar = MarketBar(date(2026, 1, 2), "2330", 100.0, 100.0, 1_000_000)
-    assert simulator.execute_at_open(buy, bar, quote).filled
+    bar = MarketBar(
+        date(2026, 1, 2),
+        "2330",
+        100.0,
+        100.0,
+        1_000_000,
+        opening_executable_volume_shares=1_000_000,
+    )
+    buy_fill = simulator.execute_at_open(buy, bar, quote)
+    assert buy_fill.filled
+    assert buy_fill.settlement_date == date(2026, 1, 6)
     cash_before_sale = simulator.cash.settled_cash
     sell = Order(date(2026, 1, 6), date(2026, 1, 7), "2330", OrderSide.SELL, 100)
-    sell_bar = MarketBar(date(2026, 1, 7), "2330", 105.0, 105.0, 1_000_000)
+    sell_bar = MarketBar(
+        date(2026, 1, 7),
+        "2330",
+        105.0,
+        105.0,
+        1_000_000,
+        closing_executable_volume_shares=1_000_000,
+    )
+    invalid_fill = simulator.execute_at_close(
+        sell,
+        sell_bar,
+        quote,
+        settlement_date=date(2026, 1, 8),
+    )
+    assert invalid_fill.filled is False
+    assert invalid_fill.reason_code == "INVALID_T2_SETTLEMENT_DATE"
     assert simulator.execute_at_close(sell, sell_bar, quote, settlement_date=date(2026, 1, 9)).filled
     assert simulator.cash.settled_cash == cash_before_sale
     simulator.cash.settle_through(date(2026, 1, 9))
     assert simulator.cash.settled_cash > cash_before_sale
+
+
+def test_open_fill_requires_observed_opening_volume_not_full_day_volume() -> None:
+    simulator = ExecutionSimulator(initial_cash=1_000_000, trading_dates=_settlement_calendar())
+    order = Order(date(2026, 1, 1), date(2026, 1, 2), "2330", OrderSide.BUY, 100)
+    bar = MarketBar(date(2026, 1, 2), "2330", 100.0, 101.0, 1_000_000)
+
+    fill = simulator.execute_at_open(order, bar, fixed_cost_quote(0.001425, 1, 20, 0.003))
+
+    assert fill.filled is False
+    assert fill.reason_code == "EXECUTABLE_VOLUME_MISSING"
+
+
+def test_limit_fill_requires_enough_confirmed_counterparty_volume() -> None:
+    simulator = ExecutionSimulator(initial_cash=1_000_000, trading_dates=_settlement_calendar())
+    order = Order(date(2026, 1, 1), date(2026, 1, 2), "2330", OrderSide.BUY, 100)
+    bar = MarketBar(
+        date(2026, 1, 2),
+        "2330",
+        100.0,
+        100.0,
+        1_000_000,
+        limit_locked=True,
+        counterparty_volume_shares=50,
+        opening_executable_volume_shares=1_000_000,
+    )
+
+    fill = simulator.execute_at_open(order, bar, fixed_cost_quote(0.001425, 1, 20, 0.003))
+
+    assert fill.filled is False
+    assert fill.reason_code == "LIMIT_LOCKED_INSUFFICIENT_COUNTERPARTY"
 
 
 def test_staggered_cohort_holds_five_exchange_dates_and_limits_daily_budget() -> None:
@@ -70,6 +156,9 @@ def test_cost_stress_changes_backtest_result() -> None:
     )
     results = cost_sensitivity(1_000_000, [trade], multipliers=(1.0, 1.5, 2.0))
     assert results[1.0]["ending_equity"] > results[1.5]["ending_equity"] > results[2.0]["ending_equity"]
+
+    default_results = cost_sensitivity(1_000_000, [trade])
+    assert set(default_results) == {0.75, 1.0, 1.5, 2.0}
 
 
 def test_annualized_metrics_require_complete_daily_equity_marks() -> None:

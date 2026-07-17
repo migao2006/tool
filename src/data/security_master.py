@@ -11,8 +11,11 @@ from src.core.horizon import PRODUCTION_HORIZON, require_production_horizon
 
 
 class Market(str, Enum):
-    LISTED = "LISTED"
-    OTC = "OTC"
+    TWSE = "TWSE"
+    TPEX = "TPEX"
+    # Backward-compatible aliases; persistence and API output use TWSE/TPEX.
+    LISTED = "TWSE"
+    OTC = "TPEX"
     ETF = "ETF"
 
 
@@ -53,8 +56,8 @@ class SecurityRecord:
             raise ValueError("security symbol and name are required")
         if self.valid_to is not None and self.valid_to <= self.valid_from:
             raise ValueError("valid_to must be later than valid_from")
-        if self.asset_type == AssetType.ETF and self.market != Market.ETF:
-            raise ValueError("ETF securities must use the ETF market partition")
+        if self.asset_type == AssetType.ETF and self.market not in {Market.TWSE, Market.TPEX, Market.ETF}:
+            raise ValueError("ETF securities must retain their actual TWSE/TPEX venue")
         if self.asset_type == AssetType.COMMON_STOCK and self.market == Market.ETF:
             raise ValueError("common stock cannot use the ETF market partition")
 

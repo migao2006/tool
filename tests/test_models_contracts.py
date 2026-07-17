@@ -4,7 +4,13 @@ import pytest
 
 from src.models.market.market_model import classify_market_regime, market_exposure_cap
 from src.models.risk.volatility_model import qlike, select_production_model
-from src.models.stock.direction_model import Direction, NoTradeBandConfig, make_direction_label, no_trade_band
+from src.models.stock.direction_model import (
+    Direction,
+    DirectionModel,
+    NoTradeBandConfig,
+    make_direction_label,
+    no_trade_band,
+)
 from src.models.stock.quantile_return_model import QuantileReturnModel
 from src.validation.model_metrics import macro_f1, pinball_loss, quantile_coverage, reliability_diagram
 
@@ -16,6 +22,11 @@ def test_dynamic_no_trade_band_and_direction_labels() -> None:
     assert make_direction_label(band + 0.001, 0.02, config) == Direction.UP
     assert make_direction_label(-band - 0.001, 0.02, config) == Direction.DOWN
     assert make_direction_label(0.0, 0.02, config) == Direction.NEUTRAL
+
+
+def test_direction_training_rejects_fold_missing_any_class() -> None:
+    with pytest.raises(ValueError, match="missing classes"):
+        DirectionModel(backend="logistic").fit([[0.0], [1.0]], [Direction.UP, Direction.DOWN])
 
 
 def test_quantile_prediction_records_crossing_before_reorder() -> None:

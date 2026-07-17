@@ -64,14 +64,13 @@ def test_total_return_includes_entitled_cash_and_split_then_subtracts_cost() -> 
     actions = (
         CorporateAction(
             action_id="cash",
-            entitlement_date=date(2026, 7, 3),
-            effective_date=date(2026, 7, 6),
+            ex_date=date(2026, 7, 6),
+            payable_date=date(2026, 7, 20),
             cash_per_share=Decimal("2"),
         ),
         CorporateAction(
             action_id="split",
-            entitlement_date=date(2026, 7, 6),
-            effective_date=date(2026, 7, 7),
+            ex_date=date(2026, 7, 7),
             share_multiplier=Decimal("2"),
         ),
     )
@@ -94,6 +93,61 @@ def test_total_return_includes_entitled_cash_and_split_then_subtracts_cost() -> 
     assert result.net_return == Decimal("0.095")
     assert result.excess_return == Decimal("0.085")
     assert result.applied_corporate_actions == ("cash", "split")
+
+
+def test_buying_at_ex_date_open_does_not_receive_the_entitlement() -> None:
+    factory = LabelFactory(TradingCalendar(_sessions()))
+    result = factory.create(
+        symbol="2330",
+        decision_at=datetime(2026, 7, 1, 17, tzinfo=TAIPEI),
+        entry_open=ExecutablePrice(date(2026, 7, 2), Decimal("100")),
+        exit_close=ExecutablePrice(date(2026, 7, 8), Decimal("100")),
+        benchmark_return=Decimal("0"),
+        benchmark_id="TAIEX",
+        benchmark_version="v1",
+        round_trip_cost_rate=Decimal("0"),
+        corporate_actions=(
+            CorporateAction(
+                action_id="ex-date-cash",
+                ex_date=date(2026, 7, 2),
+                payable_date=date(2026, 7, 20),
+                cash_per_share=Decimal("10"),
+            ),
+        ),
+    )
+
+    assert result.gross_return == Decimal("0")
+    assert result.applied_corporate_actions == ()
+
+
+def test_same_ex_date_cash_and_split_use_pre_action_shares_regardless_of_order() -> None:
+    factory = LabelFactory(TradingCalendar(_sessions()))
+    cash = CorporateAction(
+        action_id="cash",
+        ex_date=date(2026, 7, 6),
+        cash_per_share=Decimal("2"),
+    )
+    split = CorporateAction(
+        action_id="split",
+        ex_date=date(2026, 7, 6),
+        share_multiplier=Decimal("2"),
+    )
+
+    def create(actions: tuple[CorporateAction, ...]):
+        return factory.create(
+            symbol="2330",
+            decision_at=datetime(2026, 7, 1, 17, tzinfo=TAIPEI),
+            entry_open=ExecutablePrice(date(2026, 7, 2), Decimal("100")),
+            exit_close=ExecutablePrice(date(2026, 7, 8), Decimal("54")),
+            benchmark_return=Decimal("0"),
+            benchmark_id="TAIEX",
+            benchmark_version="v1",
+            round_trip_cost_rate=Decimal("0"),
+            corporate_actions=actions,
+        )
+
+    assert create((cash, split)).gross_return == Decimal("0.10")
+    assert create((split, cash)).gross_return == Decimal("0.10")
 
 
 def test_daily_limit_without_confirmed_counterparty_is_not_assumed_filled() -> None:

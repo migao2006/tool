@@ -18,9 +18,11 @@ def valid_row(symbol: str = "2330", rank: int = 1) -> dict[str, object]:
         "calibrated_p_up": 0.65,
         "calibrated_p_neutral": 0.25,
         "calibrated_p_down": 0.10,
+        "calibration_version": "direction-cal-v1",
         "net_q10": -0.03,
         "net_q50": 0.02,
         "net_q90": 0.08,
+        "calibration_status": "CALIBRATED:interval-cal-v1",
         "rank_score": 99.0 - rank,
         "global_rank": rank,
         "position_limits_pass": True,
@@ -50,6 +52,18 @@ def test_high_rank_with_bad_probability_is_no_trade_not_reweighted() -> None:
     result = DecisionPolicy().evaluate(row)
     assert result.decision == Decision.NO_TRADE
     assert "DIRECTION_THRESHOLD_FAIL" in result.reason_codes
+
+
+def test_uncalibrated_probabilities_and_intervals_are_no_trade() -> None:
+    row = valid_row()
+    row["calibration_version"] = "not-trained"
+    row["calibration_status"] = "UNCALIBRATED"
+
+    result = DecisionPolicy().evaluate(row)
+
+    assert result.decision == Decision.NO_TRADE
+    assert "DIRECTION_CALIBRATION_MISSING" in result.reason_codes
+    assert "QUANTILE_NOT_CALIBRATED" in result.reason_codes
 
 
 def test_hard_quality_fail_can_never_be_candidate() -> None:

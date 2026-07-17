@@ -18,7 +18,7 @@ sell_tax_rate = 0.003
 estimated_order_notional_ntd = 100000.0
 spread_model = "tick_liquidity_adv20_v1"
 slippage_scenario = "base"
-market_impact_parameter = 0.10
+market_impact_parameter = 0.001
 max_adv_participation = 0.01
 profile_version = "tw_stock_swing_v1"
 
@@ -51,4 +51,3 @@ purge_trading_days = 10
 locked_holdout_months = 12
 step_months = 3
 bootstrap_block_days = 10
-

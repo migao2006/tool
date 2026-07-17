@@ -19,6 +19,13 @@ from src.data.security_master import (
 )
 
 
+def test_market_aliases_persist_using_exchange_codes() -> None:
+    assert Market.LISTED is Market.TWSE
+    assert Market.OTC is Market.TPEX
+    assert Market.LISTED.value == "TWSE"
+    assert Market.OTC.value == "TPEX"
+
+
 TAIPEI = ZoneInfo("Asia/Taipei")
 NEW_YORK = ZoneInfo("America/New_York")
 

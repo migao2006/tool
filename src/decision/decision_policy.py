@@ -7,6 +7,10 @@ from enum import Enum
 from math import isclose
 from typing import Any, Iterable, Mapping
 
+from ..calibration.status import (
+    has_calibrated_interval_status,
+    has_valid_calibration_version,
+)
 from ..core.horizon import require_production_horizon, require_supported_horizon
 
 
@@ -105,45 +109,75 @@ class DecisionPolicy:
         p_up = float(row.get("calibrated_p_up", -1.0))
         p_neutral = float(row.get("calibrated_p_neutral", -1.0))
         p_down = float(row.get("calibrated_p_down", -1.0))
+        calibration_version = row.get("calibration_version")
+        direction_calibrated = has_valid_calibration_version(calibration_version)
         probability_sum_valid = all(value >= 0 for value in (p_up, p_neutral, p_down)) and isclose(
             p_up + p_neutral + p_down, 1.0, abs_tol=1e-6
         )
         direction_pass = (
-            probability_sum_valid
+            direction_calibrated
+            and probability_sum_valid
             and p_up >= self.config.minimum_p_up
             and p_up - p_down >= self.config.minimum_probability_spread
         )
+        if not direction_calibrated:
+            direction_fail_code = "DIRECTION_CALIBRATION_MISSING"
+        elif not probability_sum_valid:
+            direction_fail_code = "INVALID_CALIBRATED_PROBABILITIES"
+        else:
+            direction_fail_code = "DIRECTION_THRESHOLD_FAIL"
         direction_gate = _gate(
             "calibrated_direction_probabilities",
             direction_pass,
-            {"p_up": p_up, "p_neutral": p_neutral, "p_down": p_down},
+            {
+                "p_up": p_up,
+                "p_neutral": p_neutral,
+                "p_down": p_down,
+                "calibration_version": calibration_version,
+            },
             {
                 "minimum_p_up": self.config.minimum_p_up,
                 "minimum_p_up_minus_p_down": self.config.minimum_probability_spread,
                 "sum": 1.0,
+                "calibration_version": "required",
             },
-            "DIRECTION_THRESHOLD_FAIL" if probability_sum_valid else "INVALID_CALIBRATED_PROBABILITIES",
+            direction_fail_code,
         )
 
         q10 = float(row.get("net_q10", float("-inf")))
         q50 = float(row.get("net_q50", float("-inf")))
         q90 = float(row.get("net_q90", float("-inf")))
+        calibration_status = row.get("calibration_status")
+        interval_calibrated = has_calibrated_interval_status(calibration_status)
         quantiles_monotonic = q10 <= q50 <= q90
         quantile_pass = (
-            quantiles_monotonic
+            interval_calibrated
+            and quantiles_monotonic
             and q50 > self.config.minimum_net_q50
             and q10 >= -self.config.maximum_net_q10_loss
         )
+        if not interval_calibrated:
+            quantile_fail_code = "QUANTILE_NOT_CALIBRATED"
+        elif not quantiles_monotonic:
+            quantile_fail_code = "NON_MONOTONIC_QUANTILES"
+        else:
+            quantile_fail_code = "NET_QUANTILE_THRESHOLD_FAIL"
         quantile_gate = _gate(
             "net_quantile_thresholds",
             quantile_pass,
-            {"net_q10": q10, "net_q50": q50, "net_q90": q90},
+            {
+                "net_q10": q10,
+                "net_q50": q50,
+                "net_q90": q90,
+                "calibration_status": calibration_status,
+            },
             {
                 "minimum_net_q50": self.config.minimum_net_q50,
                 "minimum_net_q10": -self.config.maximum_net_q10_loss,
                 "monotonic": True,
+                "calibration_status": "CALIBRATED:<version>",
             },
-            "NET_QUANTILE_THRESHOLD_FAIL" if quantiles_monotonic else "NON_MONOTONIC_QUANTILES",
+            quantile_fail_code,
         )
 
         rank_score_value = row.get("rank_score")

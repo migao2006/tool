@@ -77,8 +77,14 @@ class DirectionModel:
 
     def fit(self, features: Any, labels: Sequence[Direction | str]) -> "DirectionModel":
         string_labels = [Direction(label).value for label in labels]
-        if len(set(string_labels)) < 2:
-            raise ValueError("direction training requires at least two observed classes")
+        observed_classes = set(string_labels)
+        required_classes = {direction.value for direction in self.output_order}
+        if observed_classes != required_classes:
+            missing = sorted(required_classes.difference(observed_classes))
+            raise ValueError(
+                "direction training requires UP, NEUTRAL, and DOWN in every fold; "
+                f"missing classes: {missing}"
+            )
         try:
             if self.backend == "logistic":
                 model_class = import_module("sklearn.linear_model").LogisticRegression

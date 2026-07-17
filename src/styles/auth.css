@@ -150,7 +150,7 @@ body:not([data-auth-state="authenticated"]) [data-auth-protected] {
 .auth-secondary { background: var(--control); color: var(--text); }
 .auth-primary:disabled { opacity: 0.42; cursor: not-allowed; }
 
-.auth-link-row { display: flex; justify-content: space-between; gap: 10px; margin-top: 7px; }
+.auth-link-row { display: flex; justify-content: flex-end; gap: 10px; margin-top: 7px; }
 .auth-link-row button,
 .auth-back { padding: 0 6px; background: transparent; color: var(--green); font-size: 0.78rem; }
 .auth-back { display: block; margin: 8px auto -8px; }

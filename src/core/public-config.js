@@ -4,7 +4,7 @@ const runtimeOrigin = globalThis.location?.origin ?? productionOrigin;
 export const publicConfig = Object.freeze({
   supabaseUrl: "https://zuhwkxlmnvwiktcmijup.supabase.co",
   supabasePublishableKey: "sb_publishable_4T3QrbPrb0ZNzXceEYUqig_oWUpaoHd",
-  authRedirectUrl: `${runtimeOrigin}/?auth=recovery`,
+  authConfirmationRedirectUrl: `${runtimeOrigin}/`,
 });
 
 export function hasSupabaseConfig(config = publicConfig) {

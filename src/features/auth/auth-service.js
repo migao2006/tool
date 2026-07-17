@@ -1,4 +1,4 @@
-export function createAuthService(client, redirectUrl) {
+export function createAuthService(client, confirmationRedirectUrl) {
   return {
     getSession() {
       return client.auth.getSession();
@@ -17,16 +17,8 @@ export function createAuthService(client, redirectUrl) {
       return client.auth.signUp({
         email,
         password,
-        options: { emailRedirectTo: redirectUrl.replace("?auth=recovery", "") },
+        options: { emailRedirectTo: confirmationRedirectUrl },
       });
-    },
-
-    sendPasswordReset(email) {
-      return client.auth.resetPasswordForEmail(email, { redirectTo: redirectUrl });
-    },
-
-    updatePassword(password) {
-      return client.auth.updateUser({ password });
     },
 
     signOut() {

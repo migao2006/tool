@@ -1,5 +1,5 @@
-import { friendlyAuthError } from "../features/auth/auth-errors.js?v=auth-3";
-import { installAuthRouteGuard } from "./auth-route-guard.js?v=auth-3";
+import { friendlyAuthError } from "../features/auth/auth-errors.js?v=auth-4";
+import { installAuthRouteGuard } from "./auth-route-guard.js?v=auth-4";
 
 export class AuthController {
   constructor(dialog, service) {
@@ -7,7 +7,6 @@ export class AuthController {
     this.service = service;
     this.user = null;
     this.ready = false;
-    this.recoveryMode = false;
   }
 
   async start() {
@@ -24,12 +23,8 @@ export class AuthController {
       return;
     }
 
-    this.service.onAuthStateChange((event, session) => {
+    this.service.onAuthStateChange((_event, session) => {
       this.applyUser(session?.user ?? null);
-      if (event === "PASSWORD_RECOVERY") {
-        this.recoveryMode = true;
-        this.dialog.open("recovery");
-      }
     });
 
     try {
@@ -37,7 +32,6 @@ export class AuthController {
       if (error) throw error;
       this.applyUser(data.session?.user ?? null);
       this.setReady(true);
-      this.handleRecoveryRedirect();
     } catch (error) {
       this.setReady(true);
       this.dialog.showMessage(friendlyAuthError(error), "error");
@@ -76,19 +70,6 @@ export class AuthController {
     } else {
       this.dialog.showMessage("請先登入後再使用自選股。", "info");
     }
-  }
-
-  handleRecoveryRedirect() {
-    const requested =
-      new URLSearchParams(window.location.search).get("auth") === "recovery";
-    if (!requested) return;
-
-    window.setTimeout(() => {
-      if (this.recoveryMode) return;
-      this.dialog.open("forgot");
-      this.dialog.showMessage("密碼重設連結無效或已過期，請重新寄送。", "error");
-      this.clearRecoveryQuery();
-    }, 600);
   }
 
   async handleSubmit(action, formData) {
@@ -132,19 +113,6 @@ export class AuthController {
           );
         }
         break;
-      case "forgot":
-        response = await this.service.sendPasswordReset(email);
-        this.throwIfError(response);
-        this.dialog.showMessage("密碼重設信已寄出，請檢查信箱。", "success");
-        break;
-      case "recovery":
-        if (password !== passwordConfirm) throw new Error("password mismatch");
-        response = await this.service.updatePassword(password);
-        this.throwIfError(response);
-        this.clearRecoveryQuery();
-        this.dialog.showMessage("新密碼已儲存。", "success");
-        window.setTimeout(() => this.dialog.close(), 700);
-        break;
       default:
         break;
     }
@@ -167,11 +135,5 @@ export class AuthController {
     } finally {
       this.dialog.setBusy(false);
     }
-  }
-
-  clearRecoveryQuery() {
-    const url = new URL(window.location.href);
-    url.searchParams.delete("auth");
-    window.history.replaceState(window.history.state, "", url);
   }
 }

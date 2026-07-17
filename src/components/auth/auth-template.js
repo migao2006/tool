@@ -1,8 +1,6 @@
 export const authTitles = Object.freeze({
   signin: "登入",
   signup: "建立帳號",
-  forgot: "忘記密碼",
-  recovery: "設定新密碼",
   account: "帳戶",
 });
 
@@ -37,7 +35,6 @@ export function createAuthDialogMarkup() {
             <button class="auth-primary" type="submit" data-auth-submit>登入</button>
           </form>
           <div class="auth-link-row">
-            <button type="button" data-auth-view-target="forgot">忘記密碼</button>
             <button type="button" data-auth-view-target="signup">建立帳號</button>
           </div>
         </section>
@@ -51,23 +48,6 @@ export function createAuthDialogMarkup() {
             <button class="auth-primary" type="submit" data-auth-submit>建立帳號</button>
           </form>
           <button class="auth-back" type="button" data-auth-view-target="signin">返回登入</button>
-        </section>
-
-        <section class="auth-view" data-auth-view="forgot" hidden>
-          <p class="auth-description">輸入帳號 Email，我們會寄送密碼重設連結。</p>
-          <form data-auth-form="forgot">
-            <label class="auth-field"><span>Email</span><input name="email" type="email" autocomplete="email" required /></label>
-            <button class="auth-primary" type="submit" data-auth-submit>寄送重設信</button>
-          </form>
-          <button class="auth-back" type="button" data-auth-view-target="signin">返回登入</button>
-        </section>
-
-        <section class="auth-view" data-auth-view="recovery" hidden>
-          <form data-auth-form="recovery">
-            <label class="auth-field"><span>新密碼</span><input name="password" type="password" autocomplete="new-password" minlength="8" required /></label>
-            <label class="auth-field"><span>確認新密碼</span><input name="passwordConfirm" type="password" autocomplete="new-password" minlength="8" required /></label>
-            <button class="auth-primary" type="submit" data-auth-submit>儲存新密碼</button>
-          </form>
         </section>
 
         <section class="auth-view auth-account-view" data-auth-view="account" hidden>

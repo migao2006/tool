@@ -55,6 +55,7 @@ tests/            # 對應各模組的測試
 - 登入方式只允許 Email＋密碼；UI 必須支援登入、建立帳號與登出，不提供忘記密碼或密碼重設流程。
 - 登入介面使用獨立元件、流程控制、服務層與專用樣式，不得塞入既有 `app.js` 或主樣式檔。
 - Supabase 負責帳戶、Email 確認、Session 與確認信；不得接入第三方寄信服務、密碼重設或另建驗證碼機制。
+- 前端不得提供 Recovery 畫面，也不得呼叫 `resetPasswordForEmail`、密碼型 `updateUser` 或處理 `PASSWORD_RECOVERY` 事件。
 - 前端只能使用 Supabase publishable key；`service_role` 與 secret key 禁止寫入前端、Git 或公開部署檔案。
 - 建立帳號使用 Supabase 確認連結，並設定正確 Site URL、Redirect URL、寄送頻率限制與 CAPTCHA／防濫用措施。
 - 自選股、持倉與其他個人資料必須在登入後才能存取；資料表必須啟用 RLS，政策需以 `auth.uid()` 驗證資料擁有者。

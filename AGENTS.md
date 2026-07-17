@@ -42,10 +42,11 @@ tests/            # 對應各模組的測試
 
 ## UI 架構
 
-- 固定維持 4 個頁面：首頁、機會股、個股分析、自選股。
-- 底部導覽固定只有 3 個入口：首頁、機會股、自選股。
-- 個股分析只能由股票項目進入，不占用底部導覽。
-- 2／3／5／10 日是頁內切換；上市／上櫃／ETF 是機會股篩選，不得拆成額外頁面。
+- 固定維持 4 個頁面：今日總覽、5 日候選股、個股決策詳情、自選股。
+- 底部導覽固定只有 3 個入口：總覽、5 日候選、自選。
+- 個股決策詳情只能由股票項目進入，不占用底部導覽。
+- 第一版只開放 5 個交易日 MVP；所有元件、API client 與型別介面必須接受 `horizon`，但固定傳入 `horizon=5`，不得建立可操作的 2／3／10 日切換。
+- ETF 暫不出現在普通股票候選頁；上市與上櫃使用候選頁篩選，不得拆成額外頁面。
 - 優先支援 iPhone 單手操作，觸控區至少 44×44 px，正確處理 safe area。
 - 使用繁體中文、清楚的資訊層級與精簡文案，移除開發用文字和無必要裝飾。
 - 沒有資料時只顯示「—」、「尚無資料」或「尚未更新」，禁止填入假股票、假機率或假績效。
@@ -95,3 +96,249 @@ tests/            # 對應各模組的測試
 - 缺漏資料會明確顯示，不會被預設值掩蓋。
 - 不存在明顯 look-ahead bias、survivorship bias 或時間對齊錯誤。
 - 測試與部署驗證通過後，才可宣告完成。
+
+## 十七、前端頁面與顯示規則
+
+本次前端以「5 個交易日短波段選股 MVP」為唯一正式功能。
+
+不得為尚未完成的 2、3、10 日模型建立可操作頁面，也不得用假資料填補。所有前端元件、API client 及型別介面必須接受 `horizon` 參數，但第一版固定傳入 `horizon=5`。
+
+未來其他模型正式完成後，才開放 2／3／5／10 日切換。
+
+前端保留四個使用者頁面：
+
+1. 今日總覽
+2. 5 日候選股
+3. 個股決策詳情
+4. 自選股
+
+底部導覽只顯示：
+
+- 總覽
+- 5 日候選
+- 自選
+
+個股決策詳情由點擊股票進入，不放入底部導覽。
+
+不得新增管理員頁面。
+
+### 一、今日總覽
+
+顯示：
+
+- `as_of_date`
+- `decision_at`
+- `horizon=5`
+- `market_direction` 的 `UP`／`NEUTRAL`／`DOWN` 機率
+- `market_regime`
+- `forecast_market_volatility`
+- `market_exposure_cap`
+- 今日 `CANDIDATE`／`WATCH`／`NO_TRADE` 數量
+- `data_quality` hard fail 數量
+- Rank Score 最高且通過決策門檻的前 3～5 檔股票
+- `model_version`
+- `training_end_date`
+- `cost_profile_version`
+- 系統驗證狀態：`PASS`／`RESEARCH_ONLY`／`FAIL`
+
+首頁提供「查看模型驗證報告」按鈕，以全螢幕彈窗或抽屜顯示：
+
+- Walk-forward 結果
+- locked holdout 結果
+- `NDCG@10`／`20`／`50`
+- Rank IC 與 ICIR
+- 機率校準結果
+- quantile coverage
+- 成本敏感度
+- 與基準模型比較
+- 已知限制
+
+不得為模型驗證另建底部導覽頁面。
+
+### 二、5 日候選股
+
+正式候選股排序只能使用 `rank_model` 輸出的 Rank Score 或 `global_rank`。
+
+不得在前端將 Rank Score、`p_up`、`q50`、波動度或市場狀態重新加權成 final score。
+
+每檔股票至少顯示：
+
+- `symbol`
+- 股票名稱
+- `market`
+- `industry`
+- Rank Score
+- `global_rank`
+- `industry_rank`
+- `calibrated_p_up`
+- `calibrated_p_neutral`
+- `calibrated_p_down`
+- `net_q10`
+- `net_q50`
+- `net_q90`
+- `estimated_round_trip_cost`
+- `data_quality_status`
+- `decision`
+- 主要 `reason_codes`
+
+Rank Score 必須明確標示為「當日橫斷面排名百分位」，不得標示成上漲機率、預期報酬或模型信心。
+
+P10／P50／P90 必須標示為條件報酬分位數，不得稱為最低、平均、最高報酬或獲利保證。
+
+若沒有獨立 `expected_return_model` 或經 OOS 校準的報酬映射，前端不得顯示「預期報酬」或「期望值 EV」。
+
+候選頁可以篩選：
+
+- 上市／上櫃
+- 產業
+- `CANDIDATE`／`WATCH`／`NO_TRADE`
+- 資料品質
+- 流動性分組
+- Rank Score
+- `calibrated_p_up`
+- cost profile
+
+ETF 暫不出現在普通股票候選頁。
+
+`data_quality` hard fail 股票不得出現在正式推薦清單。頁面可以另外顯示排除數量，點擊後以抽屜顯示股票及 `reason_codes`。
+
+### 三、個股決策詳情
+
+頁面頂部顯示：
+
+- `decision`：`CANDIDATE`／`WATCH`／`NO_TRADE`
+- 主要 `reason_codes`
+- `as_of_date`
+- `decision_at`
+- `horizon`
+
+依 `decision_policy` 順序顯示：
+
+1. `data_quality` hard gate
+2. tradability gate
+3. liquidity 與 capacity gate
+4. `market_exposure_cap`
+5. calibrated direction probabilities
+6. net quantile thresholds
+7. rank eligibility
+8. position and capacity limits
+
+每一層必須顯示：
+
+- 通過或未通過
+- 實際值
+- 使用門檻
+- `reason_code`
+
+個股頁包含下列區塊：
+
+排名：
+
+- Rank Score
+- `global_rank`
+- `global_rank_percentile`
+- `industry_rank`
+- `industry_rank_percentile`
+
+方向機率：
+
+- `calibrated_p_up`
+- `calibrated_p_neutral`
+- `calibrated_p_down`
+- `calibration_version`
+
+報酬分位數：
+
+- `gross_q10`
+- `gross_q50`
+- `gross_q90`
+- `net_q10`
+- `net_q50`
+- `net_q90`
+- `interval_width`
+- `calibration_status`
+- `estimated_round_trip_cost`
+
+風險及容量：
+
+- `forecast_volatility`
+- `downside_risk`
+- `ADV20`
+- 最大可下單金額
+- 單股上限
+- 單產業上限
+- `market_exposure_cap`
+- `cost_profile`
+
+稽核資訊：
+
+- `model_version`
+- `feature_schema_hash`
+- `cost_profile_version`
+- `training_end_date`
+- `source_dates`
+- `latest_available_at`
+- `data_quality_status`
+- `reason_codes`
+
+技術稽核資訊可以預設折疊，但不得刪除。
+
+不得顯示精確未來股價、虛構的 AI 信心分數、final score 或未經 OOS 驗證的預期報酬。
+
+### 四、自選股
+
+自選股頁只負責追蹤，不重新計算排名。
+
+顯示：
+
+- `symbol`
+- Rank Score
+- `global_rank`
+- `decision`
+- `calibrated_p_up`／`neutral`／`down`
+- `net_q10`／`q50`／`q90`
+- `data_quality_status`
+- `reason_codes`
+- 與前一交易日相比的排名及決策變化
+
+可以篩選：
+
+- 全部
+- `CANDIDATE`
+- `WATCH`
+- `NO_TRADE`
+
+本次不新增持倉損益、自動下單或複雜投資組合頁面。
+
+### 五、研究設定
+
+不得新增獨立設定頁。
+
+在首頁右上角提供研究設定抽屜，允許設定：
+
+- `commission_discount`
+- `minimum_fee`
+- `estimated_order_notional_ntd`
+- `max_adv_participation`
+- `cost_profile`
+- 單股部位上限
+- 單產業上限
+- 最大市場總曝險
+
+模型超參數、校準參數、標籤門檻及 locked holdout 不得讓一般使用者直接修改。
+
+### 六、前端狀態
+
+所有頁面必須完整處理：
+
+- loading
+- empty
+- stale data
+- data quality hard fail
+- API error
+- `RESEARCH_ONLY`
+- `FAIL`
+- 尚未完成模型
+- 無正式候選股
+
+資料不足或模型未通過驗收時，必須顯示 `RESEARCH_ONLY` 或 `FAIL`，不得以舊資料、隨機資料或 placeholder 冒充正式預測。

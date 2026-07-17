@@ -5,7 +5,10 @@
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=20"
+    "node": "24.x"
+  },
+  "dependencies": {
+    "@vercel/functions": "3.7.5"
   },
   "scripts": {
     "build": "node scripts/build.mjs",

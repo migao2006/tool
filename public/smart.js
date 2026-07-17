@@ -293,11 +293,11 @@
     q('#ultimateOfficial')?.addEventListener('change', event => { officialOnly = event.target.value === 'official'; render(); });
     q('#ultimateMinScore')?.addEventListener('change', event => { minimumScore = Math.max(0, Math.min(100, Number(event.target.value) || 0)); render(); });
     q('#ultimateIndustry')?.addEventListener('change', event => { selectedIndustry = event.target.value; render(); });
-    q('#ultimateRefresh')?.addEventListener('click', () => loadSnapshot(true));
+    q('#ultimateRefresh')?.addEventListener('click', () => loadSnapshot());
     q('#ultimateMore')?.addEventListener('click', () => { visibleCount[selectedGroup] += 20; render(); });
   }
 
-  async function loadSnapshot(force = false) {
+  async function loadSnapshot() {
     snapshotState = 'loading';
     if (S.tab === 'opportunities') render();
     let staticSnapshot = null;
@@ -307,7 +307,7 @@
     snapshot = mergeSnapshots(staticSnapshot, null);
     snapshotState = snapshot ? 'ready' : 'loading';
     if (!S.loading) render();
-    try {const response=await fetch(`/api/market-data?type=backend-rankings&limit=40${force?'&refresh=1':''}`,{cache:'no-store'});if(response.ok){const payload=await response.json();if(payload?.groups)backendSnapshot=payload}}catch{}
+    try {const response=await fetch('/api/market-data?type=backend-rankings&limit=40',{cache:'no-store'});if(response.ok){const payload=await response.json();if(payload?.groups)backendSnapshot=payload}}catch{}
     snapshot = mergeSnapshots(staticSnapshot, backendSnapshot);
     snapshotState = snapshot ? 'ready' : 'error';
     if (S.tab === 'opportunities') render();
@@ -319,7 +319,7 @@
   bind = function () { oldBind(); bindUltimate(); };
   const button = q('.bottom-nav [data-tab="opportunities"]');
   if (button) button.innerHTML = '<span>◆</span>排行';
-  loadSnapshot();
+  if (!document.querySelector('script[src^="/v20.js"]')) loadSnapshot();
 })();
 
 /* v19 progressive UI. The v19 API enriches the existing verified snapshot;
@@ -946,14 +946,14 @@
   const v20ShellActive = Boolean(document.querySelector('script[src^="/v20.js"]'));
 
   async function loadV19() {
+    // The v20 shell reads only its immutable recommendation publication. Do
+    // not start the mutable v19 benchmark/home/detail loaders in that shell.
+    if (v20ShellActive) return;
     void optionalMarketJson().then(value => {
       v19.benchmarks = value;
       globalThis.twssV19Benchmarks = value;
       if (!S.loading && S.tab === 'home') render();
     });
-    // v20 only reuses the official market benchmark adapter. Its own cache-first
-    // shell loads home, rankings, daily report, watchlist and details on demand.
-    if (v20ShellActive) return;
     const applyDailyReport=(value,state)=>{const report=unwrap(value);if(!report||typeof report!=='object')return false;v19.dailyReport=report;v19.dailyReportState=state;writeDailyReportCache(report);if(!S.loading&&S.tab==='home')render();return true};
     void fetch('/data/daily-report.json',{cache:'force-cache'}).then(response=>response.ok?response.json():null).then(value=>applyDailyReport(unwrap(value),'static')).catch(()=>{});
     const watchlist=getWatchlist().map(item=>String(item.symbol||'')).filter(Boolean).slice(0,30),reportQuery=watchlist.length?`?watchlist=${encodeURIComponent(watchlist.join(','))}`:'';

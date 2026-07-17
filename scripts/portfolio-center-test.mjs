@@ -2,10 +2,12 @@ import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
 
 const root = new URL('../', import.meta.url);
-const [v20, index, styles, migrations] = await Promise.all([
+const [v20, index, styles, app, smart, migrations] = await Promise.all([
   readFile(new URL('public/v20.js', root), 'utf8'),
   readFile(new URL('public/index.html', root), 'utf8'),
   readFile(new URL('public/styles.css', root), 'utf8'),
+  readFile(new URL('public/app.js', root), 'utf8'),
+  readFile(new URL('public/smart.js', root), 'utf8'),
   readdir(new URL('supabase/migrations/', root)),
 ]);
 
@@ -35,17 +37,20 @@ assert.match(sql, /create trigger portfolio_positions_set_updated_at/i);
 assert.match(sql, /execute function public\.set_updated_at\(\)/i);
 
 assert.match(index, /data-tab="watchlist"[^>]*>[\s\S]*?我的<\/button>/);
-for (const label of ['自選', '持股', '提醒']) assert.ok(v20.includes(`>${label}</button>`), `missing 我的/${label} tab`);
-assert.match(v20, /portfolio_positions\?user_id=eq\.\$\{encodeURIComponent\(owner\)\}&select=/);
-assert.ok((v20.match(/user_id=eq\.\$\{encodeURIComponent\(owner\)\}/g) || []).length >= 3, 'select, patch and delete must filter by owner');
-assert.match(v20, /on_conflict=user_id,symbol/);
-assert.match(v20, /method: 'PATCH'/);
-assert.match(v20, /method: 'DELETE'/);
-assert.match(v20, /登入後使用目前持股/);
-assert.match(v20, /未實現損益/);
-assert.match(v20, /行情待補/);
-assert.match(v20, /只保存目前股數與平均成本，不建立交易明細/);
-assert.match(styles, /\.v20-mine-tabs/);
-assert.match(styles, /\.v20-portfolio-metrics/);
+assert.match(v20, /pageHero\('WATCHLIST', '我的自選'/);
+assert.match(v20, /只保存關注股票/);
+assert.match(v20, /不記錄持股成本、損益或交易/);
+assert.doesNotMatch(v20, /portfolio_positions/i,
+  'portfolio data remains in CORE but must not be read or mutated by the public UI');
+assert.doesNotMatch(v20, /data-portfolio-(?:edit|delete)/i);
+assert.doesNotMatch(v20, /v20Portfolio(?:Quantity|Cost|Form)/);
+assert.doesNotMatch(v20, /未實現損益|平均成本|新增目前持股|修改目前持股/);
+assert.doesNotMatch(v20, /data-v20-mine="(?:portfolio|reminders)"/);
+assert.match(styles, /\.v20-watch-metrics/);
+assert.match(app, /if\(document\.querySelector\('script\[src\^="\/v20\.js"\]'\)\)S\.fundStatus='deferred';\s*else loadStocks\(\)/,
+  'v20 boot must not download the legacy all-market stock payload');
+assert.match(smart, /if \(!document\.querySelector\('script\[src\^="\/v20\.js"\]'\)\) loadSnapshot\(\)/,
+  'v20 boot must not preload the legacy backend ranking snapshot');
+assert.doesNotMatch(smart, /refresh=1|loadSnapshot\(true\)/);
 
-console.log('portfolio center test passed');
+console.log('watchlist-only product boundary test passed');

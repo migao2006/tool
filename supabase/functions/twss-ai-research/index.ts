@@ -14,6 +14,11 @@ import {
   selectAiCandidates,
   sha256Hex,
 } from "../_shared/ai-research.js";
+// @ts-ignore Shared guard is plain ESM and covered by Node regression tests.
+import {
+  maintenanceDisposition,
+  maintenanceSkipPayload,
+} from "../_shared/maintenance-guard.js";
 
 const PROJECT_URL = Deno.env.get("SUPABASE_URL") || "";
 const ENV_GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY") || "";
@@ -527,10 +532,14 @@ Deno.serve(async (request) => {
     if (body.mode === "manual") {
       const user = await verifyUserRequest(request);
       if (!user) return json({ error: "請先登入再產生 AI 研究摘要", code: "LOGIN_REQUIRED" }, 401);
+      const maintenance = await maintenanceDisposition(rest);
+      if (maintenance.blocked) return json(maintenanceSkipPayload(maintenance), maintenance.status);
       const symbol = String(body.symbol || "").trim().toUpperCase();
       return json(await runManual(symbol, user.id));
     }
     if (!await verifySyncRequest(request)) return json({ error: "Unauthorized" }, 401);
+    const maintenance = await maintenanceDisposition(rest);
+    if (maintenance.blocked) return json(maintenanceSkipPayload(maintenance), maintenance.status);
     if (body.mode === "models") return json(await listGeminiModels());
     const requested = Math.max(1, Math.min(configuredLimit, Number(body.limit) || configuredLimit));
     const owner = crypto.randomUUID();

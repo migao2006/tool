@@ -1,11 +1,17 @@
 {
   "name": "taiwan-stock-smart-picker",
-  "version": "20.0.0",
+  "version": "20.1.0",
   "displayName": "台股智慧選股",
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=20"
+    "node": "24.x"
+  },
+  "dependencies": {
+    "@vercel/functions": "3.7.5"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "0.5.4"
   },
   "scripts": {
     "build": "node scripts/build.mjs",
@@ -32,6 +38,20 @@
     "test:daily-report": "node scripts/daily-market-report-test.mjs",
     "test:portfolio": "node scripts/portfolio-center-test.mjs",
     "test:admin-observability": "node scripts/admin-observability-test.mjs",
-    "test": "npm run build && npm run validate && npm run test:pipeline && npm run test:backend && npm run test:data && npm run test:sync-db-first && npm run test:engine && npm run test:snapshots && npm run test:v19 && npm run test:v20-models && npm run test:v20-api && npm run test:v20-global && npm run test:v20-worker && npm run test:v20-sql && npm run test:daily-report && npm run test:portfolio && npm run test:admin-observability && npm run smoke"
+    "test:maintenance": "node scripts/maintenance-mode-test.mjs",
+    "test:market-auth": "node scripts/market-data-auth-test.mjs",
+    "test:provenance": "node scripts/deployment-provenance-test.mjs",
+    "test:v20-immutable": "node scripts/v20-immutable-sql-test.mjs",
+    "test:v20-outcome-corrections": "node scripts/v20-outcome-correction-revisions-sql-test.mjs",
+    "test:v20-calibration": "node scripts/v20-immutable-calibration-sql-test.mjs",
+    "test:v20-champion": "node scripts/v20-champion-publication-sql-test.mjs",
+    "test:v20-versioned-releases": "node scripts/v20-versioned-model-releases-sql-test.mjs",
+    "maintenance:status": "node scripts/maintenance-control.mjs status",
+    "maintenance:enter": "node scripts/maintenance-control.mjs enter",
+    "maintenance:verify": "node scripts/maintenance-control.mjs verify",
+    "maintenance:reclose": "node scripts/maintenance-control.mjs reclose",
+    "maintenance:resume": "node scripts/maintenance-control.mjs resume",
+    "maintenance:signature": "node scripts/maintenance-signature.mjs",
+    "test": "npm run build && npm run validate && npm run test:pipeline && npm run test:backend && npm run test:data && npm run test:sync-db-first && npm run test:engine && npm run test:snapshots && npm run test:v19 && npm run test:v20-models && npm run test:v20-api && npm run test:v20-global && npm run test:v20-worker && npm run test:v20-sql && npm run test:v20-immutable && npm run test:v20-outcome-corrections && npm run test:v20-calibration && npm run test:v20-champion && npm run test:v20-versioned-releases && npm run test:daily-report && npm run test:portfolio && npm run test:admin-observability && npm run test:maintenance && npm run test:market-auth && npm run test:provenance && npm run smoke"
   }
 }

@@ -1,26 +1,15 @@
-const SHORT_WEIGHTS = Object.freeze({
-  technicalTrend: 20,
-  volumePrice: 20,
-  institutional: 15,
-  market: 15,
-  industry: 10,
-  news: 10,
-  fundamentalSafety: 5,
-  liquidity: 5,
-});
+import {
+  MEDIUM_WEIGHTS,
+  SHORT_WEIGHTS,
+  V20_COST_POLICY_VERSION,
+  V20_HORIZONS,
+  V20_MODEL_VERSION,
+  V20_RESEARCH_HORIZONS,
+  adjustOpportunityScore,
+  estimateExecutionCosts,
+} from "./v20-opportunity-policy.js";
 
-const MEDIUM_WEIGHTS = Object.freeze({
-  growthEarnings: 25,
-  industryTrend: 20,
-  institutional: 15,
-  mediumTechnical: 15,
-  valuation: 10,
-  financialSafety: 10,
-  news: 5,
-});
-
-export const V20_MODEL_VERSION = "20.0";
-export const V20_HORIZONS = Object.freeze({ short: [2, 3, 5, 10], medium: [20, 40, 60] });
+export { V20_COST_POLICY_VERSION, V20_HORIZONS, V20_MODEL_VERSION, V20_RESEARCH_HORIZONS };
 
 const finite = (value) => value !== null && value !== undefined && Number.isFinite(Number(value));
 const number = (value, fallback = null) => finite(value) ? Number(value) : fallback;
@@ -32,10 +21,13 @@ const mean = (values) => {
 };
 const scale = (value, low, high) => !finite(value) ? null
   : clamp((Number(value) - low) / Math.max(0.000001, high - low) * 100);
-const weightedScore = (values, weights) => round(Object.entries(weights).reduce(
-  (total, [key, weight]) => total + (finite(values[key]) ? clamp(values[key]) : 50) * weight,
-  0,
-) / Object.values(weights).reduce((total, weight) => total + weight, 0), 2);
+const weightedScore = (values, weights) => {
+  const usable = Object.entries(weights).filter(([key]) => finite(values[key]));
+  const availableWeight = usable.reduce((total, [, weight]) => total + weight, 0);
+  return availableWeight
+    ? round(usable.reduce((total, [key, weight]) => total + clamp(values[key]) * weight, 0) / availableWeight, 2)
+    : null;
+};
 
 function resultCategories(row) {
   return Array.isArray(row?.result?.categories) ? row.result.categories : [];
@@ -193,7 +185,7 @@ function calibrationFor(buckets, modelKey, strategyKey, horizon, regime, score) 
   const rows = Array.isArray(buckets) ? buckets : [];
   return rows.find((row) => row.model_key === modelKey && row.strategy_key === strategyKey &&
       Number(row.horizon_days) === horizon && row.market_regime === regime &&
-      Number(row.score_decile) === decile && Number(row.sample_count) >= 60)
+      Number(row.score_decile) === decile && Number(row.sample_count) >= 100)
     || rows.find((row) => row.model_key === modelKey && row.strategy_key === "all" &&
       Number(row.horizon_days) === horizon && row.market_regime === regime &&
       Number(row.score_decile) === -1 && Number(row.sample_count) >= 150)
@@ -206,8 +198,11 @@ function prediction({ modelKey, strategyKey, horizon, score, risk, price, group,
   if (calibration) {
     return {
       basis: "walk-forward-calibration",
+      sampleCount: number(calibration.sample_count, 0),
       upProbability: number(calibration.calibrated_probability),
       expectedReturnNet: number(calibration.average_net_return),
+      expectedExcessReturnGross: number(calibration.average_excess_return_gross),
+      expectedExcessReturnNet: number(calibration.average_excess_return_net),
       returnP10: number(calibration.return_p10),
       returnP50: number(calibration.return_p50),
       returnP90: number(calibration.return_p90),
@@ -216,22 +211,19 @@ function prediction({ modelKey, strategyKey, horizon, score, risk, price, group,
       targetFirstProbability: number(calibration.target_first_probability),
     };
   }
-  const probability = clamp(50 + (score - 50) * 0.38 - (risk - 50) * 0.18 + Number(marketContext?.regime_score || 0) * 0.03, 25, 78);
-  const atrPct = Math.max(0.5, number(price?.atrPct, 3));
-  const scaleByHorizon = Math.sqrt(horizon / (modelKey === "short" ? 5 : 20));
-  const gross = ((probability / 100) * 0.9 - (1 - probability / 100) * 0.7) * atrPct * scaleByHorizon;
-  const roundTripCost = group === "etf" ? 0.685 : 0.885;
-  const median = gross - roundTripCost;
   return {
-    basis: "deterministic-quant-rule-v20-bootstrap",
-    upProbability: round(probability, 2),
-    expectedReturnNet: round(median, 4),
-    returnP10: round(median - atrPct * scaleByHorizon * 1.3, 4),
-    returnP50: round(median, 4),
-    returnP90: round(median + atrPct * scaleByHorizon * 1.5, 4),
-    mfe: round(Math.max(0, atrPct * scaleByHorizon * 1.4), 4),
-    mae: round(-atrPct * scaleByHorizon, 4),
-    targetFirstProbability: round(clamp(probability - risk * 0.08), 2),
+    basis: "uncalibrated",
+    sampleCount: 0,
+    upProbability: null,
+    expectedReturnNet: null,
+    expectedExcessReturnGross: null,
+    expectedExcessReturnNet: null,
+    returnP10: null,
+    returnP50: null,
+    returnP90: null,
+    mfe: null,
+    mae: null,
+    targetFirstProbability: null,
   };
 }
 
@@ -276,12 +268,12 @@ function completenessFor(row, modelKey, news) {
   const financial = row?.analysis?.financial || {};
   const institutional = row?.analysis?.institutional || {};
   const checks = modelKey === "short"
-    ? [price.rows >= 120, finite(price.atrPct), finite(price.volumeRatio), finite(institutional.days), finite(row?.stock?.value), news.available]
-    : [price.rows >= 120, finite(price.ma60), finite(price.ma120), finite(revenue.months), finite(financial.quarters), finite(institutional.days), news.available];
+    ? [price.rows >= 120, finite(price.atrPct), finite(price.volumeRatio), finite(institutional.days), finite(row?.stock?.value), finite(row?.stock?.volume)]
+    : [price.rows >= 240, finite(price.ma60), finite(price.ma120), finite(revenue.months), finite(financial.quarters), finite(institutional.days), finite(row?.stock?.value)];
   return round(checks.filter(Boolean).length / checks.length * 100, 2);
 }
 
-function gatesFor({ row, modelKey, strategyKey, score, risk, completeness, predictionResult, levelsResult, marketContext, news }) {
+function gatesFor({ row, modelKey, strategyKey, score, risk, completeness, ranking, predictionResult, levelsResult, marketContext, news }) {
   const price = row?.analysis?.price || {};
   const stock = row?.stock || {};
   const resultRisk = row?.result?.risk || {};
@@ -298,16 +290,22 @@ function gatesFor({ row, modelKey, strategyKey, score, risk, completeness, predi
     ? Math.max(categoryScore(row, "growth") || 0, categoryScore(row, "chip") || 0, news.score)
     : Math.max(categoryScore(row, "growth") || 0, categoryScore(row, "chip") || 0, news.score);
   const gates = {
-    data_complete: completeness >= 60 && price.sufficient === true,
+    data_complete: completeness >= 80 && price.sufficient === true,
     tradeable_liquid: !resultRisk.hardExcluded && Number(stock.value || 0) >= valueFloor && Number(stock.volume || 0) >= volumeFloor,
     market_allowed: !["strong_bear"].includes(String(marketContext?.regime || "sideways")),
     trend_structure: trend,
     relative_strength: relative,
     evidence_support: supportScore >= 55,
-    positive_expectancy: Number(predictionResult.expectedReturnNet || -999) > 0 && Number(levelsResult.riskRewardRatio || 0) >= 1.3,
+    cost_adjusted_rank: finite(ranking?.netOpportunityScore) && ranking.netOpportunityScore >= 55 && Number(levelsResult.riskRewardRatio || 0) >= 1.3,
+    positive_expectancy: predictionResult.basis === "walk-forward-calibration"
+      ? Number(predictionResult.expectedReturnNet || -999) > 0
+      : null,
   };
+  const required = Object.entries(gates)
+    .filter(([key, value]) => key !== "positive_expectancy" || value !== null)
+    .map(([, value]) => value);
   return {
-    passed: Object.values(gates).every(Boolean) && score >= 60 && risk <= 75,
+    passed: required.every(Boolean) && score >= 55 && risk <= 75,
     values: gates,
   };
 }
@@ -359,7 +357,7 @@ function invalidationList(modelKey) {
 
 /**
  * @param {any} row
- * @param {{marketContext?: any, newsRows?: any[], calibrationBuckets?: any[]}} [options]
+ * @param {{marketContext?: any, newsRows?: any[], calibrationBuckets?: any[], expectedOrderValue?: number, expectedTurnoverRate?: number, costAssumptions?: any}} [options]
  */
 export function scoreCacheRow(row, options = {}) {
   const { marketContext = {}, newsRows = [], calibrationBuckets = [] } = options;
@@ -367,24 +365,42 @@ export function scoreCacheRow(row, options = {}) {
   const news = newsScoreFor(row?.symbol, newsRows);
   const price = row?.analysis?.price || {};
   const liquidity = liquidityScore(row?.stock || {}, group);
+  const costs = estimateExecutionCosts({
+    group,
+    averageDailyValue: row?.stock?.value ?? price?.averageValue20,
+    atrPct: price?.atrPct,
+    price: price?.lastClose ?? row?.stock?.close,
+    expectedOrderValue: options?.expectedOrderValue,
+    commissionRatePerSidePct: options?.costAssumptions?.commissionRatePerSidePct,
+  });
+  const volatilityExecution = mean([
+    finite(price.atrPct) ? clamp(100 - Math.max(0, Number(price.atrPct) - 2) * 12) : null,
+    finite(price.distanceMa20) ? clamp(100 - Math.abs(Number(price.distanceMa20) - 2) * 5) : null,
+  ]);
+  const costQuality = finite(costs.totalPct) ? clamp(120 - costs.totalPct * 55) : null;
+  const regimeOpportunity = finite(marketContext?.regime_score)
+    ? clamp(50 + Number(marketContext.regime_score) / 2)
+    : null;
+  const globalOpportunity = finite(marketContext?.global_context?.score)
+    ? clamp(50 + Number(marketContext.global_context.score) / 2)
+    : null;
   const shortFeatures = {
-    technicalTrend: categoryScore(row, "technical", "trend"),
-    volumePrice: factorScore(row, "volume", "volume_structure", "breakout", "relative20"),
+    priceVolumeTrend: mean([categoryScore(row, "technical", "trend"), factorScore(row, "volume", "volume_structure", "breakout")]),
     institutional: group === "etf" ? 50 : categoryScore(row, "chip"),
-    market: categoryScore(row, "market"),
-    industry: factorScore(row, "industry_breadth", "industry_change", "relative20"),
-    news: news.score,
-    fundamentalSafety: mean([categoryScore(row, "growth"), categoryScore(row, "valuation", "structure", "tracking")]),
-    liquidity,
+    relativeIndustry: factorScore(row, "industry_breadth", "industry_change", "relative20"),
+    volatilityRiskReward: volatilityExecution,
+    marketGlobal: mean([categoryScore(row, "market"), regimeOpportunity, globalOpportunity]),
+    revenueEventCatalyst: mean([categoryScore(row, "growth"), news.score]),
+    liquidityExecutionCost: mean([liquidity, costQuality]),
   };
   const mediumFeatures = {
-    growthEarnings: group === "etf" ? categoryScore(row, "tracking", "structure") : categoryScore(row, "growth"),
-    industryTrend: mean([categoryScore(row, "market"), factorScore(row, "industry_breadth", "industry_change"), finite(price.relative60) ? clamp(50 + Number(price.relative60) * 3) : null]),
-    institutional: group === "etf" ? 50 : categoryScore(row, "chip"),
-    mediumTechnical: mediumTechnicalScore(price),
-    valuation: categoryScore(row, "valuation", "tracking"),
-    financialSafety: group === "etf" ? categoryScore(row, "structure", "liquidity") : financialSafetyScore(row?.analysis?.financial || {}),
-    news: news.score,
+    revenueProfitGrowth: group === "etf" ? categoryScore(row, "tracking", "structure") : categoryScore(row, "growth"),
+    financialQuality: group === "etf" ? categoryScore(row, "structure", "liquidity") : financialSafetyScore(row?.analysis?.financial || {}),
+    mediumTrend: mediumTechnicalScore(price),
+    institutionalPositioning: group === "etf" ? 50 : categoryScore(row, "chip"),
+    industryEnvironment: mean([categoryScore(row, "market"), factorScore(row, "industry_breadth", "industry_change"), finite(price.relative60) ? clamp(50 + Number(price.relative60) * 3) : null]),
+    valuationReasonableness: categoryScore(row, "valuation", "tracking"),
+    liquidityRisk: mean([liquidity, volatilityExecution, costQuality]),
   };
   const models = [
     { key: "short", features: shortFeatures, weights: SHORT_WEIGHTS, strategy: shortStrategy(row, news) },
@@ -392,18 +408,34 @@ export function scoreCacheRow(row, options = {}) {
   ];
   const signalDate = row?.data_date || row?.stock?.priceDate || price.lastDate;
   const signals = [];
+  const publicSignals = [];
+  const researchSignals = [];
   let eligibleShort = false;
   let eligibleMedium = false;
 
   for (const model of models) {
-    const score = weightedScore(model.features, model.weights);
+    const rawScore = weightedScore(model.features, model.weights);
     const risk = model.key === "short"
       ? shortRiskScore(row, liquidity, news, marketContext)
       : mediumRiskScore(row, news, marketContext);
     const completeness = completenessFor(row, model.key, news);
     const confidence = round(Math.min(number(row?.confidence, 0), completeness), 2);
     const modelLevels = levels(model.key, price);
-    for (const horizon of V20_HORIZONS[model.key]) {
+    const horizons = [
+      ...V20_HORIZONS[model.key].map((horizon) => ({ horizon, researchOnly: false })),
+      ...V20_RESEARCH_HORIZONS[model.key].map((horizon) => ({ horizon, researchOnly: true })),
+    ];
+    for (const { horizon, researchOnly } of horizons) {
+      const ranking = adjustOpportunityScore({
+        rawScore,
+        riskScore: risk,
+        estimatedTotalCostPct: costs.totalPct,
+        model: model.key,
+        horizonDays: horizon,
+        atrPct: price?.atrPct,
+        expectedTurnoverRate: options?.expectedTurnoverRate,
+      });
+      const score = ranking.netOpportunityScore;
       const predictionResult = prediction({
         modelKey: model.key,
         strategyKey: model.strategy,
@@ -422,15 +454,16 @@ export function scoreCacheRow(row, options = {}) {
         score,
         risk,
         completeness,
+        ranking,
         predictionResult,
         levelsResult: modelLevels,
         marketContext,
         news,
       });
-      const official = gates.passed && confidence >= 65;
-      if (model.key === "short") eligibleShort ||= gates.values.data_complete && gates.values.tradeable_liquid;
-      else eligibleMedium ||= gates.values.data_complete && gates.values.tradeable_liquid;
-      signals.push({
+      const official = !researchOnly && gates.passed && confidence >= 65;
+      if (!researchOnly && model.key === "short") eligibleShort ||= gates.values.data_complete && gates.values.tradeable_liquid;
+      else if (!researchOnly) eligibleMedium ||= gates.values.data_complete && gates.values.tradeable_liquid;
+      const signal = {
         symbol: String(row.symbol),
         signal_date: signalDate,
         model_key: model.key,
@@ -443,22 +476,44 @@ export function scoreCacheRow(row, options = {}) {
         instrument_type: row?.stock?.instrumentType || row?.analysis?.instrumentType || null,
         strategy_key: model.strategy,
         opportunity_score: score,
+        raw_opportunity_score: rawScore,
+        net_opportunity_score: score,
         risk_score: risk,
         confidence,
         completeness,
         official,
         gate_passed: gates.passed,
-        gate_results: { ...gates.values, probabilityBasis: predictionResult.basis },
+        gate_results: {
+          ...gates.values,
+          probabilityBasis: predictionResult.basis,
+          costPolicy: costs.version,
+          costPenaltyScore: ranking.costPenaltyScore,
+          turnoverExposure: ranking.turnoverExposure,
+        },
         feature_scores: model.features,
         prediction_basis: predictionResult.basis,
+        calibration_sample_count: predictionResult.sampleCount,
         up_probability: predictionResult.upProbability,
         expected_return_net: predictionResult.expectedReturnNet,
+        expected_excess_return_gross: predictionResult.expectedExcessReturnGross,
+        expected_excess_return_net: predictionResult.expectedExcessReturnNet,
         return_p10: predictionResult.returnP10,
         return_p50: predictionResult.returnP50,
         return_p90: predictionResult.returnP90,
         mfe: predictionResult.mfe,
         mae: predictionResult.mae,
         target_first_probability: predictionResult.targetFirstProbability,
+        estimated_commission_pct: costs.commissionPct,
+        estimated_tax_pct: costs.taxPct,
+        estimated_slippage_pct: costs.slippagePct,
+        estimated_spread_pct: costs.spreadPct,
+        estimated_total_cost_pct: costs.totalPct,
+        cost_penalty_score: ranking.costPenaltyScore,
+        downside_penalty_score: ranking.downsidePenaltyScore,
+        turnover_penalty_score: ranking.turnoverPenaltyScore,
+        turnover_exposure: ranking.turnoverExposure,
+        liquidity_grade: costs.liquidityGrade,
+        benchmark_key: group === "otc" ? "TPEX" : "TAIEX",
         entry_low: modelLevels.entryLow || null,
         entry_high: modelLevels.entryHigh || null,
         breakout_price: modelLevels.breakoutPrice || null,
@@ -474,11 +529,16 @@ export function scoreCacheRow(row, options = {}) {
         risks: [...new Set([...(row?.result?.risk?.flags || []), ...(row?.result?.risk?.hardReasons || [])])].slice(0, 6),
         invalidation_conditions: invalidationList(model.key),
         source_dates: sourceDates(row, marketContext),
-      });
+        research_only: researchOnly,
+      };
+      signals.push(signal);
+      (researchOnly ? researchSignals : publicSignals).push(signal);
     }
   }
   return {
     signals,
+    publicSignals,
+    researchSignals,
     universe: {
       symbol: String(row.symbol),
       as_of_date: signalDate,

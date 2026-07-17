@@ -193,6 +193,20 @@
     return `<div class="metric"><small>${escapeHtml(label)}</small><b>${escapeHtml(value)}</b>${note ? `<em>${escapeHtml(note)}</em>` : ''}</div>`;
   }
 
+  function modelChannelCard(engineLabel, channelLabel, channel) {
+    if (!channel || typeof channel !== 'object') {
+      return `<article class="health-source"><div class="head"><b>${escapeHtml(engineLabel)} ${escapeHtml(channelLabel)}</b><span class="status-pill">尚未設定</span></div><div class="muted small">等待受控模型版本指派，不影響目前透明規則排序。</div></article>`;
+    }
+    const structuralStatus = ({ passed: '結構檢查通過', shadow: '影子驗證中', failed: '驗證失敗' })[channel.validationStatus]
+      || channel.validationStatus || '待驗證';
+    const structuralClass = channel.validationStatus === 'passed' ? 'ok' : channel.validationStatus === 'failed' ? 'bad' : '';
+    return `<article class="health-source">
+      <div class="head"><div><b>${escapeHtml(engineLabel)} ${escapeHtml(channelLabel)}</b><div class="muted">版本 ${escapeHtml(channel.modelVersion || '—')} · ${escapeHtml(channel.featureVersion || '特徵版本待補')}</div></div><span class="status-pill ${structuralClass}">${escapeHtml(structuralStatus)}</span></div>
+      <div class="admin-count-line">績效狀態 <b>樣本收集中</b></div>
+      <div class="muted small">成本模型 ${escapeHtml(channel.costModelVersion || '—')} · 通道更新 ${escapeHtml(timestamp(channel.changedAt))}</div>
+    </article>`;
+  }
+
   function sourceCard(source, index) {
     const label = source.label || source.name || source.key || `資料來源 ${index + 1}`;
     const status = String(source.status || 'partial').toLowerCase();
@@ -284,6 +298,19 @@
     const shortCalibration = calibration.byModel?.short || {};
     const mediumCalibration = calibration.byModel?.medium || {};
     const publication = payload.publication || payload.baseAnalysis || {};
+    const modelObservability = payload.modelObservability || {};
+    const modelChannels = modelObservability.channels || {};
+    const modelRuntime = modelObservability.runtimeByModel || {};
+    const shortRuntime = modelRuntime.short || {};
+    const mediumRuntime = modelRuntime.medium || {};
+    const modelValidation = modelObservability.validation || {};
+    const immutablePublication = modelObservability.currentPublication || {};
+    const rankChanges = modelObservability.rankChanges || {};
+    const largestRankChanges = rows(rankChanges.largestChanges);
+    const modelAnomalies = modelObservability.anomalies || {};
+    const recentModelValidations = rows(modelObservability.recentValidationEvents);
+    const performanceStatus = modelObservability.performanceStatus === 'collecting'
+      ? '樣本收集中' : '資料尚未建立';
     const overall = String(health.overallStatus || '').toLowerCase();
     setHeader(`登入者 ${payload.admin?.username || '管理員'} · 更新 ${timestamp(payload.generatedAt)}`, 'ok');
     app.innerHTML = `<section class="admin-toolbar card">
@@ -308,7 +335,36 @@
     <section class="health-section"><h2>兩階段發布與背景補齊</h2><div class="card"><div class="grid three">${metric('發布階段', statusLabel(publication.phase || publication.publicationPhase || '—'))}${metric('基礎分析完成', timestamp(publication.baseCompletedAt))}${metric('補齊完成', timestamp(publication.enrichmentCompletedAt))}${metric('待處理', `${number(enrichment.pending)} 筆`)}${metric('有效租約', `${number(enrichment.activeLeases ?? enrichment.running)} 筆`)}${metric('失敗', `${number(enrichment.error)} 筆`)}${metric('目前過期租約', `${number(enrichment.expiredLeases)} 筆`)}${metric('心跳逾時', `${number(enrichment.staleLeases)} 筆`)}${metric('累計租約逾時', `${number(enrichment.leaseTimeoutCount)} 次`)}${metric('最近心跳', timestamp(enrichment.latestHeartbeatAt))}</div>${enrichmentByDataset.length ? `<div class="rules admin-quota-tags">${enrichmentByDataset.map(item => `<span>${escapeHtml(datasetLabels[item.key || item.dataset] || item.key || item.dataset || '資料')} ${number(item.pending ?? item.value)} 筆</span>`).join('')}</div>` : ''}</div></section>
     <section class="health-section"><h2>Worker 處理速度</h2><div class="card"><div class="grid three">${metric('近 15 分鐘完成', `${number(throughput.completedLast15Minutes)} 筆`)}${metric('近 60 分鐘完成', `${number(throughput.completedLast60Minutes)} 筆`)}${metric('每分鐘完成', `${number(throughput.perMinuteLast60, 2)} 筆`)}${metric('最近完成', timestamp(throughput.lastCompletedAt))}${metric('最新心跳', timestamp(throughput.latestHeartbeatAt))}</div></div></section>
     <section class="health-section"><h2>FinMind API 使用量</h2><div class="card"><div class="grid three">${metric('第一組', `${number(primaryQuota.usedLast60Minutes)}／${number(primaryQuota.limit ?? 600)}`)}${metric('第二組', `${number(secondaryQuota.usedLast60Minutes)}／${number(secondaryQuota.limit ?? 600)}`)}${metric('兩組合計', `${number(combinedQuota.usedLast60Minutes)}／${number(combinedQuota.limit ?? 1200)}`)}${metric('第一組剩餘', `${number(primaryQuota.remaining)} 單位`)}${metric('第二組剩餘', `${number(secondaryQuota.remaining)} 單位`)}${metric('合計剩餘', `${number(combinedQuota.remaining)} 單位`)}${metric('預約紀錄', `${number(combinedQuota.reservationCount)} 筆`)}${metric('最早釋放', timestamp(combinedQuota.nextReleaseAt))}</div>${groupQuota.length ? `<div class="rules admin-quota-tags">${groupQuota.map(item => `<span>${escapeHtml(jobLabel(item.key))} ${number(item.value)} 單位</span>`).join('')}</div>` : ''}</div></section>
-    <section class="health-section"><h2>模型校準成熟度</h2><div class="card"><div class="grid three">${metric('公開機率狀態', calibration.ready ? '已校準' : '尚未校準')}${metric('實際結果', `${number(calibration.outcomeCount)} 筆`)}${metric('校準樣本', `${number(calibration.calibrationSampleCount)} 筆`)}${metric('短期期間', `${number(shortCalibration.readyHorizons)}／${number(shortCalibration.requiredHorizons ?? 4)}`)}${metric('中期期間', `${number(mediumCalibration.readyHorizons)}／${number(mediumCalibration.requiredHorizons ?? 3)}`)}${metric('最新校準日', calibration.latestCalibrationDate || '—')}</div><div class="muted">各策略門檻 ${number(calibration.thresholds?.exact ?? 60)} 筆；全模型備援門檻 ${number(calibration.thresholds?.fallback ?? 150)} 筆。未達門檻時不公開推測機率。</div></div></section>
+    <section class="health-section"><h2>模型校準成熟度</h2><div class="card"><div class="grid three">${metric('公開機率狀態', calibration.ready ? '已校準' : '尚未校準')}${metric('實際結果', `${number(calibration.outcomeCount)} 筆`)}${metric('校準樣本', `${number(calibration.calibrationSampleCount)} 筆`)}${metric('短期期間', `${number(shortCalibration.readyHorizons)}／${number(shortCalibration.requiredHorizons ?? 4)}`)}${metric('中期期間', `${number(mediumCalibration.readyHorizons)}／${number(mediumCalibration.requiredHorizons ?? 3)}`)}${metric('最新校準日', calibration.latestCalibrationDate || '—')}</div><div class="muted">各策略門檻 ${number(calibration.thresholds?.exact ?? 100)} 筆；全模型備援門檻 ${number(calibration.thresholds?.fallback ?? 150)} 筆。未達門檻時不公開推測機率。</div></div></section>
+    <section class="health-section"><h2>模型 Champion／Challenger</h2>
+      <div class="card"><div class="grid three">
+        ${metric('績效狀態', performanceStatus)}
+        ${metric('目前發布模型', immutablePublication.modelVersion || '尚無不可修改快照')}
+        ${metric('公開資料覆蓋', immutablePublication.available ? `${number(immutablePublication.publicItemCoveragePct, 2)}%` : '尚未建立')}
+        ${metric('不可修改結果樣本', `${number(modelValidation.sampleCount)} 筆`)}
+        ${metric('待驗證結果', `${number(modelValidation.pendingOutcomeCount)} 筆`)}
+        ${metric('異常股票', `${number(modelAnomalies.symbolCount)} 檔`)}
+        ${metric('短波段平均成本', finite(shortRuntime.averageEstimatedCostPct) == null ? '尚無資料' : `${number(shortRuntime.averageEstimatedCostPct, 4)}%`)}
+        ${metric('中期平均成本', finite(mediumRuntime.averageEstimatedCostPct) == null ? '尚無資料' : `${number(mediumRuntime.averageEstimatedCostPct, 4)}%`)}
+        ${metric('排名比較', rankChanges.available ? `${number(rankChanges.comparedCount)} 筆` : '等待前一版快照')}
+      </div><div class="muted">只顯示不可修改推薦快照的覆蓋、成本、換手代理與前瞻樣本狀態；未滿 100 筆前不顯示或推論績效。</div></div>
+      <div class="health-sources">
+        ${modelChannelCard('短波段', 'Champion', modelChannels.short?.champion)}
+        ${modelChannelCard('短波段', 'Challenger', modelChannels.short?.challenger)}
+        ${modelChannelCard('中期', 'Champion', modelChannels.medium?.champion)}
+        ${modelChannelCard('中期', 'Challenger', modelChannels.medium?.challenger)}
+      </div>
+      <div class="card"><div class="grid three">
+        ${metric('短波段換手代理', finite(shortRuntime.averageTurnoverProxy) == null ? '尚無資料' : number(shortRuntime.averageTurnoverProxy, 4))}
+        ${metric('中期換手代理', finite(mediumRuntime.averageTurnoverProxy) == null ? '尚無資料' : number(mediumRuntime.averageTurnoverProxy, 4))}
+        ${metric('平均名次變動', finite(rankChanges.averageAbsoluteChange) == null ? '尚無比較' : number(rankChanges.averageAbsoluteChange, 2))}
+        ${metric('名次上升', `${number(rankChanges.improvedCount)} 筆`)}
+        ${metric('名次下降', `${number(rankChanges.weakenedCount)} 筆`)}
+        ${metric('名次不變', `${number(rankChanges.unchangedCount)} 筆`)}
+      </div></div>
+      ${largestRankChanges.length ? `<details class="health-issues admin-details"><summary>查看最大排名差異（${number(largestRankChanges.length)}）</summary><div class="admin-cycle-list">${largestRankChanges.map(item => `<article class="admin-cycle"><div><b>${escapeHtml(item.name || item.symbol || '未命名')} ${escapeHtml(item.symbol || '')}</b><div class="muted">${escapeHtml(item.modelKey === 'short' ? '短波段' : '中期')} · ${number(item.horizonDays)} 日</div></div><div><span class="status-pill ${finite(item.rankDelta) > 0 ? 'ok' : finite(item.rankDelta) < 0 ? 'bad' : ''}">${finite(item.rankDelta) > 0 ? '上升' : finite(item.rankDelta) < 0 ? '下降' : '持平'}</span><b>${number(item.previousRank)} → ${number(item.rankPosition)}</b></div></article>`).join('')}</div></details>` : ''}
+      ${recentModelValidations.length ? `<details class="health-issues admin-details"><summary>查看最近模型驗證紀錄（${number(recentModelValidations.length)}）</summary><div class="admin-cycle-list">${recentModelValidations.map(item => `<article class="admin-cycle"><div><b>${escapeHtml(item.modelKey === 'short' ? '短波段' : '中期')} ${escapeHtml(item.modelVersion || '—')}</b><div class="muted">${escapeHtml(item.notes || '未附註記')} · ${escapeHtml(timestamp(item.recordedAt))}</div></div><div><span class="status-pill ${item.validationStatus === 'passed' ? 'ok' : item.validationStatus === 'failed' ? 'bad' : ''}">${escapeHtml(item.validationStatus || '待驗證')}</span><b>樣本收集中</b></div></article>`).join('')}</div></details>` : ''}
+    </section>
     <section class="health-section"><h2>資料來源</h2><div class="health-sources">${sources.length ? sources.map(sourceCard).join('') : '<div class="card muted">來源健康資料尚未回傳。</div>'}</div></section>
     <section class="health-section"><div class="head"><div><h2>修復佇列</h2><div class="muted">只列真正可重試項目；來源限制與不適用欄位保留在缺漏分類。</div></div><span class="status-pill">${number(payload.repairQueue?.pending)} pending · ${number(payload.repairQueue?.errors)} errors</span></div>
       <div class="card admin-filter-grid">
@@ -350,8 +406,12 @@
     const combinedQuota = quota.combined || {};
     const throughput = payload.workerThroughput || {};
     const calibration = payload.calibrationReadiness || {};
+    const modelObservability = payload.modelObservability || {};
+    const modelValidation = modelObservability.validation || {};
+    const modelAnomalies = modelObservability.anomalies || {};
+    const channels = modelObservability.channels || {};
     return [
-      `台股智選 v${payload.version || '20.0.0'} 管理後台修復報告`,
+      `台股智選 v${payload.version || '20.1.0'} 管理後台修復報告`,
       `產生時間：${timestamp(payload.generatedAt)}`,
       `資料日期：${summary.latestDataDate || payload.health?.dataDate || '—'}`,
       '',
@@ -360,6 +420,8 @@
       `Worker：過期租約 ${number(enrichment.expiredLeases)}｜心跳逾時 ${number(enrichment.staleLeases)}｜近 60 分鐘完成 ${number(throughput.completedLast60Minutes)}｜每分鐘 ${number(throughput.perMinuteLast60, 2)}`,
       `FinMind：第一組 ${number(primaryQuota.usedLast60Minutes)}／${number(primaryQuota.limit ?? 600)}｜第二組 ${number(secondaryQuota.usedLast60Minutes)}／${number(secondaryQuota.limit ?? 600)}｜合計 ${number(combinedQuota.usedLast60Minutes)}／${number(combinedQuota.limit ?? 1200)}`,
       `模型校準：${calibration.ready ? '已校準' : '尚未校準'}｜實際結果 ${number(calibration.outcomeCount)}｜校準樣本 ${number(calibration.calibrationSampleCount)}`,
+      `模型通道：短波段 Champion ${channels.short?.champion?.modelVersion || '未設定'}｜Challenger ${channels.short?.challenger?.modelVersion || '未設定'}｜中期 Champion ${channels.medium?.champion?.modelVersion || '未設定'}｜Challenger ${channels.medium?.challenger?.modelVersion || '未設定'}`,
+      `模型觀測：績效樣本收集中｜不可修改結果 ${number(modelValidation.sampleCount)}｜待驗證 ${number(modelValidation.pendingOutcomeCount)}｜異常股票 ${number(modelAnomalies.symbolCount)}`,
       '',
       '同步工作：',
       ...jobs.map(job => `- ${jobLabel(job.jobKey)}｜${statusLabel(job.status)}｜${number(job.processed)}/${number(job.total)} (${number(job.progress, 1)}%)｜資料日 ${job.cycleDate || '—'}${job.lastErrorCode ? `｜${errorLabels[job.lastErrorCode] || job.lastErrorCode}` : ''}`),

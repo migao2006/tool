@@ -1,3 +1,27 @@
+import {
+  MEDIUM_HORIZONS,
+  MEDIUM_RESEARCH_HORIZONS,
+  MEDIUM_WEIGHTS,
+  SHORT_HORIZONS,
+  SHORT_WEIGHTS,
+  V20_COST_POLICY_VERSION,
+  V20_MODEL_VERSION,
+  adjustOpportunityScore,
+  estimateExecutionCosts,
+} from "../supabase/functions/_shared/v20-opportunity-policy.js";
+
+export {
+  MEDIUM_HORIZONS,
+  MEDIUM_RESEARCH_HORIZONS,
+  MEDIUM_WEIGHTS,
+  SHORT_HORIZONS,
+  SHORT_WEIGHTS,
+  V20_COST_POLICY_VERSION,
+  V20_MODEL_VERSION,
+  adjustOpportunityScore,
+  estimateExecutionCosts,
+};
+
 const finite = (value) => value !== null && value !== undefined && Number.isFinite(Number(value));
 const clamp = (value, low = 0, high = 100) => Math.max(low, Math.min(high, Number(value)));
 const round = (value, digits = 2) => finite(value) ? Number(Number(value).toFixed(digits)) : null;
@@ -6,33 +30,6 @@ const mean = (values) => {
   return usable.length ? usable.reduce((sum, value) => sum + value, 0) / usable.length : null;
 };
 const sum = (values) => values.filter(finite).reduce((total, value) => total + Number(value), 0);
-
-// Persisted model-version key. Keep aligned with the additive Supabase v20
-// schema and public API; the package/release version remains 20.0.0.
-export const V20_MODEL_VERSION = "20.0";
-export const SHORT_HORIZONS = Object.freeze([2, 3, 5, 10]);
-export const MEDIUM_HORIZONS = Object.freeze([20, 40, 60]);
-
-export const SHORT_WEIGHTS = Object.freeze({
-  technicalTrendPattern: 20,
-  volumePriceStructure: 20,
-  institutionalChip: 15,
-  marketEnvironment: 15,
-  industryRelativeStrength: 10,
-  newsEventCatalyst: 10,
-  fundamentalSafety: 5,
-  liquidityExecution: 5,
-});
-
-export const MEDIUM_WEIGHTS = Object.freeze({
-  revenueProfitGrowth: 25,
-  industryTrend: 20,
-  institutionalPositioning: 15,
-  mediumTechnicalTrend: 15,
-  valuationReasonableness: 10,
-  financialSafety: 10,
-  newsEventCatalyst: 5,
-});
 
 export const SHORT_RISK_WEIGHTS = Object.freeze({
   volatilityGap: 20,
@@ -179,52 +176,58 @@ function shortComponents(stock, deep, context) {
   const institutional = deep?.institutional || {};
   const margin = deep?.margin || {};
   const revenue = deep?.revenue || {};
-  const financial = deep?.financial || {};
   const marketScore = context?.marketScore;
   const industryScore = context?.industryTrendScore ?? context?.industryScore;
   const newsScore = context?.newsEventScore ?? context?.catalystScore;
+  const costs = estimateExecutionCosts({
+    group: groupOf(stock, deep),
+    averageDailyValue: stock?.value ?? price?.averageValue20,
+    atrPct: price?.atrPct,
+    price: latestPrice(stock, deep),
+    expectedOrderValue: context?.expectedOrderValue,
+    commissionRatePerSidePct: context?.costAssumptions?.commissionRatePerSidePct,
+  });
   return [
-    scoreComponent("technicalTrendPattern", "技術趨勢與型態", SHORT_WEIGHTS.technicalTrendPattern, [
+    scoreComponent("priceVolumeTrend", "價量與趨勢結構", SHORT_WEIGHTS.priceVolumeTrend, [
       scoreFactor("ma20_slope", "20 日均線方向", price.ma20Slope5, interpolate(price.ma20Slope5, [[-4, 0], [0, 45], [1, 70], [3, 100]]), 2, "price_history"),
       scoreFactor("ma_alignment", "均線結構", finite(price.lastClose) && finite(price.ma20) && finite(price.ma60) ? `${price.lastClose > price.ma20}/${price.ma20 > price.ma60}` : null, finite(price.lastClose) && finite(price.ma20) && finite(price.ma60) ? (price.lastClose > price.ma20 && price.ma20 > price.ma60 ? 100 : price.lastClose > price.ma20 ? 58 : 20) : null, 2, "price_history"),
       scoreFactor("breakout20", "20 日突破", price.breakout20, price.breakout20 == null ? null : price.breakout20 ? 100 : 45, 1.5, "price_history"),
       scoreFactor("rsi14", "RSI 動能區間", price.rsi14, interpolate(price.rsi14, [[20, 15], [35, 55], [50, 75], [62, 100], [72, 70], [85, 0]]), 1, "price_history"),
       scoreFactor("macd", "MACD 動能", price.macdHistogram, finite(price.macdHistogram) ? (price.macdHistogram > 0 ? 85 : 30) : null, 1, "price_history"),
-    ]),
-    scoreComponent("volumePriceStructure", "成交量與量價結構", SHORT_WEIGHTS.volumePriceStructure, [
       scoreFactor("volume_ratio", "量能變化", price.volumeRatio, interpolate(price.volumeRatio, [[0.4, 15], [0.8, 45], [1.2, 75], [1.8, 100], [3.5, 65]]), 2, "price_history"),
       scoreFactor("up_down_volume", "上漲與下跌量比", price.upDownVolumeRatio, interpolate(price.upDownVolumeRatio, [[0.4, 10], [0.8, 40], [1, 58], [1.5, 85], [2.5, 100]]), 2, "price_history"),
       scoreFactor("return5", "五日價格動能", price.return5, interpolate(price.return5, [[-12, 5], [-3, 35], [0, 55], [5, 85], [10, 100], [20, 45]]), 1, "price_history"),
-      scoreFactor("trade_value", "成交金額", stock?.value, interpolate(stock?.value, [[5_000_000, 0], [20_000_000, 45], [100_000_000, 75], [500_000_000, 100]]), 1, "market_quote"),
     ]),
-    scoreComponent("institutionalChip", "法人及籌碼", SHORT_WEIGHTS.institutionalChip, [
+    scoreComponent("institutional", "法人籌碼", SHORT_WEIGHTS.institutional, [
       scoreFactor("inst5", "法人五日累計", institutional.inst5, interpolate(institutional.inst5, [[-20_000, 0], [-1_000, 30], [0, 50], [1_000, 70], [20_000, 100]]), 2, "institutional"),
       scoreFactor("inst_intensity", "法人買賣強度", institutional.intensity5, interpolate(institutional.intensity5, [[-8, 0], [-1, 35], [0, 50], [2, 75], [6, 100]]), 2, "institutional"),
       scoreFactor("foreign_streak", "外資連續方向", institutional.foreignStreak, interpolate(institutional.foreignStreak, [[0, 40], [2, 65], [5, 90], [8, 100]]), 1, "institutional"),
       scoreFactor("trust_streak", "投信連續方向", institutional.trustStreak, interpolate(institutional.trustStreak, [[0, 40], [2, 68], [5, 95], [8, 100]]), 1, "institutional"),
       scoreFactor("margin20", "融資二十日變化", margin.marginChange20, finite(margin.marginChange20) ? (margin.marginChange20 <= 0 ? 75 : 35) : null, 1, "margin"),
     ]),
-    scoreComponent("marketEnvironment", "台股與國際市場環境", SHORT_WEIGHTS.marketEnvironment, [
+    scoreComponent("volatilityRiskReward", "波動與風險報酬", SHORT_WEIGHTS.volatilityRiskReward, [
+      scoreFactor("atr", "ATR 波動可執行性", price.atrPct, interpolate(price.atrPct, [[0.5, 60], [2, 100], [4, 80], [7, 35], [12, 0]]), 2, "price_history"),
+      scoreFactor("distance_ma20", "距二十日均線", price.distanceMa20, interpolate(price.distanceMa20, [[-12, 20], [-3, 75], [2, 100], [10, 60], [20, 0]]), 2, "price_history"),
+      scoreFactor("overheat", "動能未過熱", price.rsi14, interpolate(price.rsi14, [[25, 35], [45, 80], [60, 100], [72, 55], [85, 0]]), 1, "price_history"),
+    ]),
+    scoreComponent("marketGlobal", "市場及美股環境", SHORT_WEIGHTS.marketGlobal, [
       scoreFactor("market_score", "市場環境分數", marketScore, finite(marketScore) ? marketScore : null, 3, "market_context"),
       scoreFactor("global_score", "關聯國際市場", context?.globalSectorScore, finite(context?.globalSectorScore) ? context.globalSectorScore : null, 1, "market_context"),
     ]),
-    scoreComponent("industryRelativeStrength", "產業與相對強度", SHORT_WEIGHTS.industryRelativeStrength, [
+    scoreComponent("relativeIndustry", "相對強弱與產業動能", SHORT_WEIGHTS.relativeIndustry, [
       scoreFactor("relative20", "相對大盤二十日強度", price.relative20, interpolate(price.relative20, [[-15, 0], [-4, 30], [0, 55], [5, 80], [12, 100]]), 2, "price_history"),
       scoreFactor("industry", "產業趨勢", industryScore, finite(industryScore) ? industryScore : null, 2, "market_context"),
       scoreFactor("relative_percentile", "產業內相對強度百分位", context?.relativeStrengthPercentile, finite(context?.relativeStrengthPercentile) ? context.relativeStrengthPercentile : null, 1, "peer_context"),
     ]),
-    scoreComponent("newsEventCatalyst", "新聞與事件催化", SHORT_WEIGHTS.newsEventCatalyst, [
-      scoreFactor("news_event", "可信新聞與公告影響", newsScore, finite(newsScore) ? newsScore : null, 3, "news_context"),
-      scoreFactor("source_reliability", "來源可信度", context?.newsReliability, finite(context?.newsReliability) ? context.newsReliability : null, 1, "news_context"),
-    ]),
-    scoreComponent("fundamentalSafety", "基本面安全檢查", SHORT_WEIGHTS.fundamentalSafety, [
+    scoreComponent("revenueEventCatalyst", "營收與事件催化", SHORT_WEIGHTS.revenueEventCatalyst, [
       scoreFactor("revenue", "營收趨勢", revenue.avg3Yoy ?? revenue.yoy, interpolate(revenue.avg3Yoy ?? revenue.yoy, [[-30, 0], [-10, 25], [0, 55], [15, 80], [35, 100]]), 2, "revenue"),
-      scoreFactor("cash", "營業現金品質", financial.cashConversion, interpolate(financial.cashConversion, [[-1, 0], [0, 35], [0.7, 70], [1.2, 100]]), 1, "financial"),
-      scoreFactor("debt", "負債安全", financial.debtRatio, interpolate(financial.debtRatio, [[20, 100], [50, 70], [70, 35], [90, 0]]), 1, "financial"),
+      scoreFactor("news_event", "可信新聞與公告影響", finite(newsScore) ? newsScore : "none", finite(newsScore) ? newsScore : 50, 3, "news_context"),
+      scoreFactor("source_reliability", "來源可信度", finite(newsScore) ? context?.newsReliability : "not_applicable", finite(newsScore) && finite(context?.newsReliability) ? context.newsReliability : 50, 1, "news_context"),
     ]),
-    scoreComponent("liquidityExecution", "流動性與執行品質", SHORT_WEIGHTS.liquidityExecution, [
+    scoreComponent("liquidityExecutionCost", "流動性與交易成本", SHORT_WEIGHTS.liquidityExecutionCost, [
       scoreFactor("value", "成交金額", stock?.value, interpolate(stock?.value, [[5_000_000, 0], [20_000_000, 50], [100_000_000, 80], [500_000_000, 100]]), 2, "market_quote"),
-      scoreFactor("atr", "波動可執行性", price.atrPct, interpolate(price.atrPct, [[0.5, 65], [2, 100], [4, 80], [7, 40], [12, 0]]), 1, "price_history"),
+      scoreFactor("volume", "成交量", stock?.volume, interpolate(stock?.volume, [[100, 0], [500, 50], [2_000, 80], [10_000, 100]]), 1, "market_quote"),
+      scoreFactor("estimated_cost", "預估來回交易成本", costs.totalPct, interpolate(costs.totalPct, [[0.6, 100], [0.9, 75], [1.2, 45], [1.8, 0]]), 2, "cost_policy"),
     ]),
   ];
 }
@@ -235,7 +238,14 @@ function mediumComponents(stock, deep, context) {
   const revenue = deep?.revenue || {};
   const financial = deep?.financial || {};
   const inst60 = cumulative(institutional.history, "inst", 60);
-  const newsScore = context?.newsEventScore ?? context?.catalystScore;
+  const costs = estimateExecutionCosts({
+    group: groupOf(stock, deep),
+    averageDailyValue: stock?.value ?? price?.averageValue20,
+    atrPct: price?.atrPct,
+    price: latestPrice(stock, deep),
+    expectedOrderValue: context?.expectedOrderValue,
+    commissionRatePerSidePct: context?.costAssumptions?.commissionRatePerSidePct,
+  });
   return [
     scoreComponent("revenueProfitGrowth", "營收與獲利成長", MEDIUM_WEIGHTS.revenueProfitGrowth, [
       scoreFactor("revenue_yoy", "月營收年增", revenue.yoy, interpolate(revenue.yoy, [[-30, 0], [-10, 25], [0, 50], [15, 75], [35, 100]]), 2, "revenue"),
@@ -244,7 +254,7 @@ function mediumComponents(stock, deep, context) {
       scoreFactor("eps", "EPS 成長", financial.epsYoy, interpolate(financial.epsYoy, [[-40, 0], [-10, 30], [0, 52], [20, 78], [50, 100]]), 2, "financial"),
       scoreFactor("margin", "毛利率變化", financial.grossMarginYoyChange ?? financial.operatingMarginYoyChange, interpolate(financial.grossMarginYoyChange ?? financial.operatingMarginYoyChange, [[-8, 0], [-2, 30], [0, 55], [3, 80], [8, 100]]), 1, "financial"),
     ]),
-    scoreComponent("industryTrend", "產業及族群趨勢", MEDIUM_WEIGHTS.industryTrend, [
+    scoreComponent("industryEnvironment", "產業環境", MEDIUM_WEIGHTS.industryEnvironment, [
       scoreFactor("industry", "產業中期趨勢", context?.industryTrendScore, finite(context?.industryTrendScore) ? context.industryTrendScore : null, 3, "market_context"),
       scoreFactor("industry_demand", "產業需求與報價", context?.industryDemandScore, finite(context?.industryDemandScore) ? context.industryDemandScore : null, 2, "market_context"),
       scoreFactor("relative_percentile", "產業內相對強度", context?.relativeStrengthPercentile, finite(context?.relativeStrengthPercentile) ? context.relativeStrengthPercentile : null, 1, "peer_context"),
@@ -255,7 +265,7 @@ function mediumComponents(stock, deep, context) {
       scoreFactor("foreign20", "外資二十日累計", institutional.foreign20, interpolate(institutional.foreign20, [[-30_000, 0], [-2_000, 30], [0, 50], [2_000, 72], [30_000, 100]]), 1, "institutional"),
       scoreFactor("trust20", "投信二十日累計", institutional.trust20, interpolate(institutional.trust20, [[-10_000, 0], [-1_000, 30], [0, 50], [1_000, 75], [10_000, 100]]), 1, "institutional"),
     ]),
-    scoreComponent("mediumTechnicalTrend", "中期技術趨勢", MEDIUM_WEIGHTS.mediumTechnicalTrend, [
+    scoreComponent("mediumTrend", "中期趨勢", MEDIUM_WEIGHTS.mediumTrend, [
       scoreFactor("ma_structure", "二十、六十、百二十日均線", finite(price.ma20) && finite(price.ma60) && finite(price.ma120) ? `${price.ma20}/${price.ma60}/${price.ma120}` : null, finite(price.ma20) && finite(price.ma60) && finite(price.ma120) ? (price.ma20 > price.ma60 && price.ma60 > price.ma120 ? 100 : price.ma20 > price.ma60 ? 65 : 25) : null, 3, "price_history"),
       scoreFactor("ma60_slope", "六十日均線方向", price.ma60Slope5, interpolate(price.ma60Slope5, [[-4, 0], [0, 50], [1, 75], [3, 100]]), 2, "price_history"),
       scoreFactor("relative60", "六十日相對強度", price.relative60, interpolate(price.relative60, [[-20, 0], [-5, 30], [0, 55], [8, 82], [20, 100]]), 2, "price_history"),
@@ -266,15 +276,16 @@ function mediumComponents(stock, deep, context) {
       scoreFactor("peer_pb", "同類型股價淨值比百分位", context?.pbValuePercentile, finite(context?.pbValuePercentile) ? context.pbValuePercentile : null, 1, "peer_context"),
       scoreFactor("valuation", "類型調整後估值", context?.valuationScore, finite(context?.valuationScore) ? context.valuationScore : null, 2, "peer_context"),
     ]),
-    scoreComponent("financialSafety", "財務安全", MEDIUM_WEIGHTS.financialSafety, [
+    scoreComponent("financialQuality", "財務品質", MEDIUM_WEIGHTS.financialQuality, [
       scoreFactor("cash", "現金流品質", financial.cashConversion, interpolate(financial.cashConversion, [[-1, 0], [0, 35], [0.7, 72], [1.2, 100]]), 2, "financial"),
       scoreFactor("debt", "負債安全", financial.debtRatio, interpolate(financial.debtRatio, [[20, 100], [50, 72], [70, 35], [90, 0]]), 2, "financial"),
       scoreFactor("inventory", "存貨風險", finite(financial.inventoryYoy) && finite(financial.revenueYoy) ? financial.inventoryYoy - financial.revenueYoy : null, interpolate(finite(financial.inventoryYoy) && finite(financial.revenueYoy) ? financial.inventoryYoy - financial.revenueYoy : null, [[-20, 100], [0, 75], [15, 45], [40, 0]]), 1, "financial"),
       scoreFactor("receivables", "應收帳款風險", finite(financial.receivablesYoy) && finite(financial.revenueYoy) ? financial.receivablesYoy - financial.revenueYoy : null, interpolate(finite(financial.receivablesYoy) && finite(financial.revenueYoy) ? financial.receivablesYoy - financial.revenueYoy : null, [[-20, 100], [0, 75], [15, 45], [40, 0]]), 1, "financial"),
     ]),
-    scoreComponent("newsEventCatalyst", "新聞與事件催化", MEDIUM_WEIGHTS.newsEventCatalyst, [
-      scoreFactor("news_event", "中期事件影響", newsScore, finite(newsScore) ? newsScore : null, 3, "news_context"),
-      scoreFactor("duration", "事件影響期間", context?.eventDurationScore, finite(context?.eventDurationScore) ? context.eventDurationScore : null, 1, "news_context"),
+    scoreComponent("liquidityRisk", "流動性與風險", MEDIUM_WEIGHTS.liquidityRisk, [
+      scoreFactor("value", "成交金額", stock?.value, interpolate(stock?.value, [[5_000_000, 0], [20_000_000, 50], [100_000_000, 80], [500_000_000, 100]]), 2, "market_quote"),
+      scoreFactor("atr", "中期波動可執行性", price.atrPct, interpolate(price.atrPct, [[0.5, 65], [2, 100], [4, 80], [7, 40], [12, 0]]), 1, "price_history"),
+      scoreFactor("estimated_cost", "預估來回交易成本", costs.totalPct, interpolate(costs.totalPct, [[0.6, 100], [0.9, 75], [1.2, 45], [1.8, 0]]), 2, "cost_policy"),
     ]),
   ];
 }
@@ -423,7 +434,7 @@ function selectCalibrationBucket(signal, horizon, buckets) {
   const regime = normalizedRegime(signal.regime);
   const decile = scoreDecile(signal.score);
   const exact = buckets
-    .filter((row) => row.model === signal.model && Number(row.horizonDays) === Number(horizon) && row.style === signal.style && normalizedRegime(row.regime) === regime && Number(row.scoreDecile) === decile && Number(row.sampleSize) >= 60)
+    .filter((row) => row.model === signal.model && Number(row.horizonDays) === Number(horizon) && row.style === signal.style && normalizedRegime(row.regime) === regime && Number(row.scoreDecile) === decile && Number(row.sampleSize) >= 100)
     .sort((a, b) => Number(b.sampleSize) - Number(a.sampleSize))[0];
   if (exact) return { ...exact, calibrationLevel: "style_regime_decile" };
   const fallback = buckets
@@ -535,6 +546,11 @@ function expectancyGate(forecasts) {
   return gate("positive_expectancy", calibrated.some((row) => row.expectedNetReturn > 0), "扣除成本與滑價後的交易期望值");
 }
 
+function costAdjustedGate(ranking) {
+  if (!finite(ranking?.netOpportunityScore)) return gate("cost_adjusted_rank", null, "缺少風險或交易成本資料");
+  return gate("cost_adjusted_rank", ranking.netOpportunityScore >= 55, "扣除成本、下跌風險與換手懲罰後的相對排名");
+}
+
 function reasonsFromComponents(components, positive = true) {
   return components.flatMap((component) => component.factors
     .filter((factor) => finite(factor.score) && (positive ? factor.score >= 72 : factor.score <= 28))
@@ -592,11 +608,10 @@ function signalMetrics(model, components, deep, context) {
   const componentScore = (key) => components.find((row) => row.key === key)?.score ?? null;
   if (model === "short") {
     return {
-      technicalTrend: componentScore("technicalTrendPattern"),
-      volumePriceMomentum: componentScore("volumePriceStructure"),
-      institutionalStrength: componentScore("institutionalChip"),
+      priceVolumeTrend: componentScore("priceVolumeTrend"),
+      institutionalStrength: componentScore("institutional"),
       relativeStrengthPercentile: finite(context?.relativeStrengthPercentile) ? round(context.relativeStrengthPercentile, 1) : null,
-      catalystStrength: componentScore("newsEventCatalyst"),
+      catalystStrength: componentScore("revenueEventCatalyst"),
     };
   }
   const valuationScore = componentScore("valuationReasonableness");
@@ -604,7 +619,7 @@ function signalMetrics(model, components, deep, context) {
     growthState: mediumGrowthState(deep),
     growthMomentum: componentScore("revenueProfitGrowth"),
     growthAcceleration: finite(deep?.revenue?.acceleration3) ? round(deep.revenue.acceleration3) : null,
-    industryTrend: componentScore("industryTrend"),
+    industryTrend: componentScore("industryEnvironment"),
     institutionalStrength: componentScore("institutionalPositioning"),
     relativeStrengthPercentile: finite(context?.relativeStrengthPercentile) ? round(context.relativeStrengthPercentile, 1) : null,
     valuationScore,
@@ -622,17 +637,40 @@ function buildSignal(model, input) {
   const aggregateRisk = weightedRisk(riskComponents);
   const style = isShort ? shortStyle(deep, context) : mediumStyle(deep, context);
   const plan = tradePlan(model, stock, deep);
+  const group = groupOf(stock, deep);
+  const costs = estimateExecutionCosts({
+    group,
+    averageDailyValue: stock?.value ?? deep?.price?.averageValue20,
+    atrPct: deep?.price?.atrPct,
+    price: latestPrice(stock, deep),
+    expectedOrderValue: context?.expectedOrderValue,
+    commissionRatePerSidePct: context?.costAssumptions?.commissionRatePerSidePct,
+  });
+  const researchHorizons = isShort ? [] : MEDIUM_RESEARCH_HORIZONS;
+  const rankingByHorizon = Object.fromEntries([...horizons, ...researchHorizons].map((horizon) => [String(horizon), adjustOpportunityScore({
+    rawScore: aggregateScore.score,
+    riskScore: aggregateRisk.riskScore,
+    estimatedTotalCostPct: costs.totalPct,
+    model,
+    horizonDays: horizon,
+    atrPct: deep?.price?.atrPct,
+    expectedTurnoverRate: context?.expectedTurnoverRate,
+  })]));
+  const primaryHorizon = isShort ? 5 : 20;
+  const primaryRanking = rankingByHorizon[String(primaryHorizon)];
   const preliminary = {
     version: V20_MODEL_VERSION,
     model,
     symbol: String(stock.symbol || ""),
     name: stock.name || "",
-    group: groupOf(stock, deep),
+    group,
     asOf: input?.asOf || deep?.price?.lastDate || deep?.priceHistory?.at(-1)?.date || null,
     horizons,
     regime: normalizedRegime(context?.regime ?? context?.marketRegime),
     style,
-    score: aggregateScore.score,
+    score: primaryRanking?.netOpportunityScore ?? null,
+    rawOpportunityScore: aggregateScore.score,
+    netOpportunityScore: primaryRanking?.netOpportunityScore ?? null,
   };
   const forecasts = applyCalibration(preliminary, calibrationBuckets);
   const gates = [
@@ -642,11 +680,13 @@ function buildSignal(model, input) {
     relativeStrengthGate(model, deep, context),
     supportGate(model, deep, context),
     entryGate(model, deep, plan),
+    costAdjustedGate(primaryRanking),
     expectancyGate(forecasts),
   ];
   const scoreThreshold = isShort ? ({ momentum_breakout: 70, trend_pullback: 68, institutional_flow: 67, event_catalyst: 70, oversold_rebound: 72 }[style] ?? 70) : 68;
   const riskThreshold = isShort ? 65 : 60;
-  const official = gates.every((row) => row.status === "pass") && finite(aggregateScore.score) && aggregateScore.score >= scoreThreshold && finite(aggregateRisk.riskScore) && aggregateRisk.riskScore <= riskThreshold;
+  const requiredGates = gates.filter((row) => row.key !== "positive_expectancy" || row.status !== "unknown");
+  const official = requiredGates.every((row) => row.status === "pass") && finite(primaryRanking?.netOpportunityScore) && primaryRanking.netOpportunityScore >= scoreThreshold && finite(aggregateRisk.riskScore) && aggregateRisk.riskScore <= riskThreshold;
   const missing = components.flatMap((component) => component.factors.filter((factor) => !finite(factor.score)).map((factor) => factor.label));
   const calibratedForecasts = Object.values(forecasts).filter((row) => row.dataState === "calibrated" && finite(row.expectedNetReturn));
   const optimalHoldingDays = calibratedForecasts.length
@@ -660,8 +700,11 @@ function buildSignal(model, input) {
     riskCompleteness: aggregateRisk.riskCompleteness,
     official,
     recommended: official,
-    action: chooseAction(model, official, aggregateScore.score, aggregateRisk.riskScore, style, gates),
-    opportunityScore: aggregateScore.score,
+    action: chooseAction(model, official, primaryRanking?.netOpportunityScore, aggregateRisk.riskScore, style, requiredGates),
+    opportunityScore: primaryRanking?.netOpportunityScore ?? null,
+    costs,
+    rankingByHorizon,
+    researchHorizons,
     strategy: isShort ? style : null,
     stockType: isShort ? null : style,
     optimalHoldingDays,

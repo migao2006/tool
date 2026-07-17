@@ -24,6 +24,11 @@ import {
   normalizeLendingRows,
   officialHistoryRows,
 } from "./db-first-utils.js";
+// @ts-ignore Shared guard is plain ESM and covered by Node regression tests.
+import {
+  maintenanceDisposition,
+  maintenanceSkipPayload,
+} from "../_shared/maintenance-guard.js";
 
 const VERSION = "16.3";
 const PIPELINE_VERSION = "20-db-first";
@@ -2502,6 +2507,8 @@ async function syncEnrichment(requestedLimit: number, access: FinmindAccess) {
 Deno.serve(async (req: Request) => {
   const url = new URL(req.url);
   if (req.method === "GET" && url.searchParams.get("mode") === "history") {
+    const maintenance = await maintenanceDisposition(rest);
+    if (maintenance.blocked) return json(maintenanceSkipPayload(maintenance), maintenance.status);
     try {
       const finmindAccess = await resolveFinmindAccess();
       return await serveOnDemandHistory(url, finmindAccess);
@@ -2523,6 +2530,8 @@ Deno.serve(async (req: Request) => {
   };
   try {
     if (!await verifyRequest(req)) return json({ error: "Unauthorized" }, 401);
+    const maintenance = await maintenanceDisposition(rest);
+    if (maintenance.blocked) return json(maintenanceSkipPayload(maintenance), maintenance.status);
     const body = await req.json().catch(() => ({}));
     // Resolve once per invocation.  The token is passed only in memory to the
     // provider client and is never included in logs, state, or responses.

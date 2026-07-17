@@ -4,7 +4,7 @@ const EDGE='/api/market-data';
 const CORE_SUPABASE_URL='https://gxwrczuwshndnjactrij.supabase.co';
 const CORE_SUPABASE_KEY='sb_publishable_M8sNxTHUuH06DwQQprIaoA_A2z4Tg7G';
 const TAIPEI_TIME_ZONE='Asia/Taipei';
-const DISCLAIMER='AI 分析依公開資料、固定公式與資料完整度整理，僅供研究參考，不構成投資建議、買賣邀約或獲利保證。資料可能因突發消息、流動性或更新延遲而改變，投資人應自行判斷並承擔風險。';
+const DISCLAIMER='機會排序依公開資料、可重現量化規則與資料完整度整理；AI 只協助說明，不決定排名。內容僅供研究參考，不構成投資建議、買賣邀約或獲利保證。';
 
 const S={
   tab:'home',stocks:[],mode:'loading',date:'',fundStatus:'loading',fundPeriod:'',loading:true,
@@ -601,5 +601,7 @@ function openAccountModal(){
 }
 
 document.querySelector('#accountBtn').onclick=openAccountModal;
-if('serviceWorker'in navigator)navigator.serviceWorker.register('/sw.js?v=20.0.7',{updateViaCache:'none'}).catch(()=>{});
-initSession();render();loadStocks();
+if('serviceWorker'in navigator)navigator.serviceWorker.register('/sw.js?v=20.1.0',{updateViaCache:'none'}).catch(()=>{});
+initSession();render();
+if(document.querySelector('script[src^="/v20.js"]'))S.fundStatus='deferred';
+else loadStocks();

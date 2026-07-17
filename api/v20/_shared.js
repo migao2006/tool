@@ -10,7 +10,7 @@ function json(payload, status = 200, headers = {}) {
       "content-type": "application/json; charset=utf-8",
       "x-content-type-options": "nosniff",
       "access-control-allow-origin": "*",
-      "x-twss-api-version": "20.0",
+      "x-twss-api-version": "20.1",
       "cache-control": status < 400 ? CACHE_CONTROL : "no-store, max-age=0",
       "cdn-cache-control": status < 400 ? CDN_CACHE_CONTROL : "no-store",
       "vercel-cdn-cache-control": status < 400 ? CDN_CACHE_CONTROL : "no-store",
@@ -31,7 +31,7 @@ function logRequest(level, payload) {
   else console.log(entry);
 }
 
-export async function handleV20(request, reader) {
+export async function handleV20(request, reader, options = {}) {
   const startedAt = Date.now();
   const url = new URL(request.url);
   const route = url.pathname;
@@ -51,20 +51,28 @@ export async function handleV20(request, reader) {
     return response;
   };
 
+  const methods = Array.isArray(options.methods) && options.methods.length
+    ? [...new Set(options.methods.map((method) => String(method).toUpperCase()))]
+    : ["GET"];
+  const allowMethods = [...methods, "OPTIONS"].join(", ");
+  const allowHeaders = Array.isArray(options.allowHeaders) && options.allowHeaders.length
+    ? [...new Set(options.allowHeaders.map(String))].join(", ")
+    : "content-type";
+
   if (request.method === "OPTIONS") {
     return done(new Response(null, {
       status: 204,
       headers: {
         "access-control-allow-origin": "*",
-        "access-control-allow-methods": "GET, OPTIONS",
-        "access-control-allow-headers": "content-type",
+        "access-control-allow-methods": allowMethods,
+        "access-control-allow-headers": allowHeaders,
         "cache-control": "no-store",
       },
     }));
   }
-  if (request.method !== "GET") {
-    return done(json({ error: { code: "method_not_allowed", message: "GET only" } }, 405, {
-      allow: "GET, OPTIONS",
+  if (!methods.includes(request.method.toUpperCase())) {
+    return done(json({ error: { code: "method_not_allowed", message: `${methods.join(", ")} only` } }, 405, {
+      allow: allowMethods,
     }));
   }
   try {

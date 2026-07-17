@@ -20,16 +20,28 @@ import {
   resolveReadySourceCycle,
   shouldRunFullMarket,
 } from "../supabase/functions/twss-v20-model/publication-state.js";
+import { buildV20PublicationManifests } from "../supabase/functions/_shared/v20-publication-contract.js";
+import { V20_MODEL_ARTIFACT_HASH } from "../supabase/functions/_shared/v20-model-artifact.js";
 
 const latest = { listed: "2026-07-16", otc: "2026-07-16", etf: "2026-07-16" };
 const key = groupDateCycleKey(latest, V20_MODEL_VERSION);
 assert.equal(
   key,
-  "20.0|listed=2026-07-16|otc=2026-07-16|etf=2026-07-16",
+  "20.1|listed=2026-07-16|otc=2026-07-16|etf=2026-07-16",
   "a publication cycle must use one point-in-time date",
 );
-assert.equal(V20_MODEL_VERSION, "20.0");
+assert.equal(V20_MODEL_VERSION, "20.1");
 assert.deepEqual(V20_WORKER_GROUPS, ["listed", "otc", "etf"]);
+
+const publicationManifests = buildV20PublicationManifests({
+  dataDate: "2026-07-16",
+  dataCutoffAt: "2026-07-16T08:00:00Z",
+  sourceDates: { listed: "2026-07-16", otc: "2026-07-16", etf: "2026-07-16" },
+});
+assert.ok(Object.keys(publicationManifests.sourceManifest.sources).length > 0);
+assert.deepEqual(Object.keys(publicationManifests.modelManifest).slice(0, 2), ["short", "medium"]);
+assert.deepEqual(publicationManifests.modelManifest.medium.publicHorizons, [10, 20, 40]);
+assert.deepEqual(publicationManifests.modelManifest.medium.researchHorizons, [60]);
 
 const started = reconcileWorkerCycle({
   latestGroupDates: latest,
@@ -169,26 +181,85 @@ for (const regime of regimes) {
   assert.ok(!["bullish", "range", "bearish"].includes(regime), "worker and backtest regime names must match");
 }
 
-const [workerSource, migration, incrementalMigration] = await Promise.all([
+const [workerSource, migration, incrementalMigration, verifiableMigration] = await Promise.all([
   readFile(new URL("../supabase/functions/twss-v20-model/index.ts", import.meta.url), "utf8"),
   readFile(new URL("../supabase/migrations/20260716021553_add_v20_quant_models.sql", import.meta.url), "utf8"),
   readFile(new URL("../supabase/migrations/20260716131155_v20_incremental_dirty_queue.sql", import.meta.url), "utf8"),
+  readFile(new URL("../supabase/migrations/20260716173332_verifiable_opportunity_snapshots.sql", import.meta.url), "utf8"),
 ]);
 assert.doesNotMatch(workerSource, /latestGroupDates\(\)/);
 assert.match(workerSource, /loadSourceReadiness\(\)/);
 assert.match(workerSource, /resolveReadySourceCycle/);
 assert.match(workerSource, /Math\.min\(500,/);
 assert.match(workerSource, /TWSS_V20_BATCH_LIMIT/);
-assert.match(workerSource, /refreshRankings\(sourceDate\)/);
+assert.match(workerSource, /rpc\/twss_v20_publish_recommendation_run/);
+assert.match(workerSource, /rpc\/twss_v20_signal_data_cutoff/,
+  "the cutoff must come from the service-only database resolver");
+assert.match(workerSource, /rpc\/twss_v20_read_immutable_calibration/);
+assert.match(workerSource, /rpc\/twss_v20_read_model_channels/);
+assert.match(workerSource, /rpc\/twss_v20_refresh_immutable_calibration/);
+assert.doesNotMatch(workerSource, /v20_calibration_buckets\?select=/,
+  "v20.1 scoring must never read the mutable legacy calibration table");
+assert.match(workerSource, /calibrationBeforeAt/);
+assert.match(workerSource, /T23:59:59\.999\+08:00/,
+  "historical scoring must not see calibration observations after that Taipei day");
+assert.match(workerSource, /calibration_version:\s*resources\.calibrationVersion/);
+assert.match(workerSource, /calibrationVersion:\s*input\.calibrationVersion/);
+assert.match(
+  workerSource,
+  /shortChampion\?\.validation_status === "passed"[\s\S]{0,240}mediumChampion\?\.validation_status === "passed"[\s\S]{0,320}shortCalibrationVersion === snapshotCalibrationVersion/,
+  "calibration is usable only when both passed Champions bind the same immutable snapshot",
+);
+assert.match(workerSource, /calibrationBuckets: championAligned \? buckets : \[\]/);
+assert.match(workerSource, /calibrationVersion = championAligned \? snapshotCalibrationVersion : null/);
+assert.match(workerSource, /refreshImmutableCalibration\(outcomeEvaluation\)/,
+  "all outcome-drain paths must advance calibration only from immutable outcomes");
+assert.equal(
+  (workerSource.match(/await refreshImmutableCalibration\(outcomeEvaluation\)/g) || []).length,
+  3,
+  "no-dirty, incremental and complete-cycle paths must all run the bounded immutable calibration refresh",
+);
+assert.match(workerSource, /V20_MODEL_ARTIFACT_HASH/);
+assert.ok(/^[0-9a-f]{64}$/.test(V20_MODEL_ARTIFACT_HASH));
+assert.doesNotMatch(workerSource, /v20\.1-edge-model/,
+  "a placeholder code identity must never be published");
+assert.match(workerSource, /configuredCodeHash !== V20_MODEL_ARTIFACT_HASH/,
+  "a configured deployment hash must exactly match the bundled artifact identity");
+assert.match(workerSource, /rpc\/twss_v20_evaluate_immutable_outcomes/);
+assert.match(workerSource, /drainImmutableOutcomeBacklog/);
+assert.match(workerSource, /for \(let index = 0; index < maxBatches/,
+  "matured immutable outcomes must drain in bounded batches instead of one fixed call");
+assert.match(workerSource, /batchLimit = Math\.max\(1, Math\.min\(500,/);
+assert.doesNotMatch(workerSource, /p_limit:\s*200/,
+  "a fixed 200-row outcome call would leave the daily backlog behind");
+assert.doesNotMatch(workerSource, /rpc\/twss_v20_evaluate_signal_outcomes/,
+  "the worker must evaluate only immutable published recommendations");
+assert.match(
+  workerSource,
+  /const readyToPublish = freshComplete[\s\S]{0,240}retryQueue\.length === 0[\s\S]{0,120}failures\.length === 0[\s\S]{0,120}deadLetters\.length === 0/,
+  "publication must require a complete cycle with no retries, failures, or dead letters",
+);
+assert.match(workerSource, /const complete = readyToPublish && immutablePublication !== null && rankingErrors\.length === 0/);
+assert.doesNotMatch(workerSource, /refreshRankings/,
+  "the worker must not call the mutable legacy ranking refresher");
 assert.doesNotMatch(workerSource, /for \(const dataDate of cycle\.involvedDates\)/);
 assert.match(workerSource, /publicationPhase/);
 assert.match(workerSource, /baseCompletedAt/);
 assert.match(workerSource, /enrichmentCompletedAt/);
 assert.match(workerSource, /x-twss-sync-token/);
 assert.match(workerSource, /resolution=merge-duplicates/);
+assert.match(workerSource, /marketContext: input\.marketContext/,
+  "the publisher request must carry the exact market context used during scoring");
+assert.match(workerSource, /v20_market_context_reload_failed/,
+  "a newly inserted context must be reloaded with database timestamps before publication");
 assert.match(workerSource, /shouldRunFullMarket/);
 assert.match(workerSource, /twss_claim_v20_dirty_batch/);
 assert.match(workerSource, /incremental_dirty_symbols/);
+assert.match(workerSource, /maintenanceDisposition\(rest\)/);
+assert.match(workerSource, /body\?\.maintenanceVerification === true/);
+assert.match(workerSource, /row\?\.enabled === true && row\?\.phase === "verifying"/,
+  "a manual release worker may bypass maintenance only during the controlled verification phase");
+assert.match(workerSource, /if \(maintenance\.blocked && !verificationRun\)/);
 assert.doesNotMatch(workerSource, /publishedEnrichmentFingerprint === currentEnrichmentFingerprint/);
 assert.match(migration, /'strong_bull', 'bull', 'sideways', 'bear', 'strong_bear'/);
 assert.match(migration, /"maxAttempts":3/);
@@ -200,5 +271,21 @@ assert.match(incrementalMigration, /then 'pending' else 'error'/,
   "a newer dirty revision must survive failure of the leased revision");
 assert.match(incrementalMigration, /enable row level security/);
 assert.match(incrementalMigration, /to service_role/);
+assert.match(verifiableMigration, /create or replace function public\.twss_v20_publish_recommendation_run/);
+assert.match(verifiableMigration, /create or replace function public\.twss_v20_signal_data_cutoff/);
+assert.match(verifiableMigration, /max\(greatest\(s\.generated_at, s\.updated_at\)\)/);
+assert.match(verifiableMigration, /lock table public\.v20_model_signals in share mode/);
+assert.match(verifiableMigration, /v20_signal_data_cutoff_changed/,
+  "the publisher must reject a staging write that wins the pre-publication race");
+assert.match(verifiableMigration, /v20_calibration_version_mismatch/);
+assert.match(verifiableMigration, /v_code_hash !~ '\^\[0-9a-f\]\{64\}\$'/);
+assert.match(verifiableMigration, /create or replace function public\.twss_v20_evaluate_immutable_outcomes/);
+assert.match(verifiableMigration, /market_context_snapshot jsonb not null/);
+assert.match(verifiableMigration, /v20_market_context_mismatch/);
+assert.match(
+  verifiableMigration,
+  /v_cycle_completeness <> 100[\s\S]*v_deadletter_count <> 0[\s\S]*jsonb_array_length\(v_terminal_errors\) <> 0[\s\S]*insert into public\.v20_publication_head/,
+  "the atomic publisher must reject incomplete/error cycles before switching the publication head",
+);
 
 console.log("v20 worker tests passed");

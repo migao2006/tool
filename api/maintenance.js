@@ -1,35 +1,20 @@
-const page = `<!doctype html>
-<html lang="zh-Hant">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="theme-color" content="#07131d">
-  <title>台股智選｜系統升級中</title>
-  <style>
-    :root{color-scheme:dark;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}*{box-sizing:border-box}
-    body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:radial-gradient(circle at top,#0d2933,#06111a 58%);color:#eef8fb}
-    main{width:min(520px,100%);padding:32px 28px;border:1px solid #234451;border-radius:24px;background:rgba(8,28,38,.92);box-shadow:0 24px 70px rgba(0,0,0,.35)}
-    .eyebrow{margin:0 0 10px;color:#55ddc1;font-size:13px;font-weight:800;letter-spacing:.16em}h1{margin:0 0 14px;font-size:clamp(28px,7vw,40px);line-height:1.2}
-    p{margin:0;color:#aec1c9;font-size:17px;line-height:1.75}.status{display:flex;align-items:center;gap:10px;margin-top:24px;padding-top:20px;border-top:1px solid #1c3945;color:#dcebee;font-size:14px}
-    .dot{width:10px;height:10px;border-radius:50%;background:#f5bf45;box-shadow:0 0 0 6px rgba(245,191,69,.12)}
-  </style>
-</head>
-<body><main><p class="eyebrow">SYSTEM MAINTENANCE</p><h1>系統升級中</h1><p>正在進行資料庫分流與效能升級，網站功能已暫時停止。完成安全檢查後會自動恢復服務，請稍後再試。</p><div class="status"><span class="dot" aria-hidden="true"></span>資料安全保留中</div></main></body>
-</html>`;
+import {
+  MAINTENANCE_RETRY_AFTER_SECONDS,
+  maintenanceDocument,
+  maintenancePayload,
+} from "../src/maintenance-mode.js";
 
 export default function handler(request, response) {
-  response.setHeader("Cache-Control", "no-store, max-age=0");
-  response.setHeader("Retry-After", "600");
-  response.setHeader("X-Robots-Tag", "noindex");
+  const state = { enabled: true, phase: "maintenance" };
+  response.setHeader("Cache-Control", "no-store, no-cache, max-age=0, must-revalidate");
+  response.setHeader("Retry-After", String(MAINTENANCE_RETRY_AFTER_SECONDS));
+  response.setHeader("X-Robots-Tag", "noindex, nofollow");
+  response.setHeader("X-Maintenance-Phase", state.phase);
 
   if (request.headers.accept?.includes("text/html")) {
     response.setHeader("Content-Type", "text/html; charset=utf-8");
-    return response.status(503).send(page);
+    return response.status(503).send(maintenanceDocument(state));
   }
 
-  return response.status(503).json({
-    ok: false,
-    code: "MAINTENANCE",
-    message: "系統升級中，請稍後再試。",
-  });
+  return response.status(503).json(maintenancePayload(state));
 }

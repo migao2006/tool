@@ -316,7 +316,7 @@ function modelSummary(outcomes, model, horizons) {
     const rows = outcomes.filter((row) => row.model === model && row.horizonDays === horizon && finite(row.netReturn));
     return [String(horizon), {
       sampleSize: rows.length,
-      status: rows.length >= 60 ? "ready" : "insufficient_history",
+      status: rows.length >= 100 ? "ready" : "insufficient_history",
       averageNetReturn: round(mean(rows.map((row) => row.netReturn))),
       winRate: rows.length ? round(rows.filter((row) => row.netReturn > 0).length / rows.length * 100, 1) : null,
       averageMfe: round(mean(rows.map((row) => row.mfe))),

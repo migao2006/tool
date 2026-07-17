@@ -1,17 +1,20 @@
 import { backendStoreInternals } from "./backend-store.js";
-import { readV19Home, readV19Stock } from "./v19-backend.js";
 import { readV20GlobalMarket } from "./v20-global-market.js";
+import {
+  MEDIUM_WEIGHTS,
+  SHORT_WEIGHTS,
+} from "../supabase/functions/_shared/v20-opportunity-policy.js";
 
-const API_VERSION = "20.0";
-const MODEL_VERSION = "20.0";
+const API_VERSION = "20.1";
+const MODEL_VERSION = "20.1";
 const PAGE_TTL_MS = 30_000;
 const MARKET_TTL_MS = 60_000;
 const STOCK_TTL_MS = 30_000;
 const PUBLICATION_TTL_MS = 2_000;
 const MAX_LIMIT = 50;
-const MODEL_HORIZONS = Object.freeze({ short: [2, 3, 5, 10], medium: [20, 40, 60] });
+const MIN_PUBLIC_CALIBRATION_SAMPLES = 100;
+const MODEL_HORIZONS = Object.freeze({ short: [2, 3, 5, 10], medium: [10, 20, 40] });
 const DEFAULT_HORIZON = Object.freeze({ short: 5, medium: 40 });
-const RANKING_GROUPS = Object.freeze(["listed", "otc", "etf"]);
 const GLOBAL_ALIASES = Object.freeze({
   nasdaq: ["nasdaq"],
   sp500: ["sp500"],
@@ -23,11 +26,10 @@ const GLOBAL_ALIASES = Object.freeze({
   twdUsd: ["twdUsd", "usdTwd"],
 });
 const SORTS = Object.freeze({
-  score_desc: "opportunity_score.desc.nullslast,confidence.desc.nullslast,symbol.asc",
-  expected_value_desc: "expected_value.desc.nullslast,opportunity_score.desc.nullslast,symbol.asc",
-  risk_asc: "risk_score.asc.nullslast,opportunity_score.desc.nullslast,symbol.asc",
-  probability_desc: "up_probability.desc.nullslast,expected_value.desc.nullslast,symbol.asc",
-  change_desc: "rank_delta.desc.nullslast,opportunity_score.desc.nullslast,symbol.asc",
+  net_opportunity_desc: "net_opportunity_score.desc.nullslast,rank_position.asc,symbol.asc",
+  score_desc: "net_opportunity_score.desc.nullslast,rank_position.asc,symbol.asc",
+  risk_asc: "risk_score.asc.nullslast,net_opportunity_score.desc.nullslast,symbol.asc",
+  change_desc: "rank_delta.desc.nullslast,net_opportunity_score.desc.nullslast,symbol.asc",
 });
 const memoryCache = new Map();
 const serverEnv = globalThis.process?.env || {};
@@ -35,25 +37,24 @@ const marketServiceKey = String(
   serverEnv.SUPABASE_SECRET_KEY || serverEnv.SUPABASE_SERVICE_ROLE_KEY || "",
 ).trim();
 const PUBLICATION_PHASES = new Set(["cached", "base_ready", "enriching", "complete"]);
-const MODEL_FEATURES = Object.freeze({
+const MODEL_FEATURES_V21 = Object.freeze({
   short: Object.freeze({
-    technicalTrend: ["技術趨勢與型態", 20],
-    volumePrice: ["成交量與量價結構", 20],
-    institutional: ["法人及籌碼", 15],
-    market: ["台股與國際市場", 15],
-    industry: ["產業與相對強度", 10],
-    news: ["新聞與事件催化", 10],
-    fundamentalSafety: ["基本面安全檢查", 5],
-    liquidity: ["流動性與執行品質", 5],
+    priceVolumeTrend: ["價量與趨勢結構", SHORT_WEIGHTS.priceVolumeTrend],
+    institutional: ["法人籌碼", SHORT_WEIGHTS.institutional],
+    relativeIndustry: ["相對強弱與產業動能", SHORT_WEIGHTS.relativeIndustry],
+    volatilityRiskReward: ["波動與風險報酬", SHORT_WEIGHTS.volatilityRiskReward],
+    marketGlobal: ["市場及美股環境", SHORT_WEIGHTS.marketGlobal],
+    revenueEventCatalyst: ["營收與事件催化", SHORT_WEIGHTS.revenueEventCatalyst],
+    liquidityExecutionCost: ["流動性與交易成本", SHORT_WEIGHTS.liquidityExecutionCost],
   }),
   medium: Object.freeze({
-    growthEarnings: ["營收與獲利成長", 25],
-    industryTrend: ["產業及族群趨勢", 20],
-    institutional: ["法人中期布局", 15],
-    mediumTechnical: ["中期技術趨勢", 15],
-    valuation: ["估值合理性", 10],
-    financialSafety: ["財務安全", 10],
-    news: ["新聞與事件催化", 5],
+    revenueProfitGrowth: ["營收與獲利成長", MEDIUM_WEIGHTS.revenueProfitGrowth],
+    financialQuality: ["財務品質", MEDIUM_WEIGHTS.financialQuality],
+    mediumTrend: ["中期趨勢", MEDIUM_WEIGHTS.mediumTrend],
+    institutionalPositioning: ["法人與籌碼", MEDIUM_WEIGHTS.institutionalPositioning],
+    industryEnvironment: ["產業環境", MEDIUM_WEIGHTS.industryEnvironment],
+    valuationReasonableness: ["估值合理性", MEDIUM_WEIGHTS.valuationReasonableness],
+    liquidityRisk: ["流動性與風險", MEDIUM_WEIGHTS.liquidityRisk],
   }),
 });
 const GATE_DEFINITIONS = Object.freeze({
@@ -81,6 +82,14 @@ function serviceHeaders(key = marketServiceKey) {
     apikey: key,
     ...(!key.startsWith("sb_secret_") ? { authorization: `Bearer ${key}` } : {}),
   };
+}
+
+function serviceRequest(path, options = {}) {
+  if (!marketServiceKey) throw new V20PublicError("backend_not_configured", 503);
+  return backendStoreInternals.request(path, {
+    ...options,
+    headers: { ...serviceHeaders(), ...cleanObject(options.headers) },
+  });
 }
 
 export class V20PublicError extends Error {
@@ -113,39 +122,64 @@ async function cached(key, ttl, loader) {
 }
 
 function normalizePublication(details = {}) {
-  const publishedDataDate = isoDate(details.publishedDataDate);
+  const publishedDataDate = isoDate(details.publishedDataDate || details.data_date || details.dataDate);
   const phase = PUBLICATION_PHASES.has(details.publicationPhase)
     ? details.publicationPhase
-    : publishedDataDate ? "base_ready" : "cached";
+    : details.status === "published" ? "complete" : publishedDataDate ? "base_ready" : "cached";
   return {
+    runId: numeric(details.runId ?? details.run_id),
+    publicationKey: details.publicationKey || details.publication_key || null,
+    contentHash: details.contentHash || details.content_hash || null,
+    revision: numeric(details.revision),
+    modelVersion: details.modelVersion || details.model_version || MODEL_VERSION,
+    featureVersion: details.featureVersion || details.feature_version || null,
+    costModelVersion: details.costModelVersion || details.cost_model_version || null,
+    calibrationVersion: details.calibrationVersion || details.calibration_version || null,
     publicationPhase: phase,
     publishedDataDate,
     baseCompletedAt: details.baseCompletedAt || null,
     enrichmentCompletedAt: details.enrichmentCompletedAt || null,
     enrichmentPending: Math.max(0, Number(details.enrichmentPending) || 0),
-    sourceDates: cleanObject(details.sourceDates),
-    dataCompleteness: finite(details.dataCompleteness) ? Number(clamp(details.dataCompleteness).toFixed(2)) : 0,
-    publishedAt: details.publishedAt || details.completedCycleAt || null,
+    sourceDates: cleanObject(details.sourceDates || cleanObject(details.source_manifest).sourceDates),
+    sourceManifest: cleanObject(details.sourceManifest || details.source_manifest),
+    marketContext: cleanObject(details.marketContext || details.market_context_snapshot),
+    dataCompleteness: finite(details.dataCompleteness ?? details.cycle_completeness)
+      ? Number(clamp(details.dataCompleteness ?? details.cycle_completeness).toFixed(2))
+      : 0,
+    expectedSymbolCount: numeric(details.expected_symbol_count),
+    scoredSymbolCount: numeric(details.scored_symbol_count),
+    publishedAt: details.publishedAt || details.published_at || details.completedCycleAt || null,
   };
+}
+
+function publicationCacheIdentity(publication = {}) {
+  const runId = numeric(publication.runId ?? publication.run_id);
+  const publicationKey = String(publication.publicationKey || publication.publication_key || "").trim();
+  if (runId != null) return `run-${runId}${publicationKey ? `-${publicationKey}` : ""}`;
+  if (publicationKey) return `key-${publicationKey}`;
+  return "unpublished";
 }
 
 async function loadPublicationState() {
   return cached("v20:publication", PUBLICATION_TTL_MS, async () => {
-    const result = marketServiceKey
-      ? await backendStoreInternals.request(
-        "stock_sync_state?select=details&job_key=eq.v20_model&limit=1",
-        {
-          headers: serviceHeaders(),
-        },
-      )
-      : await backendStoreInternals.request("rpc/twss_v20_publication_state", {
-        method: "POST",
-        body: "{}",
-      });
-    const details = marketServiceKey
-      ? Array.isArray(result.data) ? cleanObject(result.data[0]?.details) : {}
-      : cleanObject(result.data);
-    return normalizePublication(details);
+    if (!marketServiceKey) return normalizePublication({});
+    try {
+      const { data: headRows } = await serviceRequest(
+        "v20_publication_head?select=run_id,publication_key,content_hash,data_date,revision,published_at,updated_at&audience=eq.public&limit=1",
+      );
+      const head = Array.isArray(headRows) ? cleanObject(headRows[0]) : {};
+      if (head.run_id) {
+        const { data: runRows } = await serviceRequest(
+          `v20_recommendation_runs?select=*&id=eq.${Number(head.run_id)}&limit=1`,
+        );
+        const run = Array.isArray(runRows) ? cleanObject(runRows[0]) : {};
+        return normalizePublication({ ...run, ...head, status: "published" });
+      }
+    } catch {
+      // An immutable publication is all-or-nothing. Never substitute the
+      // mutable worker state when the publication head or run cannot be read.
+    }
+    return normalizePublication({});
   }).catch(() => normalizePublication({}));
 }
 
@@ -166,7 +200,10 @@ function publicMeta({
   const normalizedCompleteness = finite(completeness) ? Number(clamp(completeness).toFixed(2)) : 0;
   return {
     version: API_VERSION,
-    modelVersion: MODEL_VERSION,
+    modelVersion: published.modelVersion || MODEL_VERSION,
+    runId: published.runId,
+    publicationKey: published.publicationKey,
+    contentHash: published.contentHash,
     dataState,
     dataDate: isoDate(dataDate) || published.publishedDataDate,
     publishedDataDate: published.publishedDataDate,
@@ -247,20 +284,6 @@ function pruneResolvedDegradedSources(sources, row = {}) {
   });
 }
 
-function carryForwardGlobal(rows) {
-  const current = rows[0] || normalizeMarket({});
-  if (globalIndicators(current).length >= Object.keys(GLOBAL_ALIASES).length) return current;
-  const previous = rows.slice(1).find((row) => globalIndicators(row).length);
-  if (!previous) return current;
-  const globalDateKeys = new Set(["global", ...Object.values(GLOBAL_ALIASES).flat()]);
-  const priorDates = Object.fromEntries(
-    Object.entries(previous.sourceDates || {}).filter(([key]) => globalDateKeys.has(key)),
-  );
-  current.globalContext = { ...previous.globalContext, ...current.globalContext };
-  current.sourceDates = { ...priorDates, ...current.sourceDates };
-  return current;
-}
-
 async function persistGlobalMarket(liveGlobal, token) {
   if (!token || !liveGlobal?.indicators?.length) return false;
   const globalContext = {
@@ -271,7 +294,7 @@ async function persistGlobalMarket(liveGlobal, token) {
     completeness: liveGlobal.completeness,
     ...Object.fromEntries(liveGlobal.indicators.map((item) => [item.key, item])),
   };
-  await backendStoreInternals.request("rpc/twss_v20_persist_global_context", {
+  await serviceRequest("rpc/twss_v20_persist_global_context", {
     method: "POST",
     body: JSON.stringify({
       p_token: token,
@@ -292,14 +315,28 @@ function normalizeRanking(row = {}) {
   const forecastState = calibrated
     ? "calibrated"
     : predictionState.status === "not_calibrated"
-      ? "quant_bootstrap"
+      ? "not_calibrated"
       : "insufficient_history";
-  const gateResults = cleanObject(row.gate_results);
-  const featureScores = cleanObject(row.feature_scores);
+  const gateResults = cleanObject(row.gate_results || row.gates);
+  const featureScores = cleanObject(row.feature_scores || row.features);
+  const calibratedProbability = numeric(row.calibrated_up_probability ?? row.up_probability);
+  const expectedExcessReturnGross = calibrated
+    ? numeric(row.expected_excess_return_gross ?? row.expected_return_gross)
+    : null;
+  const expectedNetReturn = calibrated
+    ? numeric(row.expected_return_net)
+    : null;
+  const expectedExcessReturnNet = calibrated
+    ? numeric(row.expected_excess_return_net)
+    : null;
+  const rawOpportunityScore = numeric(row.raw_opportunity_score ?? row.opportunity_score);
+  const netOpportunityScore = numeric(row.net_opportunity_score ?? row.opportunity_score);
   const forecast = {
     horizon,
-    upProbability: calibrated ? numeric(row.up_probability) : null,
-    expectedNetReturn: calibrated ? numeric(row.expected_return_net) : null,
+    upProbability: calibrated ? calibratedProbability : null,
+    expectedNetReturn,
+    expectedExcessReturnGross,
+    expectedExcessReturnNet,
     returnRange: {
       p10: calibrated ? numeric(row.return_p10) : null,
       p50: calibrated ? numeric(row.return_p50) : null,
@@ -313,6 +350,7 @@ function normalizeRanking(row = {}) {
     predictionState,
   };
   return {
+    runId: numeric(row.run_id),
     symbol: String(row.symbol || ""),
     name: row.name || String(row.symbol || ""),
     model,
@@ -326,13 +364,39 @@ function normalizeRanking(row = {}) {
     rank: numeric(row.rank_position),
     previousRank: numeric(row.previous_rank),
     rankDelta: numeric(row.rank_delta),
-    opportunityScore: numeric(row.opportunity_score),
+    marketPercentile: numeric(row.market_percentile),
+    rawOpportunityScore,
+    netOpportunityScore,
+    opportunityScore: netOpportunityScore,
     riskScore: numeric(row.risk_score),
     confidence: numeric(row.confidence),
     completeness: numeric(row.completeness),
-    expectedValue: calibrated ? numeric(row.expected_value) : null,
-    official: row.official === true,
-    gatePassed: row.gate_passed !== false,
+    expectedNetReturn,
+    expectedExcessReturnGross,
+    expectedExcessReturnNet,
+    expectedValue: expectedNetReturn,
+    official: row.is_eligible === true || row.official === true,
+    gatePassed: Object.hasOwn(row, "is_eligible")
+      ? row.is_eligible === true
+      : row.gate_passed === true,
+    publicVisible: row.public_visible !== false,
+    researchOnly: row.research_only === true,
+    liquidityGrade: row.liquidity_grade || "unknown",
+    opportunityState: row.opportunity_state || null,
+    calibrationSampleCount: numeric(row.calibration_sample_count),
+    executionCosts: {
+      commissionPct: numeric(row.estimated_commission_pct),
+      taxPct: numeric(row.estimated_tax_pct),
+      slippagePct: numeric(row.estimated_slippage_pct),
+      spreadPct: numeric(row.estimated_spread_pct),
+      totalPct: numeric(row.estimated_total_cost_pct),
+    },
+    penalties: {
+      downside: numeric(row.downside_penalty_score),
+      turnover: numeric(row.turnover_penalty_score),
+      cost: numeric(row.cost_penalty_score),
+      turnoverExposure: numeric(row.turnover_exposure),
+    },
     recommendedAction: row.recommended_action || "資料不足",
     summary: row.summary || null,
     reasons: arrays(row.reasons).slice(0, 8),
@@ -356,31 +420,39 @@ function normalizeRanking(row = {}) {
       riskRewardRatio: numeric(row.risk_reward_ratio),
       recommendedHoldingDays: numeric(row.recommended_holding_days),
     },
-    sourceDates: cleanObject(row.source_dates),
-    generatedAt: row.generated_at || null,
-    updatedAt: row.updated_at || row.generated_at || null,
+    sourceDates: cleanObject(row.source_dates || cleanObject(row.source_manifest).sourceDates),
+    sourceManifest: cleanObject(row.source_manifest),
+    inputHash: row.input_hash || null,
+    generatedAt: row.generated_at || row.recorded_at || null,
+    updatedAt: row.updated_at || row.recorded_at || row.generated_at || null,
     legacyReference: false,
-  };
-}
-
-function normalizeLegacyRelatedStock(row = {}) {
-  const legacyScore = row?.aiScore && typeof row.aiScore === "object"
-    ? row.aiScore.value
-    : row?.aiScore;
-  const opportunityScore = numeric(row?.opportunityScore ?? legacyScore ?? row?.score);
-  return {
-    ...row,
-    symbol: String(row?.symbol || ""),
-    opportunityScore,
-    aiScore: opportunityScore,
-    confidence: numeric(row?.confidence ?? row?.aiScore?.confidence),
-    riskScore: numeric(row?.riskScore),
-    dataDate: isoDate(row?.dataDate || row?.analysisDataDate),
   };
 }
 
 function predictionStateFor(row = {}) {
   const basis = row.prediction_basis || cleanObject(row.gate_results).probabilityBasis || null;
+  const calibrationSampleCount = numeric(row.calibration_sample_count);
+  const calibratedProbability = numeric(row.calibrated_up_probability ?? row.up_probability);
+  const isWalkForward = ["walk-forward-calibration", "walk_forward_calibration"].includes(basis);
+  if (isWalkForward && finite(calibratedProbability)
+    && calibrationSampleCount >= MIN_PUBLIC_CALIBRATION_SAMPLES) {
+    return {
+      status: "calibrated",
+      basis: "walk-forward-calibration",
+      publicForecast: true,
+      sampleCount: calibrationSampleCount,
+      reason: `已完成 Walk-forward 樣本外校準（樣本 ${calibrationSampleCount}）。`,
+    };
+  }
+  if (isWalkForward) {
+    return {
+      status: "insufficient_history",
+      basis: "walk-forward-calibration",
+      publicForecast: false,
+      sampleCount: calibrationSampleCount,
+      reason: `Walk-forward 樣本不足 ${MIN_PUBLIC_CALIBRATION_SAMPLES}，不公開機率。`,
+    };
+  }
   if (basis === "walk-forward-calibration" && finite(row.up_probability)) {
     return {
       status: "calibrated",
@@ -425,7 +497,13 @@ function gateReasonsFor(row = {}, predictionState = predictionStateFor(row)) {
     return { key, label, status, reason };
   });
   const thresholds = [
-    ["score_threshold", "機會分數", numeric(row.opportunity_score), (value) => value >= 60, "機會分數需達 60 分"],
+    [
+      "score_threshold",
+      "成本後機會分數",
+      numeric(row.net_opportunity_score ?? row.opportunity_score),
+      (value) => value >= 60,
+      "成本後機會分數需達 60 分",
+    ],
     ["risk_threshold", "風險分數", numeric(row.risk_score), (value) => value <= 75, "風險分數需不高於 75 分"],
     ["confidence_threshold", "模型信心", numeric(row.confidence), (value) => value >= 65, "模型信心需達 65% 才能列為正式推薦"],
   ];
@@ -441,7 +519,7 @@ function gateReasonsFor(row = {}, predictionState = predictionStateFor(row)) {
 }
 
 function scoreExplanationFor(model, featureScores = {}) {
-  return Object.entries(MODEL_FEATURES[model] || {}).map(([key, [label, weight]]) => {
+  return Object.entries(MODEL_FEATURES_V21[model] || {}).map(([key, [label, weight]]) => {
     const score = numeric(featureScores[key]);
     const effectiveScore = score == null ? 50 : clamp(score);
     return {
@@ -458,80 +536,33 @@ function scoreExplanationFor(model, featureScores = {}) {
 
 function marketImpactFor(model, featureScores = {}) {
   if (model === "short") {
-    const score = numeric(featureScores.market);
+    const score = numeric(featureScores.marketGlobal);
     const effectiveScore = score == null ? 50 : clamp(score);
     return {
-      featureKey: "market",
-      featureLabel: "台股與國際市場",
+      featureKey: "marketGlobal",
+      featureLabel: "市場及美股環境",
       featureScore: score,
-      opportunityWeight: 15,
-      opportunityContribution: Number((effectiveScore * 0.15).toFixed(2)),
-      opportunityDeltaFromNeutral: Number(((effectiveScore - 50) * 0.15).toFixed(2)),
+      opportunityWeight: SHORT_WEIGHTS.marketGlobal,
+      opportunityContribution: Number((effectiveScore * SHORT_WEIGHTS.marketGlobal / 100).toFixed(2)),
+      opportunityDeltaFromNeutral: Number(((effectiveScore - 50) * SHORT_WEIGHTS.marketGlobal / 100).toFixed(2)),
       riskWeight: 15,
       riskContribution: null,
       note: score == null
         ? "市場分項缺少資料，機會分數依既有公式採中性 50 分；風險分項只保存總分，未推測拆分值。"
-        : "市場分項占短期機會分數 15%；短期風險模型另有 15% 市場權重，但目前只保存總風險分數。",
+        : "市場及美股環境占短期機會分數 10%；風險仍由獨立風險模型評估。",
     };
   }
-  const score = numeric(featureScores.industryTrend);
+  const score = numeric(featureScores.industryEnvironment);
   return {
-    featureKey: "industryTrend",
-    featureLabel: "產業及族群趨勢",
+    featureKey: "industryEnvironment",
+    featureLabel: "產業環境",
     featureScore: score,
-    opportunityWeight: 20,
-    opportunityContribution: Number(((score == null ? 50 : clamp(score)) * 0.2).toFixed(2)),
+    opportunityWeight: MEDIUM_WEIGHTS.industryEnvironment,
+    opportunityContribution: Number(((score == null ? 50 : clamp(score)) * MEDIUM_WEIGHTS.industryEnvironment / 100).toFixed(2)),
     opportunityDeltaFromNeutral: null,
     riskWeight: 10,
     riskContribution: null,
-    note: "中期市場因素包含在產業趨勢分項與市場事件風險中；資料庫未保存內部分項，因此不推測個別市場扣加分。",
-  };
-}
-
-function legacyReference(row, model, horizon) {
-  return {
-    symbol: row.symbol,
-    name: row.name,
-    model,
-    horizon,
-    dataDate: row.dataDate || row.analysisDataDate || null,
-    group: row.group,
-    market: row.market,
-    industry: row.industry,
-    instrumentType: row.instrumentType,
-    strategy: null,
-    rank: null,
-    previousRank: null,
-    rankDelta: null,
-    opportunityScore: null,
-    riskScore: null,
-    confidence: null,
-    completeness: null,
-    expectedValue: null,
-    official: false,
-    gatePassed: false,
-    recommendedAction: "資料不足",
-    summary: "v20 模型尚在建立，僅顯示最近一次既有資料作為參考。",
-    reasons: [],
-    risks: ["v20 短中期模型尚未完成校準"],
-    invalidationConditions: [],
-    forecasts: {
-      [String(horizon)]: {
-        horizon,
-        upProbability: null,
-        expectedNetReturn: null,
-        returnRange: { p10: null, p50: null, p90: null },
-        averageMfe: null,
-        averageMae: null,
-        targetFirstProbability: null,
-        dataState: "insufficient_history",
-      },
-    },
-    tradePlan: {},
-    sourceDates: {},
-    generatedAt: row.generatedAt || null,
-    updatedAt: row.updatedAt || null,
-    legacyReference: true,
+    note: "產業環境占中期機會分數 10%；未保存的內部分項不做推測。",
   };
 }
 
@@ -565,32 +596,33 @@ function fingerprint(query) {
 
 function encodeCursor(position, query, offset = 0) {
   return Buffer.from(JSON.stringify({
-    v: 2,
+    v: 3,
     r: Number(position),
     o: Number(offset),
     q: fingerprint(query),
     d: isoDate(query.rankingDate),
-    g: cleanObject(query.groupDates),
+    p: query.publicationKey || null,
   }), "utf8").toString("base64url");
 }
 
 function decodeCursor(value, query) {
-  if (!value) return { afterRank: 0, offset: 0, rankingDate: null, groupDates: null };
+  if (!value) return {
+    afterRank: 0,
+    offset: 0,
+    rankingDate: null,
+    publicationKey: null,
+  };
   try {
     const decoded = JSON.parse(Buffer.from(value, "base64url").toString("utf8"));
-    if (decoded.v !== 2 || !Number.isInteger(decoded.r) || decoded.r < 1 ||
+    if (decoded.v !== 3 || !Number.isInteger(decoded.r) || decoded.r < 1 ||
       decoded.r > 100_000 || !Number.isInteger(decoded.o) || decoded.o < 0 ||
-      decoded.o > 100_000 || decoded.q !== fingerprint(query)) throw new Error("invalid");
-    const rawGroupDates = cleanObject(decoded.g);
-    const groupDates = Object.fromEntries(Object.entries(rawGroupDates).map(([group, date]) => {
-      if (!RANKING_GROUPS.includes(group) || !isoDate(date)) throw new Error("invalid");
-      return [group, isoDate(date)];
-    }));
+      decoded.o > 100_000 || decoded.q !== fingerprint(query) ||
+      !/^[0-9a-f]{64}$/.test(String(decoded.p || ""))) throw new Error("invalid");
     return {
       afterRank: decoded.r,
       offset: decoded.o,
       rankingDate: isoDate(decoded.d),
-      groupDates: Object.keys(groupDates).length ? groupDates : null,
+      publicationKey: decoded.p,
     };
   } catch {
     throw new V20PublicError("invalid_cursor");
@@ -601,7 +633,7 @@ export function parseV20RankingQuery(params) {
   const { model, horizon } = parseModel(params);
   const limit = Number(params.get("limit") || 10);
   if (!Number.isInteger(limit) || limit < 1 || limit > MAX_LIMIT) throw new V20PublicError("invalid_limit");
-  const sort = String(params.get("sort") || "expected_value_desc").toLowerCase();
+  const sort = String(params.get("sort") || "net_opportunity_desc").toLowerCase();
   if (!SORTS[sort]) throw new V20PublicError("invalid_sort");
   const market = parseText(params, "market", 20).toLowerCase();
   if (market && !["all", "listed", "otc", "etf", "twse", "tpex"].includes(market)) {
@@ -623,23 +655,28 @@ export function parseV20RankingQuery(params) {
   if (explicitDate && cursor.rankingDate && explicitDate !== cursor.rankingDate) {
     throw new V20PublicError("invalid_cursor");
   }
-  if ((explicitDate || query.market) && cursor.groupDates) throw new V20PublicError("invalid_cursor");
   return {
     ...query,
     rankingDate: explicitDate || cursor.rankingDate,
     afterRank: cursor.afterRank,
     offset: cursor.offset,
-    groupDates: cursor.groupDates,
+    publicationKey: cursor.publicationKey,
   };
 }
 
-function rankingFilters(query, includeDate = true) {
+async function loadRankingPage(query) {
+  if (!query.runId) {
+    return { items: [], total: 0, hasMore: false, rankingDate: null, runId: null };
+  }
   const params = new URLSearchParams({
+    select: "*",
+    run_id: `eq.${query.runId}`,
     model_key: `eq.${query.model}`,
     horizon_days: `eq.${query.horizon}`,
-    model_version: `eq.${MODEL_VERSION}`,
+    public_visible: "eq.true",
+    research_only: "eq.false",
+    is_eligible: "eq.true",
   });
-  if (includeDate && query.rankingDate) params.set("ranking_date", `eq.${query.rankingDate}`);
   if (query.market) {
     const group = query.market === "twse" ? "listed" : query.market === "tpex" ? "otc" : query.market;
     params.set("group_name", `eq.${group}`);
@@ -650,132 +687,45 @@ function rankingFilters(query, includeDate = true) {
     const term = query.search.replace(/[.*]/g, "");
     params.set("or", `(symbol.ilike.*${term}*,name.ilike.*${term}*)`);
   }
-  return params;
-}
-
-function rankingCycleFilters(query, group = query.market) {
-  const params = new URLSearchParams({
-    model_key: `eq.${query.model}`,
-    horizon_days: `eq.${query.horizon}`,
-    model_version: `eq.${MODEL_VERSION}`,
-  });
-  if (group) {
-    const normalized = group === "twse" ? "listed" : group === "tpex" ? "otc" : group;
-    params.set("group_name", `eq.${normalized}`);
-  }
-  return params;
-}
-
-function rankingComparator(sort) {
-  const descending = (left, right) => (numeric(right) ?? -Infinity) - (numeric(left) ?? -Infinity);
-  const ascending = (left, right) => (numeric(left) ?? Infinity) - (numeric(right) ?? Infinity);
-  return (left, right) => {
-    const leftForecast = left.forecasts?.[String(left.horizon)] || {};
-    const rightForecast = right.forecasts?.[String(right.horizon)] || {};
-    let compared = 0;
-    if (sort === "score_desc") compared = descending(left.opportunityScore, right.opportunityScore) || descending(left.confidence, right.confidence);
-    else if (sort === "risk_asc") compared = ascending(left.riskScore, right.riskScore) || descending(left.opportunityScore, right.opportunityScore);
-    else if (sort === "probability_desc") compared = descending(leftForecast.upProbability, rightForecast.upProbability) || descending(left.expectedValue, right.expectedValue);
-    else if (sort === "change_desc") compared = descending(left.rankDelta, right.rankDelta) || descending(left.opportunityScore, right.opportunityScore);
-    else compared = descending(left.expectedValue, right.expectedValue) || descending(left.opportunityScore, right.opportunityScore);
-    return compared || String(left.symbol).localeCompare(String(right.symbol), "en");
-  };
-}
-
-async function latestGroupRankingDates(query) {
-  const entries = await Promise.all(RANKING_GROUPS.map(async (group) => {
-    const params = rankingCycleFilters(query, group);
-    params.set("select", "ranking_date");
-    params.set("order", "ranking_date.desc");
-    params.set("limit", "1");
-    const { data } = await backendStoreInternals.request(`v20_ranking_snapshots?${params}`);
-    return [group, isoDate(Array.isArray(data) ? data[0]?.ranking_date : null)];
-  }));
-  return Object.fromEntries(entries.filter(([, date]) => date));
-}
-
-async function loadMixedDateRankingPage(query, groupDates) {
-  const end = Math.min(query.offset + query.limit + 1, 5_000);
-  const pages = await Promise.all(Object.entries(groupDates).map(async ([group, rankingDate]) => {
-    const params = rankingFilters({ ...query, market: group, rankingDate });
-    params.set("select", "*");
-    params.set("order", SORTS[query.sort]);
-    params.set("limit", String(end));
-    const { data } = await backendStoreInternals.request(`v20_ranking_snapshots?${params}`);
-    return (Array.isArray(data) ? data : []).map(normalizeRanking).filter((item) => item.symbol);
-  }));
-  const merged = pages.flat().sort(rankingComparator(query.sort));
-  const items = merged.slice(query.offset, query.offset + query.limit);
-  return {
-    items,
-    total: null,
-    hasMore: merged.length > query.offset + query.limit,
-    rankingDate: Object.values(groupDates).sort().at(-1) || null,
-    groupDates,
-    // An empty ETF recommendation set is valid when no ETF passes the hard gate.
-    missingGroups: RANKING_GROUPS.filter((group) => group !== "etf" && !groupDates[group]),
-    paginationMode: "offset",
-  };
-}
-
-async function latestRankingDate(query) {
-  if (query.rankingDate) return query.rankingDate;
-  const params = rankingCycleFilters(query);
-  params.set("select", "ranking_date");
-  params.set("order", "ranking_date.desc");
-  params.set("limit", "1");
-  const { data } = await backendStoreInternals.request(`v20_ranking_snapshots?${params}`);
-  return isoDate(Array.isArray(data) ? data[0]?.ranking_date : null);
-}
-
-async function loadRankingPage(query) {
-  if (!query.rankingDate && !query.market) {
-    const groupDates = query.groupDates || await latestGroupRankingDates(query);
-    if (Object.keys(groupDates).length !== RANKING_GROUPS.length || new Set(Object.values(groupDates)).size > 1) {
-      return loadMixedDateRankingPage(query, groupDates);
-    }
-  }
-  const rankingDate = await latestRankingDate(query);
-  if (!rankingDate) return { items: [], total: 0, hasMore: false, rankingDate: null };
-  const datedQuery = { ...query, rankingDate };
-  const params = rankingFilters(datedQuery);
-  params.set("select", "*");
-  const keyset = query.sort === "expected_value_desc";
+  const keyset = query.sort === "net_opportunity_desc";
   params.set("order", keyset ? "rank_position.asc,symbol.asc" : SORTS[query.sort]);
   if (keyset && query.afterRank > 0) params.set("rank_position", `gt.${query.afterRank}`);
   if (!keyset && query.offset > 0) params.set("offset", String(query.offset));
   params.set("limit", String(query.limit + 1));
-  const { data } = await backendStoreInternals.request(`v20_ranking_snapshots?${params}`);
-  const rawRows = Array.isArray(data) ? data : [];
+
+  const { data } = await serviceRequest(`v20_recommendation_items?${params}`);
+  const rawRows = (Array.isArray(data) ? data : []).filter((row) =>
+    row.public_visible === true && row.research_only !== true && row.is_eligible === true);
   const hasMore = rawRows.length > query.limit;
   const rows = rawRows.slice(0, query.limit);
   return {
     items: rows.map(normalizeRanking).filter((item) => item.symbol),
     total: null,
     hasMore,
-    rankingDate,
+    rankingDate: query.rankingDate || null,
+    runId: query.runId,
   };
-}
-
-async function v19References(model, horizon, limit) {
-  try {
-    const home = await cached("v20:legacy-home", PAGE_TTL_MS, readV19Home);
-    return arrays(home.rankings, home.todayPicks).filter((row, index, all) =>
-      row?.symbol && all.findIndex((item) => item?.symbol === row.symbol) === index)
-      .slice(0, limit).map((row) => legacyReference(row, model, horizon));
-  } catch {
-    return [];
-  }
 }
 
 export async function readV20Rankings(url, options = {}) {
   const parsedQuery = parseV20RankingQuery(url.searchParams);
   const publication = options.publication || await loadPublicationState();
-  const query = !parsedQuery.rankingDate && publication.publishedDataDate
-    ? { ...parsedQuery, rankingDate: publication.publishedDataDate }
-    : parsedQuery;
+  if (parsedQuery.rankingDate && publication.publishedDataDate
+    && parsedQuery.rankingDate !== publication.publishedDataDate) {
+    throw new V20PublicError("stale_ranking_cursor");
+  }
+  if (parsedQuery.publicationKey && parsedQuery.publicationKey !== publication.publicationKey) {
+    throw new V20PublicError("stale_ranking_cursor");
+  }
+  const query = {
+    ...parsedQuery,
+    runId: publication.runId,
+    publicationKey: publication.publicationKey,
+    rankingDate: publication.publishedDataDate || parsedQuery.rankingDate,
+    groupDates: null,
+  };
   const groupDateKey = JSON.stringify(query.groupDates || {});
-  const cacheKey = `v20:rank:${fingerprint(query)}:${query.rankingDate || "latest"}:${groupDateKey}:${query.afterRank}:${query.offset}:${query.limit}`;
+  const cacheKey = `v20:rank:${publicationCacheIdentity(publication)}:${fingerprint(query)}:${query.rankingDate || "latest"}:${groupDateKey}:${query.afterRank}:${query.offset}:${query.limit}`;
   let page;
   let degraded = [];
   try {
@@ -786,15 +736,7 @@ export async function readV20Rankings(url, options = {}) {
     degraded.push("v20_ranking_snapshots");
   }
   degraded.push(...(page.missingGroups || []).map((group) => `v20_ranking_${group}_missing`));
-  const unfilteredDefault = !query.market && !query.industry && !query.strategy && !query.search &&
-    !query.rankingDate && !query.groupDates && query.sort === "expected_value_desc";
-  if (!page.items.length && query.afterRank === 0 && unfilteredDefault) {
-    const references = await v19References(query.model, query.horizon, query.limit);
-    if (references.length) {
-      page = { ...page, items: references, total: references.length, hasMore: false };
-      degraded.push("v20_model_not_ready");
-    }
-  }
+  if (!publication.runId) degraded.push("immutable_publication_not_ready");
   const dates = page.items.map((row) => row.dataDate).filter(Boolean).sort();
   const sourceDates = {
     ...publication.sourceDates,
@@ -847,48 +789,41 @@ export async function readV20Market(options = {}) {
   let row = null;
   let degraded = [];
   const publication = options.publication || await loadPublicationState();
-  const marketCacheKey = `v20:market:${publication.publishedDataDate || "latest"}`;
+  const marketCacheKey = `v20:market:${publicationCacheIdentity(publication)}`;
   try {
     row = await cached(marketCacheKey, MARKET_TTL_MS, async () => {
-      const params = new URLSearchParams({ select: "*", model_version: `eq.${MODEL_VERSION}`, order: "data_date.desc", limit: "10" });
-      if (publication.publishedDataDate) params.set("data_date", `lte.${publication.publishedDataDate}`);
-      const { data } = await backendStoreInternals.request(`v20_market_context?${params}`);
-      return carryForwardGlobal((Array.isArray(data) ? data : []).map(normalizeMarket));
+      const snapshot = cleanObject(publication.marketContext || publication.market_context_snapshot);
+      if (!publication.runId || !Object.keys(snapshot).length) {
+        throw new Error("immutable_market_context_not_ready");
+      }
+      return normalizeMarket(snapshot);
     });
     if (memoryCache.get(marketCacheKey)?.stale) degraded.push("v20_market_cache_stale");
   } catch {
-    degraded.push("v20_market_context");
+    degraded.push("immutable_market_context_not_ready");
   }
   if (!row?.dataDate) {
     row = normalizeMarket({});
     degraded.push("market_regime", "global_market_context");
   }
   degraded.push(...arrays(row.degradedSources));
-  let liveGlobal = null;
+  let globalRefresh = null;
   if (options.refreshGlobal === true) {
     try {
-      liveGlobal = await readV20GlobalMarket({
+      const liveGlobal = await readV20GlobalMarket({
         force: true,
         previous: { indicators: globalIndicators(row) },
       });
-      if (liveGlobal.indicators?.length) {
-        row.globalContext = {
-          ...row.globalContext,
-          ...Object.fromEntries(liveGlobal.indicators.map((item) => [item.key, item])),
-        };
-        row.sourceDates = { ...row.sourceDates, ...liveGlobal.sourceDates };
-        row.fetchedAt = liveGlobal.fetchedAt || row.fetchedAt;
-        try {
-          await persistGlobalMarket(liveGlobal, options.persistenceToken);
-          degraded = degraded.filter((source) => source !== "international_context");
-          row.degradedSources = arrays(row.degradedSources).filter((source) => source !== "international_context");
-        } catch {
-          degraded.push("global_market_persistence");
-        }
-      }
-      degraded.push(...arrays(liveGlobal.degradedSources));
+      const persisted = liveGlobal.indicators?.length
+        ? await persistGlobalMarket(liveGlobal, options.persistenceToken).catch(() => false)
+        : false;
+      globalRefresh = {
+        attempted: true,
+        persisted,
+        availableOnNextPublication: persisted,
+      };
     } catch {
-      degraded.push("global_market_context");
+      globalRefresh = { attempted: true, persisted: false, availableOnNextPublication: false };
     }
   }
   for (const [key, aliases] of Object.entries(GLOBAL_ALIASES)) {
@@ -907,7 +842,7 @@ export async function readV20Market(options = {}) {
       publication,
     }),
     market: row,
-    globalRefresh: liveGlobal,
+    globalRefresh,
   };
 }
 
@@ -915,7 +850,7 @@ function rankingUrl(model, horizon, limit = 10) {
   return new URL(`https://internal.invalid/api/v20/rankings?model=${model}&horizon=${horizon}&limit=${limit}`);
 }
 
-function buildAtomicDailyReport(meta, market, short, medium, legacy) {
+function buildAtomicDailyReport(meta, market, short, medium) {
   const regimeLabels = {
     strong_bull: "強勢多頭",
     bull: "偏多",
@@ -947,7 +882,6 @@ function buildAtomicDailyReport(meta, market, short, medium, legacy) {
     ? `市場環境${regime}；${top.name || top.symbol}目前量化條件相對突出，仍應留意風險與失效條件。`
     : `市場環境${regime}；目前沒有通過完整條件的主要推薦。`;
   const riskItems = unique(focusRows.flatMap((row) => arrays(row.risks)).slice(0, 8));
-  const news = arrays(legacy?.news).slice(0, 20);
   const watchStocks = focusRows.map((row) => ({
     symbol: row.symbol,
     name: row.name,
@@ -983,7 +917,11 @@ function buildAtomicDailyReport(meta, market, short, medium, legacy) {
       opportunityStocks: watchStocks,
       mainRisks,
       risks: mainRisks,
-      importantNewsAndAnnouncements: news,
+      importantNewsAndAnnouncements: [],
+      importantNewsState: {
+        status: "not_recorded_in_publication",
+        reason: "此推薦批次尚未保存可驗證的新聞與公告快照。",
+      },
       watchlistChanges: [],
     },
   };
@@ -991,19 +929,17 @@ function buildAtomicDailyReport(meta, market, short, medium, legacy) {
 
 export async function readV20Home() {
   const publication = await loadPublicationState();
-  const [market, short, medium, legacy] = await Promise.all([
+  const [market, short, medium] = await Promise.all([
     readV20Market({ publication }),
     readV20Rankings(rankingUrl("short", 5, 10), { publication }),
     readV20Rankings(rankingUrl("medium", 40, 10), { publication }),
-    cached("v20:legacy-home", PAGE_TTL_MS, readV19Home).catch(() => null),
   ]);
   const degraded = unique([
     ...market.degradedSources,
     ...short.degradedSources,
     ...medium.degradedSources,
-    ...(legacy ? [] : ["v19_home_fallback"]),
   ]);
-  const dates = [market.dataDate, short.dataDate, medium.dataDate, legacy?.dataDate].filter(Boolean).sort();
+  const dates = [market.dataDate, short.dataDate, medium.dataDate].filter(Boolean).sort();
   const completeness = [market.completeness, short.completeness, medium.completeness]
     .filter(finite).reduce((sum, value, _index, values) => sum + Number(value) / values.length, 0);
   const meta = publicMeta({
@@ -1020,47 +956,30 @@ export async function readV20Home() {
     market: market.market,
     shortTop: short.items.slice(0, 5),
     mediumTop: medium.items.slice(0, 5),
-    importantNews: arrays(legacy?.news).slice(0, 20),
-    fastestRisers: arrays(legacy?.fastestRisers).slice(0, 5),
-    dailyReport: buildAtomicDailyReport(meta, market, short, medium, legacy),
+    importantNews: [],
+    importantNewsState: {
+      status: "not_recorded_in_publication",
+      reason: "此推薦批次尚未保存可驗證的新聞與公告快照。",
+    },
+    dailyReport: buildAtomicDailyReport(meta, market, short, medium),
   };
 }
 
-async function loadSignals(symbol, dataDate = null) {
-  if (marketServiceKey) {
-    const params = new URLSearchParams({
-      select: "*",
-      symbol: `eq.${symbol}`,
-      model_version: `eq.${MODEL_VERSION}`,
-      limit: "20",
-    });
-    if (dataDate) params.set("signal_date", `eq.${dataDate}`);
-    params.set("order", dataDate
-      ? "model_key.asc,horizon_days.asc"
-      : "signal_date.desc,model_key.asc,horizon_days.asc");
-    try {
-      const { data } = await backendStoreInternals.request(`v20_model_signals?${params}`, {
-        headers: serviceHeaders(),
-      });
-      const rows = Array.isArray(data) ? data : [];
-      if (rows.length) return rows.map(normalizeRanking);
-    } catch {
-      // The bounded public RPC below is the safe fallback for a missing,
-      // rotated, or temporarily unavailable server credential.
-    }
-  }
+async function loadSignals(symbol, publication = {}) {
+  if (!publication.runId) return [];
   const params = new URLSearchParams({
-    p_symbol: symbol,
-    p_model_version: MODEL_VERSION,
+    select: "*",
+    run_id: `eq.${publication.runId}`,
+    symbol: `eq.${symbol}`,
+    public_visible: "eq.true",
+    research_only: "eq.false",
+    order: "model_key.asc,horizon_days.asc",
+    limit: "20",
   });
-  const { data } = await backendStoreInternals.request(`rpc/twss_v20_public_stock_signals?${params}`);
-  const rows = Array.isArray(data) ? data : [];
-  const latestByKey = new Map();
-  for (const row of rows) {
-    const key = `${row.model_key}:${row.horizon_days}`;
-    if (!latestByKey.has(key)) latestByKey.set(key, row);
-  }
-  return [...latestByKey.values()].map(normalizeRanking);
+  const { data } = await serviceRequest(`v20_recommendation_items?${params}`);
+  return (Array.isArray(data) ? data : [])
+    .filter((row) => row.public_visible === true && row.research_only !== true)
+    .map(normalizeRanking);
 }
 
 function modelStateFor(model, signals, publication, queryFailed = false) {
@@ -1102,68 +1021,67 @@ function modelStateFor(model, signals, publication, queryFailed = false) {
   };
 }
 
-export async function readV20Stock(symbol) {
+export async function readV20Stock(symbol, options = {}) {
   const normalized = String(symbol || "").trim().toUpperCase();
   if (!/^[0-9]{4,6}[A-Z]?$/.test(normalized)) throw new V20PublicError("invalid_symbol");
-  const publication = await loadPublicationState();
-  const signalCacheKey = `v20:stock:${normalized}:${publication.publishedDataDate || "latest"}`;
-  const [legacyResult, signalsResult] = await Promise.allSettled([
-    readV19Stock(normalized),
-    cached(signalCacheKey, STOCK_TTL_MS, () => loadSignals(normalized, publication.publishedDataDate)),
-  ]);
-  const legacy = legacyResult.status === "fulfilled" ? legacyResult.value : null;
+  const publication = options.publication || await loadPublicationState();
+  const signalCacheKey = `v20:stock:${normalized}:${publicationCacheIdentity(publication)}`;
+  const signalsResult = await Promise.resolve(
+    cached(signalCacheKey, STOCK_TTL_MS, () => loadSignals(normalized, publication)),
+  ).then(
+    (value) => ({ status: "fulfilled", value }),
+    (reason) => ({ status: "rejected", reason }),
+  );
   const signals = signalsResult.status === "fulfilled" ? signalsResult.value : [];
   const signalCacheStale = memoryCache.get(signalCacheKey)?.stale === true;
   const signalsPreviousDate = Boolean(
     publication.publishedDataDate && signals.length && signals.some((row) => row.dataDate !== publication.publishedDataDate),
   );
   const degraded = [
-    ...(legacy?.degraded || (legacy ? [] : ["v19_stock_detail"])),
     ...(signalsResult.status === "rejected" ? ["v20_model_signals"] : []),
     ...(signalCacheStale ? ["v20_model_signals_cache_stale"] : []),
     ...(signalsPreviousDate ? ["v20_model_signals_previous_date"] : []),
     ...(!signals.length ? ["v20_model_not_ready"] : []),
   ];
-  const sourceDates = { ...cleanObject(legacy?.sourceDates), ...sourceDatesFromRows(signals) };
-  const dates = [legacy?.dataDate, ...signals.map((row) => row.dataDate)].filter(Boolean).sort();
+  const sourceDates = sourceDatesFromRows(signals);
+  const dates = signals.map((row) => row.dataDate).filter(Boolean).sort();
   const completenessValues = signals.map((row) => row.completeness).filter(finite);
   const completeness = completenessValues.length
     ? completenessValues.reduce((sum, value) => sum + Number(value), 0) / completenessValues.length
-    : numeric(legacy?.scoreDimensions?.completeness?.value) || 0;
+    : 0;
+  const stock = signals[0] || { symbol: normalized, name: normalized };
   return {
     ...publicMeta({
-      dataState: signals.length ? (degraded.length ? "partial" : "complete") : legacy ? "partial" : "error",
-      dataDate: dates.at(-1),
+      dataState: signals.length ? (degraded.length ? "partial" : "complete") : "error",
+      dataDate: publication.publishedDataDate || dates.at(-1),
       sourceDates,
-      fetchedAt: signals.map((row) => row.updatedAt).filter(Boolean).sort().at(-1) || legacy?.fetchedAt || null,
+      fetchedAt: signals.map((row) => row.updatedAt).filter(Boolean).sort().at(-1) || null,
       completeness,
       degraded,
       publication,
     }),
     symbol: normalized,
-    tradeDate: legacy?.tradeDate || isoDate(legacy?.stock?.priceDate),
-    analysisDataDate: legacy?.analysisDataDate || signals.map((row) => row.dataDate).filter(Boolean).sort().at(-1) || null,
-    newsPublishedAt: legacy?.newsPublishedAt || arrays(legacy?.news).map((item) => item.publishedAt).filter(Boolean).sort().at(-1) || null,
-    analysisGeneratedAt: signals.map((row) => row.generatedAt).filter(Boolean).sort().at(-1) || legacy?.analysisGeneratedAt || null,
+    tradeDate: null,
+    analysisDataDate: signals.map((row) => row.dataDate).filter(Boolean).sort().at(-1) || null,
+    newsPublishedAt: null,
+    analysisGeneratedAt: signals.map((row) => row.generatedAt).filter(Boolean).sort().at(-1) || null,
     pageUpdatedAt: new Date().toISOString(),
-    stock: legacy?.stock || signals[0] || null,
-    quote: legacy?.stock || null,
+    stock,
+    quote: null,
     short: signals.filter((row) => row.model === "short"),
     medium: signals.filter((row) => row.model === "medium"),
-    analysis: legacy?.analysis || null,
-    news: arrays(legacy?.news),
-    relatedStocks: arrays(legacy?.relatedStocks).map(normalizeLegacyRelatedStock),
+    analysis: null,
+    news: [],
+    newsState: {
+      status: "not_recorded_in_publication",
+      reason: "此推薦批次尚未保存可驗證的個股新聞快照。",
+    },
+    relatedStocks: [],
     modelStates: {
       short: modelStateFor("short", signals, publication, signalsResult.status === "rejected"),
       medium: modelStateFor("medium", signals, publication, signalsResult.status === "rejected"),
     },
-    legacyReference: legacy ? {
-      scoreDimensions: legacy.scoreDimensions,
-      positiveReasons: legacy.positiveReasons,
-      negativeReasons: legacy.negativeReasons,
-      riskReasons: legacy.riskReasons,
-      scoreHistory: legacy.scoreHistory,
-    } : null,
+    legacyReference: null,
   };
 }
 
@@ -1172,37 +1090,72 @@ export async function readV20Backtest(url) {
   const strategy = parseText(url.searchParams, "strategy", 50);
   const regime = parseText(url.searchParams, "regime", 50);
   const industry = parseText(url.searchParams, "industry", 80);
-  const params = new URLSearchParams({ p_model_key: model, p_horizon_days: String(horizon) });
-  if (strategy) params.set("p_strategy_key", strategy);
-  if (regime) params.set("p_regime", regime);
-  if (industry) params.set("p_industry", industry);
-  let summary = [];
+  const topN = Number(url.searchParams.get("topN") || 50);
+  if (!Number.isInteger(topN) || topN < 1 || topN > 500) throw new V20PublicError("invalid_topN");
+  const publication = await loadPublicationState();
+  let result = {
+    status: "insufficient_data",
+    source: "immutable_forward_observations",
+    sampleCount: 0,
+    minimumSampleCount: 100,
+    sufficient: false,
+    topN,
+    items: [],
+  };
   let degraded = [];
-  const backtestCacheKey = `v20:backtest:${params}`;
+  const query = {
+    modelKey: model,
+    horizonDays: horizon,
+    modelVersion: publication.modelVersion || MODEL_VERSION,
+    strategyKey: strategy || null,
+    marketRegime: regime || null,
+    industry: industry || null,
+    topN,
+    minimumSampleCount: 100,
+  };
+  const backtestCacheKey = `v20:validation:${JSON.stringify(query)}`;
   try {
     const { data } = await cached(backtestCacheKey, PAGE_TTL_MS, () =>
-      backendStoreInternals.request(`rpc/twss_v20_public_backtest_summary_v20?${params}`));
-    summary = Array.isArray(data) ? data : data && typeof data === "object" ? [data] : [];
+      serviceRequest("rpc/twss_v20_read_validation_summary", {
+        method: "POST",
+        body: JSON.stringify({ p_query: query }),
+      }));
+    if (data && typeof data === "object" && !Array.isArray(data)) {
+      result = { ...result, ...data, items: Array.isArray(data.items) ? data.items : [] };
+    }
     if (memoryCache.get(backtestCacheKey)?.stale) degraded.push("v20_backtest_cache_stale");
   } catch {
-    degraded.push("v20_backtest_summary");
+    degraded.push("v20_validation_summary");
   }
-  const generatedAt = summary.map((row) => row.generated_at || row.updated_at).filter(Boolean).sort().at(-1) || null;
-  const dataDates = summary.map((row) => row.data_date || row.test_end_date).filter(Boolean).sort();
+  const summary = Array.isArray(result.items) ? result.items : [];
+  const generatedAt = summary.map((row) => row.generatedAt || row.generated_at).filter(Boolean).sort().at(-1) || null;
+  const dataDates = summary.flatMap((row) => [
+    row.firstDataDate || row.first_data_date,
+    row.lastDataDate || row.last_data_date,
+  ]).filter(Boolean).sort();
+  const sampleCount = Math.max(0, Number(result.sampleCount) || 0);
+  const minimumSampleCount = Math.max(1, Number(result.minimumSampleCount) || 100);
   return {
     ...publicMeta({
-      dataState: summary.length ? (degraded.length ? "partial" : "complete") : "partial",
-      dataDate: dataDates.at(-1),
-      sourceDates: {},
+      dataState: result.sufficient && summary.length ? (degraded.length ? "partial" : "complete") : "partial",
+      dataDate: dataDates.at(-1) || publication.publishedDataDate,
+      sourceDates: { validation: dataDates.at(-1) || null },
       fetchedAt: generatedAt,
-      completeness: summary.length ? 100 : 0,
+      completeness: Math.min(100, sampleCount / minimumSampleCount * 100),
       degraded,
+      publication,
     }),
     model,
     horizon,
-    methodology: "walk-forward-point-in-time-next-session-execution",
+    validationType: "immutable_forward_observation",
+    methodology: "point-in-time-snapshot-next-session-cost-and-benchmark-adjusted",
     noLookAhead: true,
-    filters: { strategy: strategy || null, regime: regime || null, industry: industry || null },
+    status: result.status,
+    sufficient: result.sufficient === true,
+    sampleCount,
+    minimumSampleCount,
+    topN: Number(result.topN) || topN,
+    filters: { strategy: strategy || null, regime: regime || null, industry: industry || null, topN },
     summary,
   };
 }
@@ -1219,13 +1172,12 @@ export const v20BackendInternals = {
   scoreExplanationFor,
   marketImpactFor,
   modelStateFor,
-  normalizeLegacyRelatedStock,
-  legacyReference,
   encodeCursor,
   decodeCursor,
   publicMeta,
   pruneResolvedDegradedSources,
   normalizePublication,
+  persistGlobalMarket,
   loadPublicationState,
   loadSignals,
   clearCache() { memoryCache.clear(); },

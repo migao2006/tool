@@ -6,6 +6,11 @@ import {
   normalizeOfficialFeed,
   OFFICIAL_NEWS_SOURCES,
 } from "../_shared/v19-news.js";
+// @ts-ignore Shared guard is plain ESM and covered by Node regression tests.
+import {
+  maintenanceDisposition,
+  maintenanceSkipPayload,
+} from "../_shared/maintenance-guard.js";
 
 const PROJECT_URL = Deno.env.get("SUPABASE_URL") || "";
 const JOB_KEY = "v19_news";
@@ -127,6 +132,9 @@ async function existingContentRows() {
 Deno.serve(async (request) => {
   if (request.method !== "POST") return json({ error: "method_not_allowed" }, 405);
   if (!await verifyRequest(request).catch(() => false)) return json({ error: "unauthorized" }, 401);
+
+  const maintenance = await maintenanceDisposition(rest);
+  if (maintenance.blocked) return json(maintenanceSkipPayload(maintenance), maintenance.status);
 
   const owner = crypto.randomUUID();
   if (!await claimLease(owner)) return json({ status: "skipped", reason: "active_lease" }, 202);

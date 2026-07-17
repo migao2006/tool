@@ -5,6 +5,7 @@
 import {
   buildMarketContext,
   scoreCacheRow,
+  V20_COST_POLICY_VERSION,
   V20_MODEL_VERSION,
 } from "../_shared/v20-model.js";
 // @ts-ignore Shared pure ESM is also exercised by Node behavioral tests.
@@ -24,10 +25,26 @@ import {
   resolveReadySourceCycle,
   shouldRunFullMarket,
 } from "./publication-state.js";
+// @ts-ignore Shared guard is plain ESM and covered by Node regression tests.
+import {
+  maintenanceDisposition,
+  maintenanceSkipPayload,
+} from "../_shared/maintenance-guard.js";
+// @ts-ignore Shared publication schema is exercised by the PostgreSQL runtime test.
+import { buildV20PublicationManifests } from "../_shared/v20-publication-contract.js";
+// @ts-ignore Generated from the deployable model + policy source bundle.
+import { V20_MODEL_ARTIFACT_HASH } from "../_shared/v20-model-artifact.js";
 
 const PROJECT_URL = Deno.env.get("SUPABASE_URL") || "";
 const JOB_KEY = "v20_model";
 const now = () => new Date().toISOString();
+const configuredCodeHash = String(Deno.env.get("TWSS_V20_CODE_HASH") || "").trim();
+if (configuredCodeHash && (
+  !/^[0-9a-f]{64}$/.test(configuredCodeHash) ||
+  configuredCodeHash !== V20_MODEL_ARTIFACT_HASH
+)) {
+  throw new Error("TWSS_V20_CODE_HASH does not match V20_MODEL_ARTIFACT_HASH");
+}
 
 function adminKey() {
   try {
@@ -103,6 +120,14 @@ async function verifyRequest(request: Request) {
     body: { p_token: token },
   });
   return data === true;
+}
+
+async function maintenanceVerificationAllowed() {
+  const { data } = await rest(
+    "twss_maintenance_control?select=enabled,phase&id=eq.global&limit=1",
+  );
+  const row = Array.isArray(data) ? data[0] : null;
+  return row?.enabled === true && row?.phase === "verifying";
 }
 
 async function claimLease(owner: string) {
@@ -282,6 +307,117 @@ async function cycleCompleteness(dataDate: string) {
   return Number((values.reduce((sum, value) => sum + value, 0) / values.length).toFixed(2));
 }
 
+async function activeUniverseCount(dataDate: string) {
+  const { response } = await rest(
+    "v20_universe_membership?select=symbol" +
+      `&as_of_date=eq.${encodeURIComponent(dataDate)}` +
+      `&model_version=eq.${encodeURIComponent(V20_MODEL_VERSION)}&active=eq.true`,
+    { prefer: "count=exact", range: [0, 0] },
+  );
+  const total = response.headers.get("content-range")?.split("/").at(-1);
+  return total && total !== "*" ? Number(total) : 0;
+}
+
+async function outstandingDirtyCount(dataDate: string) {
+  const { response } = await rest(
+    "v20_model_dirty_queue?select=id" +
+      `&data_date=eq.${encodeURIComponent(dataDate)}` +
+      `&model_version=eq.${encodeURIComponent(V20_MODEL_VERSION)}` +
+      "&status=in.(pending,running,error)",
+    { prefer: "count=exact", range: [0, 0] },
+  );
+  const total = response.headers.get("content-range")?.split("/").at(-1);
+  return total && total !== "*" ? Number(total) : 0;
+}
+
+async function signalDataCutoff(dataDate: string) {
+  const { data } = await rest("rpc/twss_v20_signal_data_cutoff", {
+    method: "POST",
+    body: {
+      p_query: {
+        dataDate,
+        modelVersion: V20_MODEL_VERSION,
+      },
+    },
+  });
+  const value = data && typeof data === "object"
+    ? (data as Record<string, unknown>).dataCutoffAt
+    : null;
+  if (!value || !Number.isFinite(Date.parse(String(value)))) {
+    throw new Error("v20_signal_data_cutoff_unavailable");
+  }
+  return String(value);
+}
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([, item]) => item !== undefined)
+      .sort(([left], [right]) => left.localeCompare(right));
+    return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`).join(",")}}`;
+  }
+  return JSON.stringify(value ?? null);
+}
+
+async function sha256Hex(value: unknown) {
+  const bytes = new TextEncoder().encode(stableJson(value));
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(digest)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+async function publishImmutableRun(input: {
+  dataDate: string;
+  expectedSymbolCount: number;
+  sourceDates: Record<string, string>;
+  completionKeys?: unknown;
+  groupCounts?: Record<string, number>;
+  enrichment?: unknown;
+  marketContext?: Record<string, unknown> | null;
+  calibrationVersion?: string | null;
+}) {
+  const dataCutoffAt = await signalDataCutoff(input.dataDate);
+  const { sourceManifest, modelManifest } = buildV20PublicationManifests({
+    dataDate: input.dataDate,
+    dataCutoffAt,
+    sourceDates: input.sourceDates,
+    completionKeys: input.completionKeys || [],
+    groupCounts: input.groupCounts || {},
+    enrichment: input.enrichment || {},
+    marketContext: input.marketContext,
+  });
+  const sourceHash = await sha256Hex(sourceManifest);
+  const payload = {
+    dataDate: input.dataDate,
+    dataCutoffAt,
+    modelVersion: V20_MODEL_VERSION,
+    featureVersion: "v20.1-separated-engines",
+    costModelVersion: V20_COST_POLICY_VERSION,
+    calibrationVersion: input.calibrationVersion || null,
+    codeHash: V20_MODEL_ARTIFACT_HASH,
+    sourceVersion: "stock-analysis-cache-v20",
+    sourceHash,
+    sourceManifest,
+    modelManifest,
+    marketContext: input.marketContext,
+    marketRegime: input.marketContext?.regime || null,
+    expectedSymbolCount: input.expectedSymbolCount,
+    scoredSymbolCount: input.expectedSymbolCount,
+    cycleCompleteness: 100,
+    deadletterCount: 0,
+    terminalErrors: [],
+    publishedBy: "twss-v20-model",
+  };
+  const { data } = await rest("rpc/twss_v20_publish_recommendation_run", {
+    method: "POST",
+    body: { p_request: payload },
+  });
+  if (!data || typeof data !== "object") throw new Error("v20_publication_result_missing");
+  return data;
+}
+
 async function loadMarketContext(dataDate: string) {
   const { data: existing } = await rest(
     `v20_market_context?select=*&data_date=eq.${encodeURIComponent(dataDate)}` +
@@ -299,7 +435,14 @@ async function loadMarketContext(dataDate: string) {
     body: [context],
     prefer: "resolution=merge-duplicates,return=minimal",
   });
-  return context;
+  const { data: inserted } = await rest(
+    `v20_market_context?select=*&data_date=eq.${encodeURIComponent(dataDate)}` +
+      `&model_version=eq.${encodeURIComponent(V20_MODEL_VERSION)}&limit=1`,
+  );
+  if (!Array.isArray(inserted) || !inserted[0]) {
+    throw new Error("v20_market_context_reload_failed");
+  }
+  return inserted[0];
 }
 
 async function loadRecentNews(dataDate: string) {
@@ -315,14 +458,83 @@ async function loadRecentNews(dataDate: string) {
   return Array.isArray(data) ? data : [];
 }
 
+function taipeiDate(at: Date) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Taipei",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(at);
+  const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${value.year}-${value.month}-${value.day}`;
+}
+
+function calibrationBeforeAt(dataDate: string, current = new Date()) {
+  if (dataDate === taipeiDate(current)) return current.toISOString();
+  const historicalCutoff = new Date(`${dataDate}T23:59:59.999+08:00`);
+  if (!Number.isFinite(historicalCutoff.getTime())) throw new Error("v20_invalid_calibration_data_date");
+  return historicalCutoff.toISOString();
+}
+
 async function loadCalibrations(dataDate: string) {
-  const { data } = await rest(
-    "v20_calibration_buckets?select=*" +
-      `&model_version=eq.${encodeURIComponent(V20_MODEL_VERSION)}` +
-      `&calibration_date=lte.${encodeURIComponent(dataDate)}` +
-      "&order=calibration_date.desc&limit=2000",
+  const beforeAt = calibrationBeforeAt(dataDate);
+  const [{ data }, channelRows] = await Promise.all([
+    rest("rpc/twss_v20_read_immutable_calibration", {
+      method: "POST",
+      body: {
+        p_query: {
+          beforeAt,
+          modelVersion: V20_MODEL_VERSION,
+          limit: 5000,
+        },
+      },
+    }),
+    rest("rpc/twss_v20_read_model_channels", {
+      method: "POST",
+      body: {},
+    }).then(({ data: channels }) => Array.isArray(channels) ? channels : []).catch(() => []),
+  ]);
+  if (!data || typeof data !== "object") throw new Error("v20_calibration_result_missing");
+  const result = data as Record<string, unknown>;
+  const snapshotCalibrationVersion = result.calibrationVersion == null
+    ? null
+    : String(result.calibrationVersion);
+  if (
+    snapshotCalibrationVersion !== null &&
+    !/^twss-cal-sha256-[0-9a-f]{64}$/.test(snapshotCalibrationVersion)
+  ) {
+    throw new Error("v20_calibration_version_invalid");
+  }
+  const buckets = Array.isArray(result.buckets) ? result.buckets : [];
+  if (snapshotCalibrationVersion !== null && buckets.length === 0) {
+    throw new Error("v20_calibration_snapshot_empty");
+  }
+  const champions = (channelRows as Record<string, unknown>[]).filter((row) => row.channel === "champion");
+  const shortChampion = champions.find((row) => row.model_key === "short");
+  const mediumChampion = champions.find((row) => row.model_key === "medium");
+  const shortCalibrationVersion = shortChampion?.calibration_version == null
+    ? null
+    : String(shortChampion.calibration_version);
+  const mediumCalibrationVersion = mediumChampion?.calibration_version == null
+    ? null
+    : String(mediumChampion.calibration_version);
+  const championAligned = Boolean(
+    snapshotCalibrationVersion &&
+    shortChampion?.validation_status === "passed" &&
+    mediumChampion?.validation_status === "passed" &&
+    shortCalibrationVersion &&
+    shortCalibrationVersion === mediumCalibrationVersion &&
+    shortCalibrationVersion === snapshotCalibrationVersion
   );
-  return Array.isArray(data) ? data : [];
+  const calibrationVersion = championAligned ? snapshotCalibrationVersion : null;
+  return {
+    beforeAt,
+    trainingCutoffAt: result.trainingCutoffAt == null ? null : String(result.trainingCutoffAt),
+    calibrationVersion,
+    calibrationBuckets: championAligned ? buckets : [],
+    calibrationStatus: championAligned ? "ready" : "collecting",
+    calibrationReason: championAligned ? null : "champion_calibration_not_aligned",
+  };
 }
 
 function taskFromOutput(row: Record<string, unknown>) {
@@ -392,24 +604,66 @@ async function upsertWithIsolation(
   }
 }
 
-async function refreshRankings(dataDate: string) {
-  const { data } = await rest("rpc/twss_v20_refresh_rankings", {
-    method: "POST",
-    body: { p_ranking_date: dataDate, p_model_version: V20_MODEL_VERSION },
-  });
-  return data;
+async function drainImmutableOutcomeBacklog(
+  asOfDate: string,
+  options: { batchLimit?: number; maxBatches?: number; maxMs?: number } = {},
+) {
+  const batchLimit = Math.max(1, Math.min(500, Number(options.batchLimit) || 500));
+  const maxBatches = Math.max(1, Math.min(8, Number(options.maxBatches) || 4));
+  const maxMs = Math.max(5_000, Math.min(60_000, Number(options.maxMs) || 45_000));
+  const startedAt = Date.now();
+  const batches: Record<string, unknown>[] = [];
+  let inserted = 0;
+  let lastInserted = batchLimit;
+
+  for (let index = 0; index < maxBatches && Date.now() - startedAt < maxMs; index += 1) {
+    const { data } = await rest("rpc/twss_v20_evaluate_immutable_outcomes", {
+      method: "POST",
+      body: { p_as_of_date: asOfDate, p_limit: batchLimit },
+    });
+    if (!data || typeof data !== "object") throw new Error("v20_outcome_evaluation_result_missing");
+    lastInserted = Math.max(0, Number((data as Record<string, unknown>).inserted) || 0);
+    inserted += lastInserted;
+    batches.push(data as Record<string, unknown>);
+    if (lastInserted < batchLimit) break;
+  }
+
+  return {
+    source: "immutable_forward_observations",
+    batchLimit,
+    batches: batches.length,
+    inserted,
+    drained: lastInserted < batchLimit,
+    timeBudgetReached: lastInserted >= batchLimit && Date.now() - startedAt >= maxMs,
+    elapsedMs: Date.now() - startedAt,
+  };
 }
 
-async function evaluateMaturedSignals(asOfDate: string) {
-  const { data } = await rest("rpc/twss_v20_evaluate_signal_outcomes", {
+async function refreshImmutableCalibration(outcomeEvaluation: unknown) {
+  const inserted = outcomeEvaluation && typeof outcomeEvaluation === "object"
+    ? Math.max(0, Number((outcomeEvaluation as Record<string, unknown>).inserted) || 0)
+    : 0;
+  if (inserted === 0) {
+    return {
+      status: "skipped",
+      reason: "no_new_immutable_outcomes",
+      calibrationVersion: null,
+    };
+  }
+  const cutoffAt = now();
+  const { data } = await rest("rpc/twss_v20_refresh_immutable_calibration", {
     method: "POST",
     body: {
-      p_as_of_date: asOfDate,
-      p_model_version: V20_MODEL_VERSION,
-      p_model_key: null,
-      p_limit: 200,
+      p_request: {
+        cutoffAt,
+        modelVersion: V20_MODEL_VERSION,
+        trainingDays: 1095,
+        minimumSampleCount: 100,
+        maximumObservationCount: 50000,
+      },
     },
   });
+  if (!data || typeof data !== "object") throw new Error("v20_calibration_refresh_result_missing");
   return data;
 }
 
@@ -440,9 +694,28 @@ async function processIncrementalBatch(input: {
   const claims = await claimDirtyBatch(owner, V20_MODEL_VERSION, sourceDate, limit);
   if (!claims.length) {
     const phase = publicationPhaseFor(enrichment);
+    let outcomeEvaluation: unknown = null;
+    let outcomeEvaluationError: string | null = null;
+    let calibrationRefresh: unknown = null;
+    let calibrationRefreshError: string | null = null;
+    try {
+      outcomeEvaluation = await drainImmutableOutcomeBacklog(sourceDate, { maxBatches: 4 });
+    } catch (error) {
+      outcomeEvaluationError = String(error instanceof Error ? error.message : error).slice(0, 500);
+    }
+    if (!outcomeEvaluationError) {
+      try {
+        calibrationRefresh = await refreshImmutableCalibration(outcomeEvaluation);
+      } catch (error) {
+        calibrationRefreshError = String(error instanceof Error ? error.message : error).slice(0, 500);
+      }
+    }
+    const maintenanceError = outcomeEvaluationError
+      ? `outcome_evaluation: ${outcomeEvaluationError}`
+      : calibrationRefreshError ? `calibration_refresh: ${calibrationRefreshError}` : null;
     await patchState({
-      status: priorDetails.completedCycleStatus || state?.status || "success",
-      last_error: null,
+      status: maintenanceError ? "partial" : priorDetails.completedCycleStatus || state?.status || "success",
+      last_error: maintenanceError,
       next_run_at: null,
       details: {
         ...priorDetails,
@@ -450,6 +723,10 @@ async function processIncrementalBatch(input: {
         enrichmentPending: enrichment.unresolved,
         enrichmentFingerprint: enrichmentFingerprint(enrichment),
         lastIncrementalCheckAt: now(),
+        outcomeEvaluation,
+        outcomeEvaluationError,
+        calibrationRefresh,
+        calibrationRefreshError,
       },
     });
     return json({
@@ -460,6 +737,10 @@ async function processIncrementalBatch(input: {
       publicationPhase: phase,
       enrichmentPending: enrichment.unresolved,
       incrementalClaimed: 0,
+      outcomeEvaluation,
+      outcomeEvaluationError,
+      calibrationRefresh,
+      calibrationRefreshError,
     });
   }
 
@@ -469,12 +750,12 @@ async function processIncrementalBatch(input: {
     data_date: String(row.data_date || ""),
     symbol: String(row.symbol || ""),
   }), row]));
-  const [marketContext, newsRows, calibrationBuckets] = await Promise.all([
+  const [marketContext, newsRows, calibration] = await Promise.all([
     loadMarketContext(sourceDate),
     loadRecentNews(sourceDate),
     loadCalibrations(sourceDate),
   ]);
-  const resources = { marketContext, newsRows, calibrationBuckets };
+  const resources = { marketContext, newsRows, calibrationBuckets: calibration.calibrationBuckets };
   const failures: WorkerFailure[] = [];
   const signalRows: Record<string, unknown>[] = [];
   const universeRows: Record<string, unknown>[] = [];
@@ -495,7 +776,10 @@ async function processIncrementalBatch(input: {
     }
     try {
       const scored = scoreCacheRow(row, resources);
-      signalRows.push(...scored.signals);
+      signalRows.push(...scored.signals.map((signal: Record<string, unknown>) => ({
+        ...signal,
+        calibration_version: calibration.calibrationVersion,
+      })));
       universeRows.push(scored.universe);
     } catch (error) {
       addFailure(failures, "model", task, error);
@@ -529,9 +813,32 @@ async function processIncrementalBatch(input: {
   let rankingError: string | null = null;
   if (successfulClaims.length) {
     try {
-      ranking = await refreshRankings(sourceDate);
+      const outstanding = await outstandingDirtyCount(sourceDate);
+      if (outstanding === successfulClaims.length) {
+        const expectedSymbolCount = await activeUniverseCount(sourceDate);
+        const priorCycle = priorDetails.workerCycle && typeof priorDetails.workerCycle === "object"
+          ? priorDetails.workerCycle as Record<string, any>
+          : {};
+        const groupCounts = Object.fromEntries(V20_WORKER_GROUPS.map((group) => [
+          group,
+          Number(priorCycle.groups?.[group]?.total || 0),
+        ]));
+        ranking = await publishImmutableRun({
+          dataDate: sourceDate,
+          expectedSymbolCount,
+          sourceDates: {
+            ...Object.fromEntries(V20_WORKER_GROUPS.map((group) => [group, sourceDate])),
+            universe: sourceDate,
+          },
+          completionKeys: (priorDetails.sourceReadiness as Record<string, unknown> | undefined)?.completionKeys,
+          groupCounts,
+          enrichment,
+          marketContext,
+          calibrationVersion: calibration.calibrationVersion,
+        });
+      }
     } catch (error) {
-      rankingError = (error instanceof Error ? error.message : String(error)).slice(0, 500);
+      rankingError = `immutable publication: ${error instanceof Error ? error.message : String(error)}`.slice(0, 500);
       successfulClaims = [];
     }
   }
@@ -548,8 +855,28 @@ async function processIncrementalBatch(input: {
     completeDirtyBatch(owner, successfulIds),
     retryDirtyBatch(owner, failedIds, retryError),
   ]);
+  let outcomeEvaluation: unknown = null;
+  let outcomeEvaluationError: string | null = null;
+  let calibrationRefresh: unknown = null;
+  let calibrationRefreshError: string | null = null;
+  try {
+    outcomeEvaluation = await drainImmutableOutcomeBacklog(sourceDate, { maxBatches: 2, maxMs: 25_000 });
+  } catch (error) {
+    outcomeEvaluationError = String(error instanceof Error ? error.message : error).slice(0, 500);
+  }
+  if (!outcomeEvaluationError) {
+    try {
+      calibrationRefresh = await refreshImmutableCalibration(outcomeEvaluation);
+    } catch (error) {
+      calibrationRefreshError = String(error instanceof Error ? error.message : error).slice(0, 500);
+    }
+  }
   const phase = publicationPhaseFor(enrichment);
-  const incrementalError = failedIds.length ? retryError : null;
+  const incrementalError = failedIds.length
+    ? retryError
+    : outcomeEvaluationError
+      ? `outcome_evaluation: ${outcomeEvaluationError}`
+      : calibrationRefreshError ? `calibration_refresh: ${calibrationRefreshError}` : null;
   await patchState({
     status: incrementalError ? "partial" : priorDetails.completedCycleStatus || "success",
     last_error: incrementalError,
@@ -567,7 +894,15 @@ async function processIncrementalBatch(input: {
         retried: retriedDirty,
         writtenSignals,
         writtenUniverse,
-        rankingRefreshed: rankingError === null && successfulIds.length > 0,
+        immutablePublication: ranking,
+        publicationAttempted: ranking !== null || rankingError !== null,
+        outcomeEvaluation,
+        outcomeEvaluationError,
+        calibrationRefresh,
+        calibrationRefreshError,
+        scoringCalibrationVersion: calibration.calibrationVersion,
+        scoringCalibrationStatus: calibration.calibrationStatus,
+        scoringCalibrationReason: calibration.calibrationReason,
       },
     },
   });
@@ -583,7 +918,11 @@ async function processIncrementalBatch(input: {
     incrementalRetried: retriedDirty,
     writtenSignals,
     writtenUniverse,
-    ranking,
+    immutablePublication: ranking,
+    outcomeEvaluation,
+    outcomeEvaluationError,
+    calibrationRefresh,
+    calibrationRefreshError,
   });
 }
 
@@ -591,11 +930,19 @@ Deno.serve(async (request: Request) => {
   if (request.method !== "POST") return json({ error: "method_not_allowed" }, 405);
   if (!await verifyRequest(request).catch(() => false)) return json({ error: "unauthorized" }, 401);
 
+  const body = await request.json().catch(() => ({}));
+
+  const maintenance = await maintenanceDisposition(rest);
+  const verificationRun = body?.maintenanceVerification === true
+    && await maintenanceVerificationAllowed().catch(() => false);
+  if (maintenance.blocked && !verificationRun) {
+    return json(maintenanceSkipPayload(maintenance), maintenance.status);
+  }
+
   const owner = crypto.randomUUID();
   if (!await claimLease(owner)) return json({ status: "skipped", reason: "active_lease" }, 202);
 
   try {
-    const body = await request.json().catch(() => ({}));
     const configuredLimit = Number(Deno.env.get("TWSS_V20_BATCH_LIMIT")) || 250;
     const limit = Math.max(5, Math.min(500, Number(body?.limit) || configuredLimit));
     const force = body?.force === true;
@@ -726,7 +1073,7 @@ Deno.serve(async (request: Request) => {
           completionKeys: readiness.completionKeys,
         },
         retryPolicy: { maxAttempts: 3, maxQueue: 300, retryShare: "25%-capped-at-10" },
-        probabilityPolicy: "walk-forward-or-deterministic-quant-bootstrap",
+        probabilityPolicy: "walk-forward-calibrated-only-otherwise-null",
         workerCycle: cycle,
       },
     });
@@ -791,13 +1138,23 @@ Deno.serve(async (request: Request) => {
     const tasks = [...retryTasks, ...freshTasks];
     const dates = [...new Set(tasks.filter((task) => task.row).map((task) => task.data_date))];
     const dateResources = new Map<string, Record<string, unknown>>();
+    if (!dates.includes(sourceDate)) dates.push(sourceDate);
     await Promise.all(dates.map(async (dataDate) => {
-      const [marketContext, newsRows, calibrationBuckets] = await Promise.all([
+      const [marketContext, newsRows, calibration] = await Promise.all([
         loadMarketContext(dataDate),
         loadRecentNews(dataDate),
         loadCalibrations(dataDate),
       ]);
-      dateResources.set(dataDate, { marketContext, newsRows, calibrationBuckets });
+      dateResources.set(dataDate, {
+        marketContext,
+        newsRows,
+        calibrationBuckets: calibration.calibrationBuckets,
+        calibrationVersion: calibration.calibrationVersion,
+        calibrationBeforeAt: calibration.beforeAt,
+        calibrationTrainingCutoffAt: calibration.trainingCutoffAt,
+        calibrationStatus: calibration.calibrationStatus,
+        calibrationReason: calibration.calibrationReason,
+      });
     }));
 
     const failures: WorkerFailure[] = [];
@@ -815,7 +1172,10 @@ Deno.serve(async (request: Request) => {
       try {
         const resources = dateResources.get(task.data_date) || {};
         const scored = scoreCacheRow(task.row, resources);
-        signalRows.push(...scored.signals);
+        signalRows.push(...scored.signals.map((signal: Record<string, unknown>) => ({
+          ...signal,
+          calibration_version: resources.calibrationVersion || null,
+        })));
         universeRows.push(scored.universe);
       } catch (error) {
         addFailure(failures, "model", {
@@ -862,35 +1222,59 @@ Deno.serve(async (request: Request) => {
     cycle.attemptLog = settled.attemptLog;
 
     const freshComplete = V20_WORKER_GROUPS.every((group) => cycle.groups[group].complete === true);
-    const readyToRefresh = freshComplete && cycle.retryQueue.length === 0;
+    const readyToPublish = freshComplete
+      && cycle.retryQueue.length === 0
+      && failures.length === 0
+      && cycle.deadLetters.length === 0;
     const ranking: Record<string, unknown>[] = [];
     const rankingErrors: string[] = [];
     const maintenanceErrors: string[] = [];
     let outcomeEvaluation: unknown = null;
-    if (readyToRefresh) {
+    let calibrationRefresh: unknown = null;
+    let immutablePublication: Record<string, unknown> | null = null;
+    if (readyToPublish) {
       try {
-        // This RPC replaces one same-date snapshot inside a transaction.  The
-        // public pointer below only advances after it succeeds, so home and
-        // both ranking models cannot observe a half-published cycle.
-        ranking.push(await refreshRankings(sourceDate));
+        const marketContext = (dateResources.get(sourceDate)?.marketContext || null) as Record<string, unknown> | null;
+        immutablePublication = await publishImmutableRun({
+          dataDate: sourceDate,
+          expectedSymbolCount: total,
+          sourceDates: { ...sourceDates, universe: sourceDate },
+          completionKeys: readiness.completionKeys,
+          groupCounts: totals,
+          enrichment: normalizeEnrichmentSummary(cycle.enrichmentSummary || enrichment),
+          marketContext,
+          calibrationVersion: String(dateResources.get(sourceDate)?.calibrationVersion || "") || null,
+        }) as Record<string, unknown>;
+        ranking.push(immutablePublication);
       } catch (error) {
-        rankingErrors.push(`${sourceDate}: ${error instanceof Error ? error.message : String(error)}`.slice(0, 300));
+        rankingErrors.push(
+          `${sourceDate}: ${error instanceof Error ? error.message : String(error)}`.slice(0, 300),
+        );
       }
-      if (rankingErrors.length === 0) {
+      if (immutablePublication && rankingErrors.length === 0) {
         try {
-          outcomeEvaluation = await evaluateMaturedSignals(sourceDate);
+          outcomeEvaluation = await drainImmutableOutcomeBacklog(sourceDate, { maxBatches: 4 });
         } catch (error) {
           maintenanceErrors.push(
             `outcome_evaluation: ${error instanceof Error ? error.message : String(error)}`.slice(0, 300),
           );
         }
+        if (outcomeEvaluation !== null) {
+          try {
+            calibrationRefresh = await refreshImmutableCalibration(outcomeEvaluation);
+          } catch (error) {
+            maintenanceErrors.push(
+              `calibration_refresh: ${error instanceof Error ? error.message : String(error)}`.slice(0, 300),
+            );
+          }
+        }
       }
     }
-    const complete = readyToRefresh && rankingErrors.length === 0;
+    const complete = readyToPublish && immutablePublication !== null && rankingErrors.length === 0;
     cycle.completed = complete;
     const status = complete
-      ? cycle.deadLetters.length || maintenanceErrors.length ? "partial" : "success"
-      : failures.length || rankingErrors.length ? "partial" : "running";
+      ? "success"
+      : failures.length || cycle.deadLetters.length || rankingErrors.length ? "partial" : "running";
     const processed = V20_WORKER_GROUPS.reduce(
       (sum, group) => sum + Number(cycle.groups[group]?.processed || 0),
       0,
@@ -917,12 +1301,19 @@ Deno.serve(async (request: Request) => {
         completionKeys: readiness.completionKeys,
       },
       retryPolicy: { maxAttempts: 3, maxQueue: 300, retryShare: "25%-capped-at-10" },
-      probabilityPolicy: "walk-forward-or-deterministic-quant-bootstrap",
+      probabilityPolicy: "walk-forward-calibrated-only-otherwise-null",
       writtenSignals,
       writtenUniverse,
       ranking,
       outcomeEvaluation,
+      calibrationRefresh,
       maintenanceErrors,
+      immutablePublication,
+      calibrationVersion: dateResources.get(sourceDate)?.calibrationVersion || null,
+      calibrationBeforeAt: dateResources.get(sourceDate)?.calibrationBeforeAt || null,
+      calibrationTrainingCutoffAt: dateResources.get(sourceDate)?.calibrationTrainingCutoffAt || null,
+      calibrationStatus: dateResources.get(sourceDate)?.calibrationStatus || "collecting",
+      calibrationReason: dateResources.get(sourceDate)?.calibrationReason || null,
       workerCycle: cycle,
     };
     if (complete) {
@@ -948,6 +1339,9 @@ Deno.serve(async (request: Request) => {
       details.sourceDates = { ...sourceDates, universe: sourceDate };
       details.dataCompleteness = publishedCompleteness;
       details.publishedAt = publishedAt;
+      details.publicationRunId = immutablePublication?.runId || null;
+      details.publicationKey = immutablePublication?.publicationKey || null;
+      details.contentHash = immutablePublication?.contentHash || null;
     }
     const terminalError = compactError(failures, cycle.deadLetters, rankingErrors, maintenanceErrors);
 
@@ -987,6 +1381,7 @@ Deno.serve(async (request: Request) => {
       dataCompleteness: details.dataCompleteness || 0,
       ranking,
       outcomeEvaluation,
+      calibrationRefresh,
       maintenanceErrors,
     });
   } catch (error) {

@@ -239,8 +239,22 @@ const fullFetch = async (input) => {
 
 globalThis.fetch = fullFetch;
 
+const INTERNAL_REFRESH_TOKEN = "smoke-internal-refresh-token";
+process.env.TWSS_INTERNAL_REFRESH_TOKEN = INTERNAL_REFRESH_TOKEN;
+process.env.MAINTENANCE_FAIL_CLOSED = "false";
+
+function internalRequest(path) {
+  return new Request(`https://example.test${path}`, {
+    method: "POST",
+    headers: { "x-twss-refresh-token": INTERNAL_REFRESH_TOKEN },
+  });
+}
+
 async function payload(path) {
-  const response = await worker.fetch(new Request(`https://example.test${path}`), {}, {});
+  const request = new URL(`https://example.test${path}`).searchParams.get("refresh") === "1"
+    ? internalRequest(path)
+    : new Request(`https://example.test${path}`);
+  const response = await worker.fetch(request, {}, {});
   assert.equal(response.ok, true, `${path} returned ${response.status}`);
   return response.json();
 }
@@ -250,12 +264,133 @@ assert.equal(health.version, "17.2");
 assert.equal("aiResearch" in health, false);
 assert.deepEqual(health.markets, ["上市股票", "上櫃股票", "ETF"]);
 
+const anonymousRefreshResponse = await worker.fetch(
+  new Request("https://example.test/api/market-data?type=sources&refresh=1"), {}, {},
+);
+assert.equal(anonymousRefreshResponse.status, 403, "anonymous GET refresh must be forbidden");
+assert.equal((await anonymousRefreshResponse.json()).code, "REFRESH_FORBIDDEN");
+
+const signedGetRefreshResponse = await worker.fetch(
+  new Request("https://example.test/api/market-data?type=sources&refresh=1", {
+    headers: { "x-twss-refresh-token": INTERNAL_REFRESH_TOKEN },
+  }), {}, {},
+);
+assert.equal(signedGetRefreshResponse.status, 403, "even a signed refresh must use POST");
+
+const unsignedRefreshResponse = await worker.fetch(
+  new Request("https://example.test/api/market-data?type=sources&refresh=1", { method: "POST" }), {}, {},
+);
+assert.equal(unsignedRefreshResponse.status, 403, "unsigned POST refresh must be forbidden");
+
+const wrongRefreshResponse = await worker.fetch(
+  new Request("https://example.test/api/market-data?type=sources&refresh=1", {
+    method: "POST",
+    headers: { "x-twss-refresh-token": "wrong-token" },
+  }), {}, {},
+);
+assert.equal(wrongRefreshResponse.status, 403, "a wrong refresh token must be forbidden");
+
+const nonRefreshPostResponse = await worker.fetch(
+  new Request("https://example.test/api/market-data?type=sources", { method: "POST" }), {}, {},
+);
+assert.equal(nonRefreshPostResponse.status, 405, "non-refresh requests must be GET-only");
+assert.equal(nonRefreshPostResponse.headers.get("allow"), "GET");
+
+const forcedMaintenanceApiResponse = await worker.fetch(
+  new Request("https://example.test/api/health"), { MAINTENANCE_MODE: "1" }, {},
+);
+assert.equal(forcedMaintenanceApiResponse.status, 503, "forced maintenance must block even health routes");
+assert.equal((await forcedMaintenanceApiResponse.json()).code, "MAINTENANCE");
+
+const forcedMaintenancePageResponse = await worker.fetch(
+  new Request("https://example.test/"), { MAINTENANCE_MODE: "true" }, {},
+);
+assert.equal(forcedMaintenancePageResponse.status, 503, "forced maintenance must block static pages");
+assert.match(forcedMaintenancePageResponse.headers.get("content-type") || "", /^text\/html/);
+
+const failClosedResponse = await worker.fetch(
+  new Request("https://example.test/"), { MAINTENANCE_FAIL_CLOSED: "1" }, {},
+);
+assert.equal(failClosedResponse.status, 503, "worker maintenance must support fail-closed configuration");
+
+const defaultFailClosedResponse = await worker.fetch(
+  new Request("https://example.test/"), {
+    MAINTENANCE_FAIL_CLOSED: "",
+    MARKET_SUPABASE_URL: "",
+    SUPABASE_URL: "",
+    MARKET_SUPABASE_SERVICE_ROLE_KEY: "",
+    SUPABASE_SERVICE_ROLE_KEY: "",
+  }, {},
+);
+assert.equal(defaultFailClosedResponse.status, 503,
+  "missing maintenance control configuration must fail closed by default");
+
+const normalFetch = globalThis.fetch;
+let maintenanceControlRequest = null;
+let secretMaintenanceControlRequest = null;
+let emptyMaintenanceControlRequest = null;
+globalThis.fetch = async (input, init = {}) => {
+  const url = String(input);
+  if (url.startsWith("https://maintenance-control.test/rest/v1/twss_maintenance_control")) {
+    maintenanceControlRequest = { url, init };
+    return json([{ enabled: true, phase: "maintenance", generation: 7 }]);
+  }
+  if (url.startsWith("https://secret-maintenance-control.test/rest/v1/twss_maintenance_control")) {
+    secretMaintenanceControlRequest = { url, init };
+    return json([{ enabled: false, phase: "off", generation: 8 }]);
+  }
+  if (url.startsWith("https://empty-maintenance-control.test/rest/v1/twss_maintenance_control")) {
+    emptyMaintenanceControlRequest = { url, init };
+    return json([]);
+  }
+  return normalFetch(input, init);
+};
+const databaseMaintenanceResponse = await worker.fetch(
+  new Request("https://example.test/api/health"),
+  {
+    MARKET_SUPABASE_URL: "https://maintenance-control.test",
+    MARKET_SUPABASE_SERVICE_ROLE_KEY: "maintenance-service-key",
+  },
+  {},
+);
+const secretKeyControlResponse = await worker.fetch(
+  new Request("https://example.test/api/health"),
+  {
+    MARKET_SUPABASE_URL: "https://secret-maintenance-control.test",
+    MARKET_SUPABASE_SERVICE_ROLE_KEY: "sb_secret_maintenance-test",
+  },
+  {},
+);
+const emptyControlResponse = await worker.fetch(
+  new Request("https://example.test/api/health"),
+  {
+    MARKET_SUPABASE_URL: "https://empty-maintenance-control.test",
+    MARKET_SUPABASE_SERVICE_ROLE_KEY: "maintenance-service-key",
+    MAINTENANCE_FAIL_CLOSED: "1",
+  },
+  {},
+);
+globalThis.fetch = normalFetch;
+assert.equal(databaseMaintenanceResponse.status, 503, "service-only database control must block the worker");
+assert.equal(maintenanceControlRequest?.init?.headers?.apikey, "maintenance-service-key");
+assert.equal(maintenanceControlRequest?.init?.headers?.authorization, "Bearer maintenance-service-key");
+assert.ok(maintenanceControlRequest?.init?.signal instanceof AbortSignal,
+  "maintenance status reads must have a bounded timeout signal");
+assert.equal(secretKeyControlResponse.status, 200, "disabled database maintenance must allow the worker");
+assert.equal(secretMaintenanceControlRequest?.init?.headers?.apikey, "sb_secret_maintenance-test");
+assert.equal(secretMaintenanceControlRequest?.init?.headers?.authorization, undefined,
+  "Supabase secret keys must never be sent as Bearer tokens");
+assert.equal(emptyControlResponse.status, 503,
+  "an empty maintenance control result must fail closed");
+assert.equal(emptyControlResponse.headers.get("x-maintenance-phase"), "status_unavailable");
+assert.ok(emptyMaintenanceControlRequest?.init?.signal instanceof AbortSignal);
+
 const dataHealthResponse = await worker.fetch(
-  new Request("https://example.test/api/market-data?type=data-health&refresh=1"), {}, {},
+  internalRequest("/api/market-data?type=data-health&refresh=1"), {}, {},
 );
 assert.equal(dataHealthResponse.status, 400, "data-health must not be exposed by the public API");
 const backendStatusResponse = await worker.fetch(
-  new Request("https://example.test/api/market-data?type=backend-status&refresh=1"), {}, {},
+  internalRequest("/api/market-data?type=backend-status&refresh=1"), {}, {},
 );
 assert.equal(backendStatusResponse.status, 400, "backend-status must not be exposed by the public API");
 
@@ -366,15 +501,48 @@ const escapedAssetVersion = assetVersion.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 assert.match(pageSource, new RegExp(`app\\.js\\?v=${escapedAssetVersion}`));
 const publicPageSource = await readFile(new URL("../public/index.html", import.meta.url), "utf8");
 const publicAppSource = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+const generatedWorkerSource = await readFile(new URL("../worker/index.js", import.meta.url), "utf8");
+const workerGeneratorSource = await readFile(new URL("./generate-worker.mjs", import.meta.url), "utf8");
+for (const source of [generatedWorkerSource, workerGeneratorSource]) {
+  assert.match(source, /TWSS_INTERNAL_REFRESH_TOKEN/,
+    "fallback worker generation must require the internal refresh token");
+  assert.match(source, /constantTimeSecretEqual/,
+    "fallback worker generation must compare refresh credentials in constant time");
+  assert.match(source, /request\.method!=="POST"/,
+    "fallback worker refresh must be POST-only");
+  assert.match(source, /MAINTENANCE_MODE/,
+    "fallback worker generation must include forced maintenance blocking");
+  assert.match(source, /twss_maintenance_control/,
+    "fallback worker generation must consult the service-only maintenance control");
+  assert.match(source, /startsWith\("sb_"\)/,
+    "fallback worker generation must not send opaque Supabase keys as Bearer tokens");
+}
+assert.doesNotMatch(generatedWorkerSource,
+  /if\(path==="\/api\/market-data"\)return handleMarketData\(request,url\)/,
+  "generated fallback worker must not route around its authorization wrapper");
 const publicSmartSource = await readFile(new URL("../public/smart.js", import.meta.url), "utf8");
+const publicV20Source = await readFile(new URL("../public/v20.js", import.meta.url), "utf8");
+const v20BackendSource = await readFile(new URL("../src/v20-backend.js", import.meta.url), "utf8");
 const publicStylesSource = await readFile(new URL("../public/styles.css", import.meta.url), "utf8");
+assert.doesNotMatch(publicV20Source, /twssV19Benchmarks|twss-v19-daily-report-cache|\/data\/daily-report\.json/,
+  "the v20 shell must not read mutable v19 benchmark or report fallbacks");
+assert.match(publicV20Source, /samePublication\(atomicReport\.meta, payload\)/,
+  "the v20 report must be bound to the exact immutable recommendation publication");
+assert.doesNotMatch(v20BackendSource, /readV19Home|readV19Stock|stock_sync_state|fastestRisers/,
+  "the v20 backend must not mix mutable v19 or worker-state data into immutable publications");
+const loadV19Start = publicSmartSource.indexOf("async function loadV19()");
+const loadV19End = publicSmartSource.indexOf("async function loadWatchRows()", loadV19Start);
+const loadV19Block = publicSmartSource.slice(loadV19Start, loadV19End);
+assert.ok(loadV19Start >= 0 && loadV19End > loadV19Start
+  && loadV19Block.indexOf("if (v20ShellActive) return;") < loadV19Block.indexOf("void optionalMarketJson()"),
+"the v20 shell must stop before starting mutable v19 benchmark requests");
 assert.match(publicPageSource, new RegExp(`app\\.js\\?v=${escapedAssetVersion}`));
 assert.doesNotMatch(publicPageSource, /id="themeToggle"|data-tab="(?:forecast|verify)"/);
 const adminPageSource = await readFile(new URL("../public/admin.html", import.meta.url), "utf8");
 const adminScriptSource = await readFile(new URL("../public/admin.js", import.meta.url), "utf8");
-assert.match(adminPageSource, /icon\.svg\?v=20\.0\.0/);
-assert.match(adminPageSource, /styles\.css\?v=20\.0\.0/);
-assert.match(adminPageSource, /admin\.js\?v=20\.0\.7/);
+assert.match(adminPageSource, new RegExp(`icon\\.svg\\?v=${escapedAssetVersion}`));
+assert.match(adminPageSource, new RegExp(`styles\\.css\\?v=${escapedAssetVersion}`));
+assert.match(adminPageSource, new RegExp(`admin\\.js\\?v=${escapedAssetVersion}`));
 assert.match(adminScriptSource, /https:\/\/lfkdkdyaatdlizryiyon\.supabase\.co/,
   "the standalone administrator console must remain on MARKET");
 assert.match(adminScriptSource, /twss-market-admin-session-v18/,
@@ -614,7 +782,7 @@ globalThis.fetch = async (input) => {
 };
 
 const fallbackResponse = await fallbackWorker.fetch(
-  new Request("https://example.test/api/market-data?type=stocks&refresh=1"),
+  internalRequest("/api/market-data?type=stocks&refresh=1"),
   {},
   {},
 );

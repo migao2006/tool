@@ -1273,15 +1273,17 @@ try {
     "the deprecated net-backed opportunityScore alias must never be presented as a raw opportunity score");
   assert.match(ui, /visibleItems\.map\(row => modelCard\(row\)\)/,
     "ranking cards must use only sanitized immutable rows and preserve the API rank");
-  assert.match(ui, /supportedPayload = payload => \['20\.2', '20\.2\.1'\]\.includes\(String\(payload\?\.version \|\| ''\)\)/,
+  assert.match(ui, /supportedPayload = payload => \['20\.2', '20\.2\.1', '20\.2\.2'\]\.includes\(String\(payload\?\.version \|\| ''\)\)/,
     "older browser caches must never enter the immutable v20.2 read model");
   assert.match(ui, /const CACHE_SCHEMA = 'v20\.2-immutable-2'/);
-  assert.match(ui, /const CACHE_BUILD = new URL\(document\.currentScript\?\.src \|\| location\.href, location\.href\)\.searchParams\.get\('v'\) \|\| '20\.2\.1'/,
+  assert.match(ui, /const CACHE_BUILD = new URL\(document\.currentScript\?\.src \|\| location\.href, location\.href\)\.searchParams\.get\('v'\) \|\| '20\.2\.2'/,
     "browser cache compatibility must follow the exact loaded frontend build");
   assert.match(ui, /CACHE_MAX_AGE_MS = 7 \* 24 \* 60 \* 60 \* 1000/,
     "browser placeholders must expire after seven days");
   assert.match(ui, /parsed\?\.schema === CACHE_SCHEMA && parsed\?\.build === CACHE_BUILD/,
     "browser caches must require exact schema and frontend build compatibility");
+  assert.match(ui, /turnoverSessions == null[\s\S]*'成交值歷史基準'/,
+    "a status payload without market details must not invent a zero-session turnover baseline");
   assert.match(ui, /page\.abortController\?\.abort\(\)[\s\S]*page\.querySignature = request\.signature[\s\S]*requestId !== page\.requestId \|\| request\.signature !== page\.querySignature/,
     "ranking filters must abort and reject stale immutable query signatures");
   assert.match(ui, /validationAbortController\?\.abort\(\)[\s\S]*validationQuerySignature = signature[\s\S]*requestId !== v20\.validationRequestId \|\| signature !== v20\.validationQuerySignature/,

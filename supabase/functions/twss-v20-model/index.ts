@@ -39,6 +39,13 @@ import {
   enrichMarketContextWithOfficial,
   normalizeOfficialMarketPayloads,
 } from "../_shared/v20-market-official.js";
+// @ts-ignore Historical turnover aggregation is pure ESM and covered by Node tests.
+import {
+  historicalTurnoverContexts,
+  V20_TURNOVER_BASELINE_MINIMUM_SESSIONS,
+  V20_TURNOVER_HISTORY_MAX_ROWS,
+  V20_TURNOVER_HISTORY_PAGE_SIZE,
+} from "../_shared/v20-turnover-history.js";
 // @ts-ignore Immutable quote attachment is pure ESM and covered by Node tests.
 import { attachQuoteSnapshot } from "../_shared/v20-quote-snapshot.js";
 
@@ -440,6 +447,45 @@ function priorTurnoverContexts(rows: any[]) {
     .slice(0, 20);
 }
 
+async function loadHistoricalTurnoverContexts(dataDate: string) {
+  const rows: Record<string, unknown>[] = [];
+  let sourceExhausted = false;
+  const path = "stock_price_history?select=trade_date,trade_value,stock_master!inner(symbol)" +
+    `&trade_date=lt.${encodeURIComponent(dataDate)}&trade_value=gt.0` +
+    `&stock_master.security_type=eq.${encodeURIComponent("股票")}` +
+    `&stock_master.market=in.(${encodeURIComponent("上市")},${encodeURIComponent("上櫃")})` +
+    "&order=trade_date.desc,symbol.asc";
+  for (let offset = 0; offset < V20_TURNOVER_HISTORY_MAX_ROWS; offset += V20_TURNOVER_HISTORY_PAGE_SIZE) {
+    const { data } = await rest(path, {
+      range: [offset, offset + V20_TURNOVER_HISTORY_PAGE_SIZE - 1],
+    });
+    const page = Array.isArray(data) ? data : [];
+    rows.push(...page);
+    if (page.length < V20_TURNOVER_HISTORY_PAGE_SIZE) {
+      sourceExhausted = true;
+      break;
+    }
+    const observedDates = new Set(rows.map((row) => String(row?.trade_date || "").slice(0, 10)));
+    if (observedDates.size >= V20_TURNOVER_BASELINE_MINIMUM_SESSIONS + 2) break;
+  }
+  return historicalTurnoverContexts(rows, { sourceExhausted });
+}
+
+function verifiedOfficialSnapshots(current: any, refreshed: any, dataDate: string) {
+  const degraded = new Set(Array.isArray(current?.degraded_sources) ? current.degraded_sources : []);
+  const preserve = (outputKey: string, currentKey: string, degradedKey: string, sourceDateKey: string) => {
+    if (refreshed?.[outputKey]) return refreshed[outputKey];
+    const currentValue = current?.[currentKey];
+    const sourceDate = String(current?.source_dates?.[sourceDateKey] || currentValue?.dataDate || "").slice(0, 10);
+    return currentValue && !degraded.has(degradedKey) && sourceDate === dataDate ? currentValue : null;
+  };
+  return {
+    taiex: preserve("taiex", "taiex", "taiex_official_index", "taiex"),
+    tpex: preserve("tpex", "tpex", "tpex_official_index", "tpex"),
+    txFutures: preserve("txFutures", "tx_futures", "tx_futures", "txFutures"),
+  };
+}
+
 async function loadMarketContext(dataDate: string) {
   const { data: existing } = await rest(
     `v20_market_context?select=*&data_date=eq.${encodeURIComponent(dataDate)}` +
@@ -472,7 +518,10 @@ async function loadMarketContext(dataDate: string) {
     "tpex_official_index",
     "tx_futures",
   ].some((source) => Array.isArray(current?.degraded_sources) && current.degraded_sources.includes(source));
-  let official = {};
+  const needsTurnover = !current || (
+    Array.isArray(current?.degraded_sources) && current.degraded_sources.includes("turnover_baseline")
+  );
+  let official: Record<string, any> = {};
   if (needsOfficial) {
     const endpoints = {
       twse: "https://openapi.twse.com.tw/v1/indicesReport/MI_5MINS_HIST",
@@ -494,9 +543,10 @@ async function loadMarketContext(dataDate: string) {
     official = normalizeOfficialMarketPayloads(Object.fromEntries(entries), dataDate);
   }
 
-  if (current) {
-    const needsGlobal = currentGlobal?.available !== true && inheritedGlobal.available === true;
-    if (!needsOfficial && !needsGlobal) return current;
+  const needsGlobal = Boolean(current && currentGlobal?.available !== true && inheritedGlobal.available === true);
+  if (current && !needsOfficial && !needsGlobal && !needsTurnover) return current;
+
+  if (current && !needsTurnover) {
     const globalReady = needsGlobal ? {
       ...current,
       global_context: inheritedGlobal,
@@ -526,7 +576,7 @@ async function loadMarketContext(dataDate: string) {
     return reloaded[0];
   }
 
-  const [snapshots, priorContextResponse] = await Promise.all([
+  const [snapshots, priorContextResponse, historicalContexts] = await Promise.all([
     fetchAll(
       "stock_snapshots?select=symbol,market,instrument_type,change_pct,trade_value,volume,institutional_buy" +
         `&trade_date=eq.${encodeURIComponent(dataDate)}&order=symbol.asc`,
@@ -539,12 +589,18 @@ async function loadMarketContext(dataDate: string) {
         `&data_date=lt.${encodeURIComponent(dataDate)}` +
         "&order=data_date.desc&limit=80",
     ),
+    loadHistoricalTurnoverContexts(dataDate).catch(() => []),
   ]);
-  const priorMarketContexts = priorTurnoverContexts(priorContextResponse.data);
+  if (current && !snapshots.length) return current;
+  const priorMarketContexts = priorTurnoverContexts([
+    ...(Array.isArray(priorContextResponse.data) ? priorContextResponse.data : []),
+    ...historicalContexts,
+  ]);
+  const officialSnapshots = verifiedOfficialSnapshots(current, official, dataDate);
   const context = {
     ...enrichMarketContextWithOfficial(
       buildMarketContext(snapshots, dataDate, inheritedGlobal, priorMarketContexts),
-      official,
+      officialSnapshots,
     ),
     fetched_at: now(),
   };

@@ -5,7 +5,7 @@ import {
   SHORT_WEIGHTS,
 } from "../supabase/functions/_shared/v20-opportunity-policy.js";
 
-const API_VERSION = "20.2.1";
+const API_VERSION = "20.2.2";
 const MODEL_VERSION = "20.2";
 const PAGE_TTL_MS = 30_000;
 const MARKET_TTL_MS = 60_000;

@@ -165,7 +165,7 @@ async function loadStocks(){
   }
 }
 
-const MARKET_BOOT_CACHE='twss-market-boot-v20.2.1';
+const MARKET_BOOT_CACHE='twss-market-boot-v20.2.2';
 const MARKET_BOOT_MAX_AGE_MS=7*24*60*60*1000;
 const BOOT_STOCK_FIELDS=['symbol','name','market','instrumentType','industry','close','change','open','high','low','volume','value','transactions','pe','pb','yield','revenue','revenuePreviousMonth','revenueLastYearMonth','revenueYtd','revenueLastYearYtd','rev','revMom','revYtd','revAcceleration','revPeriod','eps','roe','roeEstimated','roePeriod','grossMargin','operatingMargin','netMargin','debt','equityRatio','foreign','trust','dealer','inst','marginBalance','marginChange','shortBalance','shortChange','disp','full'];
 function compactBootStock(stock){return Object.fromEntries(BOOT_STOCK_FIELDS.filter(key=>stock?.[key]!=null).map(key=>[key,stock[key]]))}
@@ -612,7 +612,7 @@ function openAccountModal(){
 }
 
 document.querySelector('#accountBtn').onclick=openAccountModal;
-if('serviceWorker'in navigator)navigator.serviceWorker.register('/sw.js?v=20.2.1',{updateViaCache:'none'}).catch(()=>{});
+if('serviceWorker'in navigator)navigator.serviceWorker.register('/sw.js?v=20.2.2',{updateViaCache:'none'}).catch(()=>{});
 initSession();render();
 if(document.querySelector('script[src^="/v20.js"]'))S.fundStatus='deferred';
 else loadStocks();

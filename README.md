@@ -1,4 +1,4 @@
-# 台股智選 v20.2.1
+# 台股智選 v20.2.2
 
 台股智選是一套可驗證的台股機會排序、個股研究、資料品質管理與策略驗證系統。它以不可變的 point-in-time 推薦快照作為公開讀取來源，分開計算短波段與中期候選，並納入交易成本、下跌風險及換手懲罰。
 
@@ -28,6 +28,8 @@
 - iPhone Safari、手機直式 PWA 與桌面版。
 
 歷史 v20 特徵尚未累積足夠時，策略驗證 API 會回傳 `partial`／`insufficient_history`；系統不會倒灌今天的資料假造過去績效。
+
+市場成交值基準至少使用 5 個已完成交易日，母體固定為 TWSE／TPEx 股票並排除 ETF。若 `v20_market_context` 的歷史日期不足，Worker 會讀取既有 `stock_price_history` 回補；無法驗證時維持 `partial`，不以 0 代替。
 
 ## 技術架構
 
@@ -173,6 +175,7 @@ npm run validate
 ```bash
 npm run test:v20-api
 npm run test:v20-global
+npm run test:v20-worker
 npm run test:admin-observability
 npm run test:maintenance
 ```

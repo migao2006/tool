@@ -17,7 +17,7 @@ const TWSE_OPEN = "https://openapi.twse.com.tw/v1";
 const TWSE_WEB = "https://www.twse.com.tw";
 const TPEX_OPEN = "https://www.tpex.org.tw/openapi/v1";
 const VERSION = "17.2";
-const APP_RELEASE_VERSION = "20.2.1";
+const APP_RELEASE_VERSION = "20.2.2";
 const V20_API_VERSION = "20.2";
 const V20_MODEL_VERSION = "20.2";
 

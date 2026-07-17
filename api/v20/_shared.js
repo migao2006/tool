@@ -10,7 +10,7 @@ function json(payload, status = 200, headers = {}) {
       "content-type": "application/json; charset=utf-8",
       "x-content-type-options": "nosniff",
       "access-control-allow-origin": "*",
-      "x-twss-api-version": "20.2.1",
+      "x-twss-api-version": "20.2.2",
       "cache-control": status < 400 ? CACHE_CONTROL : "no-store, max-age=0",
       "cdn-cache-control": status < 400 ? CDN_CACHE_CONTROL : "no-store",
       "vercel-cdn-cache-control": status < 400 ? CDN_CACHE_CONTROL : "no-store",

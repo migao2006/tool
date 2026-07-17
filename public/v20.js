@@ -7,7 +7,7 @@
 
   const API = '/api/v20';
   const CACHE_SCHEMA = 'v20.2-immutable-2';
-  const CACHE_BUILD = new URL(document.currentScript?.src || location.href, location.href).searchParams.get('v') || '20.2.1';
+  const CACHE_BUILD = new URL(document.currentScript?.src || location.href, location.href).searchParams.get('v') || '20.2.2';
   const CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
   // Deliberately do not reuse pre-immutable v20.1 cache entries, which may
   // contain mutable v19 enrichment from an older frontend release.
@@ -36,7 +36,7 @@
   const probability = value => num(value) == null ? '資料不足' : `${Number(value).toFixed(1)}%`;
   const safeArray = value => Array.isArray(value) ? value : [];
   const first = (...values) => values.find(value => value != null && value !== '');
-  const supportedPayload = payload => ['20.2', '20.2.1'].includes(String(payload?.version || ''));
+  const supportedPayload = payload => ['20.2', '20.2.1', '20.2.2'].includes(String(payload?.version || ''));
   const strategyLabels = {
     momentum_breakout: '動能突破',
     trend_pullback: '趨勢拉回',
@@ -191,8 +191,15 @@
     const pending = num(payload?.enrichmentPending);
     const [label, className] = stateLabels[state] || stateLabels.partial;
     const publicationNote = payload?.publicationPhase === 'complete' ? ' · 推薦批次已封存' : '';
+    const turnoverSessions = num(first(
+      payload?.turnoverBaselineSessions,
+      payload?.market?.breadth?.all?.turnoverBaselineSessions,
+      payload?.breadth?.all?.turnoverBaselineSessions
+    ));
     const sourceLabels = {
-      turnover_baseline: `成交值基準建立中 ${displayNumber(payload?.market?.breadth?.all?.turnoverBaselineSessions, 0)}／5`,
+      turnover_baseline: turnoverSessions == null
+        ? '成交值歷史基準'
+        : `成交值基準建立中 ${displayNumber(turnoverSessions, 0)}／5`,
       international_context: '國際市場快取',
       global_market_context: '國際市場快取',
       outside_current_publication: '非本批次推薦標的',

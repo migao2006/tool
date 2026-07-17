@@ -30,6 +30,10 @@ import {
   attachQuoteSnapshot,
   quoteSnapshotForCacheRow,
 } from "../supabase/functions/_shared/v20-quote-snapshot.js";
+import {
+  historicalTurnoverContexts,
+  V20_TURNOVER_BASELINE_MINIMUM_SESSIONS,
+} from "../supabase/functions/_shared/v20-turnover-history.js";
 
 const latest = { listed: "2026-07-16", otc: "2026-07-16", etf: "2026-07-16" };
 const key = groupDateCycleKey(latest, V20_MODEL_VERSION);
@@ -308,6 +312,32 @@ assert.equal(missingTurnoverBaseline.regime_score, 82.35,
   "the missing 15% turnover factor must be removed and remaining weights renormalized");
 assert.ok(missingTurnoverBaseline.degraded_sources.includes("turnover_baseline"));
 
+const historicalTurnoverRows = Array.from({ length: 7 }, (_, dateIndex) =>
+  Array.from({ length: 4 }, (_, symbolIndex) => ({
+    trade_date: `2026-07-${String(15 - dateIndex).padStart(2, "0")}`,
+    trade_value: 100 + symbolIndex,
+  }))).flat();
+const recoveredTurnoverHistory = historicalTurnoverContexts(historicalTurnoverRows, {
+  minimumSymbols: 3,
+  relativeCoverage: 0.65,
+  sourceExhausted: false,
+});
+assert.equal(V20_TURNOVER_BASELINE_MINIMUM_SESSIONS, 5);
+assert.equal(recoveredTurnoverHistory.length, 6,
+  "the oldest Range boundary date must be discarded while complete prior sessions remain usable");
+assert.equal(recoveredTurnoverHistory[0].data_date, "2026-07-15");
+assert.equal(recoveredTurnoverHistory.at(-1).data_date, "2026-07-10");
+assert.equal(recoveredTurnoverHistory[0].breadth.all.turnover, 406);
+assert.equal(recoveredTurnoverHistory[0].breadth.all.turnoverScope, "twse_tpex_stocks_excluding_etf");
+const recoveredMarket = buildMarketContext(
+  [{ market: "listed", change_pct: 1, trade_value: 406, volume: 10, institutional_buy: 1 }],
+  "2026-07-16",
+  { available: true, score: 0 },
+  recoveredTurnoverHistory,
+);
+assert.ok(!recoveredMarket.degraded_sources.includes("turnover_baseline"),
+  "stored price history must recover a missing turnover baseline without inventing zero values");
+
 const [workerSource, migration, incrementalMigration, staleQueueMigration, verifiableMigration, championWakeMigration] = await Promise.all([
   readFile(new URL("../supabase/functions/twss-v20-model/index.ts", import.meta.url), "utf8"),
   readFile(new URL("../supabase/migrations/20260716021553_add_v20_quant_models.sql", import.meta.url), "utf8"),
@@ -322,6 +352,16 @@ assert.match(workerSource, /resolveReadySourceCycle/);
 assert.match(workerSource, /Math\.min\(500,/);
 assert.match(workerSource, /TWSS_V20_BATCH_LIMIT/);
 assert.match(workerSource, /rpc\/twss_v20_publish_recommendation_run/);
+assert.match(workerSource, /stock_price_history\?select=trade_date,trade_value,stock_master!inner\(symbol\)/,
+  "turnover recovery must read the existing stock history through its stock-master relationship");
+assert.match(workerSource, /stock_master\.security_type=eq\./,
+  "ETF and other instruments must not enter the historical stock-turnover baseline");
+assert.match(workerSource, /stock_master\.market=in\.\(/,
+  "the historical turnover baseline must remain limited to TWSE and TPEx");
+assert.match(workerSource, /current\.degraded_sources\.includes\("turnover_baseline"\)/,
+  "a previously saved partial context must be eligible for deterministic baseline repair");
+assert.match(workerSource, /verifiedOfficialSnapshots\(current, official, dataDate\)/,
+  "turnover repair must preserve already verified official index snapshots");
 assert.match(workerSource, /rpc\/twss_v20_signal_data_cutoff/,
   "the cutoff must come from the service-only database resolver");
 assert.match(workerSource, /rpc\/twss_v20_read_immutable_calibration/);
@@ -385,8 +425,9 @@ assert.match(workerSource, /data_date=lt/,
   "turnover scoring must load only prior market-context sessions");
 assert.match(workerSource, /v20_market_context\?select=data_date,model_version,breadth/,
   "turnover history must survive a model-version release");
-assert.match(workerSource, /priorTurnoverContexts\(priorContextResponse\.data\)/,
-  "turnover history must deduplicate prior contexts before using them");
+assert.match(workerSource,
+  /const priorMarketContexts = priorTurnoverContexts\(\[[\s\S]*priorContextResponse\.data[\s\S]*historicalContexts/,
+  "stored market contexts and recovered price history must be deduplicated before use");
 assert.match(workerSource, /\.slice\(0, 20\)/,
   "turnover scoring must use at most twenty distinct prior sessions");
 assert.match(workerSource, /shouldRunFullMarket/);

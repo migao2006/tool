@@ -260,7 +260,7 @@ async function payload(path) {
 }
 
 const health = await payload("/api/health");
-assert.equal(health.version, "20.2.0");
+assert.equal(health.version, "20.2.1");
 assert.deepEqual(health.components, { marketData: "17.2", v20Api: "20.2", v20Model: "20.2" });
 assert.equal("aiResearch" in health, false);
 assert.deepEqual(health.markets, ["上市股票", "上櫃股票", "ETF"]);

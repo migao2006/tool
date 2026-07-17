@@ -2,16 +2,31 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 
-const [migration, modelMigration, releaseMigration, admin, adminHtml, sharedSource, modelSource, policySource] = await Promise.all([
+const [migration, modelMigration, releaseMigration, repairMigration, specialFormsMigration, admin, adminHtml, sharedSource, modelSource, policySource] = await Promise.all([
   readFile(new URL("../supabase/migrations/20260716142257_harden_admin_operations_observability.sql", import.meta.url), "utf8"),
   readFile(new URL("../supabase/migrations/20260716180952_add_v20_model_admin_observability.sql", import.meta.url), "utf8"),
   readFile(new URL("../supabase/migrations/20260717090140_register_v20_2_model_release.sql", import.meta.url), "utf8"),
+  readFile(new URL("../supabase/migrations/20260717183500_secure_fugle_and_repair_v20_observability.sql", import.meta.url), "utf8"),
+  readFile(new URL("../supabase/migrations/20260717190000_fix_v20_admin_log_special_forms.sql", import.meta.url), "utf8"),
   readFile(new URL("../public/admin.js", import.meta.url), "utf8"),
   readFile(new URL("../public/admin.html", import.meta.url), "utf8"),
   readFile(new URL("../api/v20/_shared.js", import.meta.url), "utf8"),
   readFile(new URL("../supabase/functions/_shared/v20-model.js", import.meta.url), "utf8"),
   readFile(new URL("../supabase/functions/_shared/v20-opportunity-policy.js", import.meta.url), "utf8"),
 ]);
+
+assert.match(repairMigration,
+  /revoke all on function public\.twss_v20_internal_provider_config\(\)[\s\S]*from public, anon, authenticated;[\s\S]*to service_role;/,
+  "the decrypted Fugle Vault boundary must remain service-role-only");
+assert.match(repairMigration, /from public\.v20_publication_head h[\s\S]*r\.model_version/,
+  "global refresh must target the active immutable publication model instead of hardcoded 20.0");
+assert.match(repairMigration, /'status', 'success', 'progress', 100/,
+  "completed administrator jobs must not remain pending");
+assert.match(repairMigration, /\{version\}', '\"20\.2\.1\"'::jsonb/);
+assert.doesNotMatch(repairMigration, /pg_catalog\.(?:greatest|least)\(/,
+  "LEAST/GREATEST are PostgreSQL special forms and must not be schema-qualified");
+assert.match(specialFormsMigration, /pg_get_functiondef/,
+  "installed function bodies must receive the same special-form repair");
 
 assert.match(
   migration,

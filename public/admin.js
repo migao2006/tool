@@ -197,12 +197,14 @@
     if (!channel || typeof channel !== 'object') {
       return `<article class="health-source"><div class="head"><b>${escapeHtml(engineLabel)} ${escapeHtml(channelLabel)}</b><span class="status-pill">尚未設定</span></div><div class="muted small">等待受控模型版本指派，不影響目前透明規則排序。</div></article>`;
     }
-    const structuralStatus = ({ passed: '結構檢查通過', shadow: '影子驗證中', failed: '驗證失敗' })[channel.validationStatus]
-      || channel.validationStatus || '待驗證';
-    const structuralClass = channel.validationStatus === 'passed' ? 'ok' : channel.validationStatus === 'failed' ? 'bad' : '';
+    const validationStatus = channel.latestValidation?.status || channel.validationStatus;
+    const structuralStatus = ({ passed: '結構檢查通過', shadow: '影子驗證中', failed: '驗證失敗' })[validationStatus]
+      || validationStatus || '待驗證';
+    const structuralClass = validationStatus === 'passed' ? 'ok' : validationStatus === 'failed' ? 'bad' : '';
+    const performanceStatus = channel.performanceStatus === 'ready' ? '可檢視' : '樣本收集中';
     return `<article class="health-source">
       <div class="head"><div><b>${escapeHtml(engineLabel)} ${escapeHtml(channelLabel)}</b><div class="muted">版本 ${escapeHtml(channel.modelVersion || '—')} · ${escapeHtml(channel.featureVersion || '特徵版本待補')}</div></div><span class="status-pill ${structuralClass}">${escapeHtml(structuralStatus)}</span></div>
-      <div class="admin-count-line">績效狀態 <b>樣本收集中</b></div>
+      <div class="admin-count-line">績效狀態 <b>${escapeHtml(performanceStatus)}</b></div>
       <div class="muted small">成本模型 ${escapeHtml(channel.costModelVersion || '—')} · 通道更新 ${escapeHtml(timestamp(channel.changedAt))}</div>
     </article>`;
   }
@@ -309,8 +311,9 @@
     const largestRankChanges = rows(rankChanges.largestChanges);
     const modelAnomalies = modelObservability.anomalies || {};
     const recentModelValidations = rows(modelObservability.recentValidationEvents);
-    const performanceStatus = modelObservability.performanceStatus === 'collecting'
-      ? '樣本收集中' : '資料尚未建立';
+    const performanceStatus = modelObservability.performanceStatus === 'ready'
+      ? '可檢視' : modelObservability.performanceStatus === 'collecting'
+        ? '樣本收集中' : '資料尚未建立';
     const overall = String(health.overallStatus || '').toLowerCase();
     setHeader(`登入者 ${payload.admin?.username || '管理員'} · 更新 ${timestamp(payload.generatedAt)}`, 'ok');
     app.innerHTML = `<section class="admin-toolbar card">
@@ -411,7 +414,7 @@
     const modelAnomalies = modelObservability.anomalies || {};
     const channels = modelObservability.channels || {};
     return [
-      `台股智選 v${payload.version || '20.2.0'} 管理後台修復報告`,
+      `台股智選 v${payload.version || '20.2.1'} 管理後台修復報告`,
       `產生時間：${timestamp(payload.generatedAt)}`,
       `資料日期：${summary.latestDataDate || payload.health?.dataDate || '—'}`,
       '',
@@ -421,7 +424,7 @@
       `FinMind：第一組 ${number(primaryQuota.usedLast60Minutes)}／${number(primaryQuota.limit ?? 600)}｜第二組 ${number(secondaryQuota.usedLast60Minutes)}／${number(secondaryQuota.limit ?? 600)}｜合計 ${number(combinedQuota.usedLast60Minutes)}／${number(combinedQuota.limit ?? 1200)}`,
       `模型校準：${calibration.ready ? '已校準' : '尚未校準'}｜實際結果 ${number(calibration.outcomeCount)}｜校準樣本 ${number(calibration.calibrationSampleCount)}`,
       `模型通道：短波段 Champion ${channels.short?.champion?.modelVersion || '未設定'}｜Challenger ${channels.short?.challenger?.modelVersion || '未設定'}｜中期 Champion ${channels.medium?.champion?.modelVersion || '未設定'}｜Challenger ${channels.medium?.challenger?.modelVersion || '未設定'}`,
-      `模型觀測：績效樣本收集中｜不可修改結果 ${number(modelValidation.sampleCount)}｜待驗證 ${number(modelValidation.pendingOutcomeCount)}｜異常股票 ${number(modelAnomalies.symbolCount)}`,
+      `模型觀測：績效${modelObservability.performanceStatus === 'ready' ? '可檢視' : '樣本收集中'}｜不可修改結果 ${number(modelValidation.sampleCount)}｜待驗證 ${number(modelValidation.pendingOutcomeCount)}｜異常股票 ${number(modelAnomalies.symbolCount)}`,
       '',
       '同步工作：',
       ...jobs.map(job => `- ${jobLabel(job.jobKey)}｜${statusLabel(job.status)}｜${number(job.processed)}/${number(job.total)} (${number(job.progress, 1)}%)｜資料日 ${job.cycleDate || '—'}${job.lastErrorCode ? `｜${errorLabels[job.lastErrorCode] || job.lastErrorCode}` : ''}`),

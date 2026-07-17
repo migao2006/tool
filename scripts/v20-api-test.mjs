@@ -18,6 +18,7 @@ process.env.SUPABASE_PUBLISHABLE_KEY = "test-public-key";
 process.env.FINNHUB_API_KEY = "";
 process.env.ALPHA_VANTAGE_API_KEY = "";
 const calls = [];
+let fugleEnabled = false;
 
 const PUBLICATION_RUN_ID = 701;
 const PUBLICATION_KEY = "a".repeat(64);
@@ -216,6 +217,16 @@ const detailSignalRow = {
 globalThis.fetch = async (input, init = {}) => {
   const url = new URL(String(input));
   calls.push({ url, init });
+  if (url.hostname === "api.fugle.tw" && fugleEnabled) {
+    assert.equal(init.headers["x-api-key"], "server-fugle-key");
+    return Response.json({
+      symbol: "5880", name: "合庫金", market: "TSE", date: "2026-07-17",
+      lastPrice: 25.8, change: 0.3, changePercent: 1.1765,
+      openPrice: 25.55, highPrice: 25.9, lowPrice: 25.45,
+      total: { tradeVolume: 18000, tradeValue: 460000000 },
+      isClose: true, lastUpdated: "2026-07-17T05:30:00Z",
+    });
+  }
   if (url.hostname !== "lfkdkdyaatdlizryiyon.supabase.co") {
     throw new Error(`unexpected external request: ${url.hostname}`);
   }
@@ -265,6 +276,29 @@ globalThis.fetch = async (input, init = {}) => {
   }
   if (url.pathname.endsWith("/rpc/twss_v20_persist_global_context")) {
     return Response.json(true);
+  }
+  if (url.pathname.endsWith("/rpc/twss_v20_internal_provider_config")) {
+    return Response.json({
+      fugleConfigured: fugleEnabled,
+      fugleMarketDataApiKey: fugleEnabled ? "server-fugle-key" : "",
+    });
+  }
+  if (url.pathname.endsWith("/stock_snapshots")) {
+    const symbol = String(url.searchParams.get("symbol") || "").replace("eq.", "");
+    return Response.json(symbol === "5880" ? [{
+      symbol: "5880", trade_date: "2026-07-16", close: 25.5, change_pct: 0.5917,
+      volume: 17727, open: 25.2, high: 25.5, low: 25.15, trade_value: 450128521,
+      market: "上市", industry: "金融保險業", instrument_type: "股票",
+      source: "TWSE stored", source_dates: { price: "2026-07-16" },
+      raw_data: { name: "合庫金" }, updated_at: "2026-07-16T10:00:00Z",
+    }] : []);
+  }
+  if (url.pathname.endsWith("/v20_model_signals")) {
+    const symbol = String(url.searchParams.get("symbol") || "").replace("eq.", "");
+    return Response.json(symbol === "5880" ? [
+      { ...detailSignalRow, run_id: null, symbol: "5880", name: "合庫金", model_version: "20.1", signal_date: "2026-07-16" },
+      { ...detailSignalRow, run_id: null, symbol: "5880", name: "合庫金", model_key: "medium", horizon_days: 20, model_version: "20.1", signal_date: "2026-07-16" },
+    ] : []);
   }
   if (url.pathname.endsWith("/rpc/twss_v20_read_medium_blend")) {
     const query = JSON.parse(init.body).p_query;
@@ -546,6 +580,23 @@ try {
   assert.equal(conflictingImmutableStock.quote, null,
     "conflicting immutable horizon quotes must fail closed instead of choosing one");
   assert.ok(conflictingImmutableStock.degradedSources.includes("immutable_quote_conflict"));
+
+  fugleEnabled = true;
+  backend.v20BackendInternals.clearCache();
+  const outsidePublicationStock = await backend.readV20Stock("5880", { publication: firstPublication });
+  assert.equal(outsidePublicationStock.dataState, "partial");
+  assert.equal(outsidePublicationStock.stock.name, "合庫金");
+  assert.equal(outsidePublicationStock.quote.tradeDate, "2026-07-17");
+  assert.equal(outsidePublicationStock.quote.source, "Fugle MarketData");
+  assert.equal(outsidePublicationStock.quoteState.independentFromModelPublication, true);
+  assert.equal(outsidePublicationStock.publicationCoverage.member, false);
+  assert.equal(outsidePublicationStock.publicationCoverage.status, "outside_current_publication");
+  assert.equal(outsidePublicationStock.publicationCoverage.referenceModelVersion, "20.1");
+  assert.equal(outsidePublicationStock.modelStates.short.status, "outside_publication");
+  assert.equal(outsidePublicationStock.short[0].referenceOnly, true);
+  assert.ok(outsidePublicationStock.degradedSources.includes("outside_current_publication"));
+  fugleEnabled = false;
+  backend.v20BackendInternals.clearCache();
 
   const missingModel = backend.v20BackendInternals.modelStateFor(
     "medium", [], { publishedDataDate: "2026-07-16" }, false,
@@ -1191,10 +1242,10 @@ try {
     "the deprecated net-backed opportunityScore alias must never be presented as a raw opportunity score");
   assert.match(ui, /visibleItems\.map\(row => modelCard\(row\)\)/,
     "ranking cards must use only sanitized immutable rows and preserve the API rank");
-  assert.match(ui, /supportedPayload = payload => String\(payload\?\.version \|\| ''\) === '20\.2'/,
+  assert.match(ui, /supportedPayload = payload => \['20\.2', '20\.2\.1'\]\.includes\(String\(payload\?\.version \|\| ''\)\)/,
     "older browser caches must never enter the immutable v20.2 read model");
-  assert.match(ui, /const CACHE_SCHEMA = 'v20\.2-immutable-1'/);
-  assert.match(ui, /const CACHE_BUILD = new URL\(document\.currentScript\?\.src \|\| location\.href, location\.href\)\.searchParams\.get\('v'\) \|\| '20\.2\.0'/,
+  assert.match(ui, /const CACHE_SCHEMA = 'v20\.2-immutable-2'/);
+  assert.match(ui, /const CACHE_BUILD = new URL\(document\.currentScript\?\.src \|\| location\.href, location\.href\)\.searchParams\.get\('v'\) \|\| '20\.2\.1'/,
     "browser cache compatibility must follow the exact loaded frontend build");
   assert.match(ui, /CACHE_MAX_AGE_MS = 7 \* 24 \* 60 \* 60 \* 1000/,
     "browser placeholders must expire after seven days");

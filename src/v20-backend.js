@@ -5,12 +5,15 @@ import {
   SHORT_WEIGHTS,
 } from "../supabase/functions/_shared/v20-opportunity-policy.js";
 
-const API_VERSION = "20.2";
+const API_VERSION = "20.2.1";
 const MODEL_VERSION = "20.2";
 const PAGE_TTL_MS = 30_000;
 const MARKET_TTL_MS = 60_000;
 const STOCK_TTL_MS = 30_000;
 const PUBLICATION_TTL_MS = 2_000;
+const PROVIDER_CONFIG_TTL_MS = 5 * 60_000;
+const FUGLE_QUOTE_TTL_MS = 5 * 60_000;
+const FUGLE_TIMEOUT_MS = 4_000;
 const MAX_LIMIT = 50;
 const MIN_PUBLIC_CALIBRATION_SAMPLES = 100;
 const MODEL_HORIZONS = Object.freeze({ short: [2, 3, 5, 10], medium: [10, 20, 40] });
@@ -98,6 +101,77 @@ function publicRpcRequest(name, args = {}) {
     method: "POST",
     body: JSON.stringify(args),
   });
+}
+
+function compareVersions(left, right) {
+  const a = String(left || "").split(".").map((part) => Number(part) || 0);
+  const b = String(right || "").split(".").map((part) => Number(part) || 0);
+  for (let index = 0; index < Math.max(a.length, b.length); index += 1) {
+    if ((a[index] || 0) !== (b[index] || 0)) return (b[index] || 0) - (a[index] || 0);
+  }
+  return 0;
+}
+
+async function loadInternalProviderConfig() {
+  if (!marketServiceKey) return {};
+  return cached("v20:provider-config", PROVIDER_CONFIG_TTL_MS, async () => {
+    const { data } = await serviceRequest("rpc/twss_v20_internal_provider_config", {
+      method: "POST",
+      body: "{}",
+    });
+    if (Array.isArray(data)) return cleanObject(data[0]);
+    return cleanObject(data);
+  });
+}
+
+async function loadFugleQuote(symbol) {
+  if (!marketServiceKey || typeof globalThis.fetch !== "function") return null;
+  return cached(`v20:fugle-quote:${symbol}`, FUGLE_QUOTE_TTL_MS, async () => {
+    const config = await loadInternalProviderConfig();
+    const apiKey = String(config.fugleMarketDataApiKey || "").trim();
+    if (!apiKey) return null;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), FUGLE_TIMEOUT_MS);
+    try {
+      const response = await globalThis.fetch(
+        `https://api.fugle.tw/marketdata/v1.0/stock/intraday/quote/${encodeURIComponent(symbol)}`,
+        {
+          cache: "no-store",
+          signal: controller.signal,
+          headers: { accept: "application/json", "x-api-key": apiKey },
+        },
+      );
+      if (!response.ok) return null;
+      const payload = cleanObject(await response.json());
+      const tradeDate = isoDate(payload.date);
+      const close = numeric(payload.lastPrice ?? payload.closePrice);
+      if (!tradeDate || close == null || close <= 0 || String(payload.symbol || "") !== symbol) return null;
+      return {
+        stock: {
+          symbol,
+          name: payload.name || symbol,
+          market: payload.market || null,
+          priceDate: tradeDate,
+        },
+        quote: {
+          tradeDate,
+          close,
+          change: numeric(payload.changePercent),
+          changePoints: numeric(payload.change),
+          open: numeric(payload.openPrice),
+          high: numeric(payload.highPrice),
+          low: numeric(payload.lowPrice),
+          volume: numeric(payload.total?.tradeVolume),
+          value: numeric(payload.total?.tradeValue),
+          source: "Fugle MarketData",
+          isClosed: payload.isClose === true,
+        },
+        fetchedAt: payload.lastUpdated || payload.closeTime || new Date().toISOString(),
+      };
+    } finally {
+      clearTimeout(timer);
+    }
+  }).catch(() => null);
 }
 
 function rpcRow(row = {}) {
@@ -419,6 +493,7 @@ function normalizeRanking(row = {}) {
     : null;
   const rawOpportunityScore = numeric(row.raw_opportunity_score ?? row.opportunity_score);
   const netOpportunityScore = numeric(row.net_opportunity_score ?? row.opportunity_score);
+  const referenceOnly = row.outside_publication === true || row.reference_only === true;
   const forecast = {
     horizon,
     upProbability: calibrated ? calibratedProbability : null,
@@ -439,6 +514,7 @@ function normalizeRanking(row = {}) {
   };
   return {
     runId: numeric(row.run_id),
+    modelVersion: row.model_version || null,
     symbol: String(row.symbol || ""),
     name: row.name || String(row.symbol || ""),
     model,
@@ -474,6 +550,8 @@ function normalizeRanking(row = {}) {
       : row.gate_passed === true,
     publicVisible: row.public_visible !== false,
     researchOnly: row.research_only === true,
+    publicationMembership: !referenceOnly,
+    referenceOnly,
     liquidityGrade: row.liquidity_grade || "unknown",
     opportunityState: row.opportunity_state || null,
     calibrationSampleCount: numeric(row.calibration_sample_count),
@@ -518,7 +596,7 @@ function normalizeRanking(row = {}) {
     inputHash: row.input_hash || null,
     generatedAt: signalGeneratedAt || row.generated_at || row.recorded_at || null,
     updatedAt: signalUpdatedAt || row.updated_at || row.recorded_at || row.generated_at || null,
-    legacyReference: false,
+    legacyReference: referenceOnly,
   };
 }
 
@@ -1289,12 +1367,108 @@ async function loadSignals(symbol, publication = {}) {
     .map(normalizeRanking);
 }
 
-function modelStateFor(model, signals, publication, queryFailed = false) {
+async function loadReferenceSignals(symbol, publication = {}) {
+  if (!marketServiceKey) return [];
+  const params = new URLSearchParams({
+    select: "*",
+    symbol: `eq.${symbol}`,
+    order: "signal_date.desc,model_version.desc,model_key.asc,horizon_days.asc",
+    limit: "80",
+  });
+  if (publication.publishedDataDate) params.set("signal_date", `lte.${publication.publishedDataDate}`);
+  const { data } = await serviceRequest(`v20_model_signals?${params}`);
+  const rows = Array.isArray(data) ? data : [];
+  const publicRows = rows.filter((row) => {
+    const horizons = MODEL_HORIZONS[row.model_key];
+    return Array.isArray(horizons) && horizons.includes(Number(row.horizon_days))
+      && row.research_only !== true;
+  });
+  if (!publicRows.length) return [];
+  const candidates = [...new Set(publicRows.map((row) => `${isoDate(row.signal_date)}|${row.model_version || ""}`))]
+    .map((key) => {
+      const [date, version] = key.split("|");
+      return { date, version };
+    })
+    .sort((left, right) => String(right.date).localeCompare(String(left.date))
+      || compareVersions(left.version, right.version));
+  const selected = candidates[0];
+  return publicRows
+    .filter((row) => isoDate(row.signal_date) === selected.date
+      && String(row.model_version || "") === selected.version)
+    .map((row) => normalizeRanking({
+      ...row,
+      outside_publication: true,
+      source_manifest: {
+        ...cleanObject(row.source_manifest),
+        referenceOnly: true,
+        referenceReason: "outside_current_publication",
+      },
+    }));
+}
+
+async function loadLatestStockSnapshot(symbol, publication = {}) {
+  if (!marketServiceKey) return null;
+  const params = new URLSearchParams({
+    select: "symbol,trade_date,close,change_pct,volume,open,high,low,trade_value,market,industry,instrument_type,source,source_dates,raw_data,updated_at",
+    symbol: `eq.${symbol}`,
+    order: "trade_date.desc",
+    limit: "1",
+  });
+  if (publication.publishedDataDate) params.set("trade_date", `lte.${publication.publishedDataDate}`);
+  const { data } = await serviceRequest(`stock_snapshots?${params}`);
+  const row = Array.isArray(data) ? data[0] : null;
+  if (!row) return null;
+  const raw = cleanObject(row.raw_data);
+  const tradeDate = isoDate(row.trade_date);
+  const close = numeric(row.close);
+  return {
+    stock: {
+      symbol,
+      name: raw.name || symbol,
+      market: row.market || raw.market || null,
+      industry: row.industry || raw.industry || null,
+      instrumentType: row.instrument_type || raw.instrumentType || null,
+      priceDate: tradeDate,
+      close,
+    },
+    quote: tradeDate && close != null && close > 0 ? {
+      tradeDate,
+      close,
+      change: numeric(row.change_pct),
+      open: numeric(row.open),
+      high: numeric(row.high),
+      low: numeric(row.low),
+      volume: numeric(row.volume),
+      value: numeric(row.trade_value),
+      source: row.source || "TWSE/TPEx stored snapshot",
+    } : null,
+    sourceDates: cleanObject(row.source_dates),
+    fetchedAt: row.updated_at || null,
+  };
+}
+
+function newestQuote(...quotes) {
+  return quotes.filter((quote) => quote?.tradeDate && finite(quote.close))
+    .sort((left, right) => String(right.tradeDate).localeCompare(String(left.tradeDate)))[0] || null;
+}
+
+function modelStateFor(model, signals, publication, options = {}) {
   const label = model === "short" ? "短期" : "中期";
   const modelSignals = signals.filter((row) => row.model === model);
   const availableDataDate = modelSignals.map((row) => row.dataDate).filter(Boolean).sort().at(-1) || null;
   const requestedDataDate = publication.publishedDataDate || null;
   if (modelSignals.length) {
+    if (options.referenceOnly) {
+      const modelVersion = modelSignals.map((row) => row.modelVersion).filter(Boolean)
+        .sort(compareVersions)[0] || "前一模型";
+      return {
+        status: "outside_publication",
+        requestedDataDate,
+        availableDataDate,
+        modelVersion,
+        reason: `此股票不在目前不可修改推薦批次內；以下僅顯示 ${availableDataDate || "最近交易日"}、模型 ${modelVersion} 的參考分析，不代表本批次推薦。`,
+      };
+    }
     if (requestedDataDate && availableDataDate !== requestedDataDate) {
       return {
         status: "previous_date",
@@ -1310,7 +1484,7 @@ function modelStateFor(model, signals, publication, queryFailed = false) {
       reason: `${label}模型分數與條件已產生；預測機率是否公開依各期間的校準狀態判定。`,
     };
   }
-  if (queryFailed) {
+  if (options.queryFailed) {
     return {
       status: "query_failed",
       requestedDataDate,
@@ -1333,13 +1507,25 @@ export async function readV20Stock(symbol, options = {}) {
   if (!/^[0-9]{4,6}[A-Z]?$/.test(normalized)) throw new V20PublicError("invalid_symbol");
   const publication = options.publication || await loadPublicationState();
   const signalCacheKey = `v20:stock:${normalized}:${publicationCacheIdentity(publication)}`;
-  const signalsResult = await Promise.resolve(
-    cached(signalCacheKey, STOCK_TTL_MS, () => loadSignals(normalized, publication)),
-  ).then(
-    (value) => ({ status: "fulfilled", value }),
-    (reason) => ({ status: "rejected", reason }),
-  );
-  const signals = signalsResult.status === "fulfilled" ? signalsResult.value : [];
+  const [signalsResult, snapshotResult, fugleResult] = await Promise.all([
+    Promise.resolve(cached(signalCacheKey, STOCK_TTL_MS, () => loadSignals(normalized, publication))).then(
+      (value) => ({ status: "fulfilled", value }),
+      (reason) => ({ status: "rejected", reason }),
+    ),
+    loadLatestStockSnapshot(normalized, publication).catch(() => null),
+    loadFugleQuote(normalized).catch(() => null),
+  ]);
+  const immutableSignals = signalsResult.status === "fulfilled" ? signalsResult.value : [];
+  const referenceSignals = immutableSignals.length
+    ? []
+    : await cached(
+      `v20:stock-reference:${normalized}:${publication.publishedDataDate || "latest"}`,
+      STOCK_TTL_MS,
+      () => loadReferenceSignals(normalized, publication),
+    ).catch(() => []);
+  const signals = immutableSignals.length ? immutableSignals : referenceSignals;
+  const referenceOnly = !immutableSignals.length && referenceSignals.length > 0;
+  const publicationMember = immutableSignals.length > 0;
   const signalCacheStale = memoryCache.get(signalCacheKey)?.stale === true;
   const signalsPreviousDate = Boolean(
     publication.publishedDataDate && signals.length && signals.some((row) => row.dataDate !== publication.publishedDataDate),
@@ -1348,30 +1534,47 @@ export async function readV20Stock(symbol, options = {}) {
     ...(signalsResult.status === "rejected" ? ["v20_model_signals"] : []),
     ...(signalCacheStale ? ["v20_model_signals_cache_stale"] : []),
     ...(signalsPreviousDate ? ["v20_model_signals_previous_date"] : []),
-    ...(!signals.length ? ["v20_model_not_ready"] : []),
+    ...(referenceOnly ? ["outside_current_publication"] : []),
+    ...(!signals.length ? ["v20_model_not_generated"] : []),
   ];
-  const sourceDates = sourceDatesFromRows(signals);
+  const sourceDates = {
+    ...cleanObject(snapshotResult?.sourceDates),
+    ...sourceDatesFromRows(signals),
+    ...(fugleResult?.quote?.tradeDate ? { quote: fugleResult.quote.tradeDate } : {}),
+  };
   const dates = signals.map((row) => row.dataDate).filter(Boolean).sort();
   const completenessValues = signals.map((row) => row.completeness).filter(finite);
   const completeness = completenessValues.length
     ? completenessValues.reduce((sum, value) => sum + Number(value), 0) / completenessValues.length
     : 0;
-  const stock = signals[0] || { symbol: normalized, name: normalized };
+  const stock = {
+    symbol: normalized,
+    name: normalized,
+    ...cleanObject(snapshotResult?.stock),
+    ...cleanObject(signals[0]),
+    ...cleanObject(fugleResult?.stock),
+  };
   const quotes = signals.map((row) => row.quote).filter((value) =>
     value?.tradeDate && finite(value.close));
   const quoteSignatures = new Set(quotes.map((value) => JSON.stringify(value)));
   const quoteConflict = quoteSignatures.size > 1;
   if (quoteConflict) degraded.push("immutable_quote_conflict");
-  const quote = quoteConflict ? null : quotes[0] || null;
+  const immutableQuote = quoteConflict ? null : quotes[0] || null;
+  const quote = newestQuote(fugleResult?.quote, snapshotResult?.quote, immutableQuote);
+  if (!quote) degraded.push("quote_unavailable");
   const tradeDate = quote?.tradeDate
     || signals.map((row) => row.tradeDate).filter(Boolean).sort().at(-1)
     || null;
   return {
     ...publicMeta({
-      dataState: signals.length ? (degraded.length ? "partial" : "complete") : "error",
+      dataState: signals.length || quote ? (degraded.length ? "partial" : "complete") : "error",
       dataDate: publication.publishedDataDate || dates.at(-1),
       sourceDates,
-      fetchedAt: signals.map((row) => row.updatedAt).filter(Boolean).sort().at(-1) || null,
+      fetchedAt: [
+        ...signals.map((row) => row.updatedAt),
+        snapshotResult?.fetchedAt,
+        fugleResult?.fetchedAt,
+      ].filter(Boolean).sort().at(-1) || null,
       completeness,
       degraded,
       publication,
@@ -1385,6 +1588,21 @@ export async function readV20Stock(symbol, options = {}) {
     pageUpdatedAt: new Date().toISOString(),
     stock,
     quote,
+    quoteState: {
+      status: quote ? "ready" : "unavailable",
+      source: quote?.source || null,
+      dataDate: quote?.tradeDate || null,
+      independentFromModelPublication: Boolean(quote && quote.tradeDate !== publication.publishedDataDate),
+    },
+    publicationCoverage: {
+      member: publicationMember,
+      status: publicationMember ? "included" : referenceOnly ? "outside_current_publication" : "model_not_generated",
+      runId: publication.runId || null,
+      referenceSignalsUsed: referenceOnly,
+      referenceModelVersion: referenceOnly
+        ? signals.map((row) => row.modelVersion).filter(Boolean).sort(compareVersions)[0] || null
+        : null,
+    },
     short: signals.filter((row) => row.model === "short"),
     medium: signals.filter((row) => row.model === "medium"),
     analysis: null,
@@ -1395,8 +1613,14 @@ export async function readV20Stock(symbol, options = {}) {
     },
     relatedStocks: [],
     modelStates: {
-      short: modelStateFor("short", signals, publication, signalsResult.status === "rejected"),
-      medium: modelStateFor("medium", signals, publication, signalsResult.status === "rejected"),
+      short: modelStateFor("short", signals, publication, {
+        queryFailed: signalsResult.status === "rejected",
+        referenceOnly,
+      }),
+      medium: modelStateFor("medium", signals, publication, {
+        queryFailed: signalsResult.status === "rejected",
+        referenceOnly,
+      }),
     },
     legacyReference: null,
   };

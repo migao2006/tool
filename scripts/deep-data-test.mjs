@@ -278,7 +278,17 @@ try {
   assert.equal(stored.institutional.days, 20);
   assert.equal(stored.margin.days, 20);
   assert.equal(stored.sourceDiagnostics.lending.status, "empty-no-history");
+  assert.equal(stored.sourceDiagnostics.lending.retryable, false);
   assert.match(stored.source, /Supabase/);
+
+  const depositaryReceipt = buildDeepDataFromStoredSources("9105", "股票", "上市", {
+    currentQuote: { name: "泰金寶-DR", priceDate: "2026-07-16", close: 9 },
+    expectedFinancialPeriod: "2026 Q1",
+    sourceData: { price_history: storedPriceHistory, financials: [], margin: [] },
+  });
+  assert.equal(depositaryReceipt.sourceDiagnostics.income.status, "source-not-applicable");
+  assert.equal(depositaryReceipt.sourceDiagnostics.income.retryable, false);
+  assert.equal(depositaryReceipt.sourceDiagnostics.margin.retryable, false);
 } finally {
   globalThis.fetch = originalFetch;
 }

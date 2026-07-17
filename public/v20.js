@@ -6,8 +6,8 @@
   globalThis.twssV20Active = true;
 
   const API = '/api/v20';
-  const CACHE_SCHEMA = 'v20.2-immutable-1';
-  const CACHE_BUILD = new URL(document.currentScript?.src || location.href, location.href).searchParams.get('v') || '20.2.0';
+  const CACHE_SCHEMA = 'v20.2-immutable-2';
+  const CACHE_BUILD = new URL(document.currentScript?.src || location.href, location.href).searchParams.get('v') || '20.2.1';
   const CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
   // Deliberately do not reuse pre-immutable v20.1 cache entries, which may
   // contain mutable v19 enrichment from an older frontend release.
@@ -36,7 +36,7 @@
   const probability = value => num(value) == null ? '資料不足' : `${Number(value).toFixed(1)}%`;
   const safeArray = value => Array.isArray(value) ? value : [];
   const first = (...values) => values.find(value => value != null && value !== '');
-  const supportedPayload = payload => String(payload?.version || '') === '20.2';
+  const supportedPayload = payload => ['20.2', '20.2.1'].includes(String(payload?.version || ''));
   const strategyLabels = {
     momentum_breakout: '動能突破',
     trend_pullback: '趨勢拉回',
@@ -191,7 +191,21 @@
     const pending = num(payload?.enrichmentPending);
     const [label, className] = stateLabels[state] || stateLabels.partial;
     const publicationNote = payload?.publicationPhase === 'complete' ? ' · 推薦批次已封存' : '';
-    return `<div class="v20-data-status ${className}" role="status"><span class="v20-status-dot"></span><div><b>${label}</b><small>資料日期 ${esc(date)}${publicationNote}${pending > 0 ? ` · 背景待補 ${displayNumber(pending, 0)} 筆` : ''}</small></div>${state === 'refreshing' || state === 'enriching' ? '<span class="spinner" aria-hidden="true"></span>' : ''}</div>`;
+    const sourceLabels = {
+      turnover_baseline: `成交值基準建立中 ${displayNumber(payload?.market?.breadth?.all?.turnoverBaselineSessions, 0)}／5`,
+      international_context: '國際市場快取',
+      global_market_context: '國際市場快取',
+      outside_current_publication: '非本批次推薦標的',
+      v20_model_not_generated: '模型尚未產生',
+      quote_unavailable: '最新行情',
+      immutable_market_context_not_ready: '市場快照',
+    };
+    const missing = [...new Set(safeArray(payload?.degradedSources))]
+      .map(source => sourceLabels[source] || (/^global_/.test(source) ? '國際市場指標' : source))
+      .filter((source, index, all) => source && all.indexOf(source) === index)
+      .slice(0, 3);
+    const missingNote = missing.length ? ` · 待補：${missing.join('、')}` : '';
+    return `<div class="v20-data-status ${className}" role="status"><span class="v20-status-dot"></span><div><b>${label}</b><small>資料日期 ${esc(date)}${publicationNote}${pending > 0 ? ` · 背景待補 ${displayNumber(pending, 0)} 筆` : ''}${esc(missingNote)}</small></div>${state === 'refreshing' || state === 'enriching' ? '<span class="spinner" aria-hidden="true"></span>' : ''}</div>`;
   }
 
   function pageHero(eyebrow, title, description, status = '') {
@@ -228,13 +242,20 @@
     const currentValue = value => usableMarketValue(value)
       && expectedDate !== ''
       && dateKey(first(value?.dataDate, value?.date)) === expectedDate;
+    const recentGlobalValue = value => {
+      if (!usableMarketValue(value)) return false;
+      const observed = Date.parse(`${dateKey(first(value?.dataDate, value?.date))}T00:00:00Z`);
+      const expected = Date.parse(`${expectedDate}T00:00:00Z`);
+      return Number.isFinite(observed) && Number.isFinite(expected)
+        && observed <= expected && expected - observed <= 4 * 86400000;
+    };
     const resolved = new Set([
       currentValue(market.taiex) && 'taiex_official_index',
       currentValue(market.tpex) && 'tpex_official_index',
       currentValue(market.txFutures) && 'tx_futures',
     ].filter(Boolean));
     const context = market.globalContext || {};
-    const resolvedGlobal = globalIndicatorDefinitions.filter(([keys]) => keys.some(key => currentValue(context[key])));
+    const resolvedGlobal = globalIndicatorDefinitions.filter(([keys]) => keys.some(key => recentGlobalValue(context[key])));
     resolvedGlobal.forEach(([keys]) => keys.forEach(key => resolved.add(`global_${key}`)));
     if (resolvedGlobal.length === globalIndicatorDefinitions.length) {
       resolved.add('international_context');
@@ -348,7 +369,7 @@
     return `<article class="card v20-model-card ${reference ? 'reference' : ''}" data-v20-detail="${esc(row.symbol)}">
       <div class="v20-card-head"><span class="v20-rank">${esc(rank)}</span><div class="v20-card-name"><b>${esc(row.name || row.symbol)}</b><small>${esc(row.symbol)} · ${esc(first(row.market, row.group, '市場待補'))}</small></div><div class="v20-card-score"><small>${reference ? '舊資料參考' : '機會分數'}</small><strong>${reference ? '—' : displayNumber(rawOpportunityValue(row), 0)}</strong></div></div>
       <p class="v20-summary">${esc(localizeStrategyText(first(row.summary, safeArray(row.reasons)[0], reference ? 'v20 模型建立中，暫不提供推測分數。' : '分析原因待補')))}</p>
-      <div class="v20-chip-row"><span>${esc(strategyLabel(row.strategy))}</span><span>風險 ${displayNumber(row.riskScore, 0)}</span><span>資料完整度 ${probability(row.completeness)}</span><span>資料 ${esc(first(row.dataDate, '日期待補'))}</span></div>
+      <div class="v20-chip-row"><span>${esc(strategyLabel(row.strategy))}</span><span>風險 ${displayNumber(row.riskScore, 0)}</span><span>模型輸入完整度 ${probability(row.completeness)}</span><span>資料 ${esc(first(row.dataDate, '日期待補'))}</span></div>
       ${blendBreakdown(row)}
       <div class="v20-forecast-row"><div><small>成本後機會值</small><b>${netValue == null ? '尚未產生' : displayNumber(netValue, 1)}</b></div><div><small>預估交易成本</small><b>${cost == null ? '尚未產生' : displayPercent(-Math.abs(cost), 3)}</b></div><div><small>校準狀態</small><b>${validation.publishable ? `已驗證 · ${displayNumber(validation.samples, 0)} 筆` : validation.samples == null ? '樣本數待補' : `累積中 · ${displayNumber(validation.samples, 0)} 筆`}</b></div></div>
       ${validation.publishable ? `<div class="v20-inline-note"><b>歷史驗證：</b>${validationHorizon}成本後正報酬比例 ${probability(forecast.upProbability)}；這是相似條件歷史結果，不是未來保證。</div>` : `<div class="v20-inline-note"><b>不公開機率：</b>${esc(hiddenForecastReason(validation))}</div>`}
@@ -626,7 +647,7 @@
 
   function modelStateNotice(state) {
     if (!state || state.status === 'ready') return '';
-    return `<div class="v20-inline-note"><b>${state.status === 'query_failed' ? '模型查詢失敗' : state.status === 'previous_date' ? '使用前一交易日模型' : '模型尚未完成'}：</b>${esc(state.reason || '尚未取得具體狀態。')}</div>`;
+    return `<div class="v20-inline-note"><b>${state.status === 'query_failed' ? '模型查詢失敗' : state.status === 'previous_date' ? '使用前一交易日模型' : state.status === 'outside_publication' ? '非本批次推薦' : '模型尚未完成'}：</b>${esc(state.reason || '尚未取得具體狀態。')}</div>`;
   }
 
   function detailResearchSections(detail) {
@@ -649,7 +670,7 @@
       const risks = safeArray(signal.risks);
       const forecastBlock = validation.publishable
         ? `<div class="v20-forecast-row"><div><small>歷史正報酬比例</small><b>${probability(forecast.upProbability)}</b></div><div><small>歷史成本後平均</small><b>${displayPercent(forecast.expectedNetReturn)}</b></div><div><small>樣本／完整度</small><b>${displayNumber(validation.samples, 0)}／${probability(signal.completeness)}</b></div></div>`
-        : `<div class="v20-inline-note"><b>機率尚未公開：</b>${esc(hiddenForecastReason(validation))}目前仍可參考機會分數、風險、因子與交易條件。</div><div class="v20-forecast-row"><div><small>校準狀態</small><b>${validation.samples == null ? '樣本數待補' : `累積 ${displayNumber(validation.samples, 0)} 筆`}</b></div><div><small>模型信心</small><b>${probability(signal.confidence)}</b></div><div><small>資料完整度</small><b>${probability(signal.completeness)}</b></div></div>`;
+        : `<div class="v20-inline-note"><b>機率尚未公開：</b>${esc(hiddenForecastReason(validation))}目前仍可參考機會分數、風險、因子與交易條件。</div><div class="v20-forecast-row"><div><small>校準狀態</small><b>${validation.samples == null ? '樣本數待補' : `累積 ${displayNumber(validation.samples, 0)} 筆`}</b></div><div><small>模型信心</small><b>${probability(signal.confidence)}</b></div><div><small>模型輸入完整度</small><b>${probability(signal.completeness)}</b></div></div>`;
       const calibratedRanges = validation.publishable ? `<span>歷史 P10／P50／P90 <b>${displayPercent(range.p10)}／${displayPercent(range.p50)}／${displayPercent(range.p90)}</b></span><span>MFE／MAE <b>${displayPercent(forecast.averageMfe)}／${displayPercent(forecast.averageMae)}</b></span>` : '';
       return `<article class="card v20-signal-card"><div class="head"><div><span class="tag info">${signal.horizon} 日 · ${esc(first(signal.dataDate, '日期待補'))}</span><h3>${esc(strategyLabel(signal.strategy))}</h3></div><div class="v20-card-score"><small>機會／風險</small><strong>${displayNumber(rawOpportunityValue(signal), 0)}<i>／${displayNumber(signal.riskScore, 0)}</i></strong></div></div>${forecastBlock}${scoreExplanationGrid(signal)}${marketImpactSummary(signal)}${reasons.length ? `<h4>為什麼值得注意</h4><ul class="v20-detail-list">${reasons.slice(0, 5).map(item => `<li>${esc(localizeStrategyText(item))}</li>`).join('')}</ul>` : `<p><b>為什麼值得注意：</b>${esc(localizeStrategyText(first(signal.summary, '尚未整理出已驗證的正面原因')))}</p>`}${risks.length ? `<h4>主要風險</h4><ul class="v20-detail-list v20-risk-text">${risks.slice(0, 6).map(item => `<li>${esc(localizeStrategyText(item))}</li>`).join('')}</ul>` : '<p class="v20-risk-text"><b>主要風險：</b>尚未發現額外風險，但仍須遵守停損與失效條件。</p>'}${gateSummary(signal)}<div class="v20-plan-grid">${calibratedRanges}<span>布局區 <b>${displayNumber(signal.tradePlan?.entryLow, 2)}–${displayNumber(signal.tradePlan?.entryHigh, 2)}</b></span><span>突破確認價 <b>${displayNumber(signal.tradePlan?.breakoutPrice, 2)}</b></span><span>不追價價格 <b>${displayNumber(signal.tradePlan?.noChasePrice, 2)}</b></span><span>停損 <b>${displayNumber(signal.tradePlan?.stopLoss, 2)}</b></span><span>第一／第二停利 <b>${displayNumber(signal.tradePlan?.takeProfit1, 2)}／${displayNumber(signal.tradePlan?.takeProfit2, 2)}</b></span><span>風報比／持有期 <b>${displayNumber(signal.tradePlan?.riskRewardRatio, 2)}／${displayNumber(signal.tradePlan?.recommendedHoldingDays, 0)} 日</b></span></div>${invalidations.length ? `<h4>失效條件</h4><ul class="v20-detail-list">${invalidations.slice(0, 6).map(item => `<li>${esc(localizeStrategyText(item))}</li>`).join('')}</ul>` : ''}<div class="v20-action">${esc(signal.recommendedAction || '資料不足')}</div></article>`;
     }).join('')}</div></section>`;
@@ -671,10 +692,16 @@
     const quoteDate = first(quote?.tradeDate, detail?.tradeDate);
     const quoteCaption = num(quoteClose) == null
       ? `此批次未保存收盤價${quoteDate ? ` · 行情日期 ${quoteDate}` : ''}`
-      : `最新盤後價格 · ${first(quoteDate, '日期待補')}`;
+      : `${detail?.quoteState?.independentFromModelPublication ? '最新行情（與模型批次分開）' : '批次行情'} · ${first(quoteDate, '日期待補')}`;
+    const coverage = detail?.publicationCoverage || {};
+    const coverageNotice = coverage.status === 'outside_current_publication'
+      ? '<div class="v20-inline-note"><b>推薦批次範圍：</b>此股票不在目前不可修改推薦清單；畫面保留最新行情，模型區僅顯示已標明版本的參考分析。</div>'
+      : coverage.status === 'model_not_generated'
+        ? '<div class="v20-inline-note"><b>模型狀態：</b>已取得行情，但尚未產生可用的短期或中期分析。</div>'
+        : '';
     return `<div class="modal"><div class="sheet v20-detail-sheet"><button class="sheet-close" type="button" aria-label="關閉">×</button><div class="v20-detail-head"><div><span class="v20-eyebrow">V20 QUANT ANALYSIS</span><h2>${esc(name)} <small>${esc(symbol)}</small></h2><p>${esc(first(stock?.market, stock?.industry, '市場資料待補'))} · 資料日期 ${esc(first(detail?.dataDate, stock?.priceDate, S.date, '待補'))}</p></div><button class="btn secondary" type="button" data-watch="${esc(symbol)}">${isWatched(symbol) ? '✓ 已自選' : '＋ 自選'}</button></div>
       ${statusBanner(detail || {}, loading ? 'refreshing' : detail?.dataState, error)}
-      <div class="v20-quote"><div><small>${esc(quoteCaption)}</small><strong>${displayNumber(quoteClose, 2)}</strong></div><div><small>當日漲跌</small><b class="${num(quoteChange) > 0 ? 'up' : num(quoteChange) < 0 ? 'down' : 'muted'}">${displayPercent(quoteChange, 2)}</b></div><div><small>資料完整度</small><b>${probability(detail?.completeness)}</b></div></div>
+      ${coverageNotice}<div class="v20-quote"><div><small>${esc(quoteCaption)}</small><strong>${displayNumber(quoteClose, 2)}</strong></div><div><small>當日漲跌</small><b class="${num(quoteChange) > 0 ? 'up' : num(quoteChange) < 0 ? 'down' : 'muted'}">${displayPercent(quoteChange, 2)}</b></div><div><small>模型輸入完整度</small><b>${probability(detail?.completeness)}</b></div></div>
       <div class="card v20-factor-grid"><div><small>交易日期</small><b>${esc(first(quoteDate, '此批次未保存價格日期'))}</b></div><div><small>分析資料日期</small><b>${esc(first(detail?.analysisDataDate, '待補'))}</b></div><div><small>新聞與公告</small><b>${esc(first(detail?.newsPublishedAt?.slice?.(0, 16), detail?.newsState?.reason, '此批次未收錄'))}</b></div><div><small>分析產生時間</small><b>${esc(first(detail?.analysisGeneratedAt?.slice?.(0, 16), '待補'))}</b></div></div>
       ${signalSection(safeArray(detail?.short), 'short', detail?.modelStates?.short)}${signalSection(safeArray(detail?.medium), 'medium', detail?.modelStates?.medium)}${detailResearchSections(detail)}${positionCalculator(detail)}
       ${safeArray(detail?.news).length ? `<section><h3>重要新聞與公告</h3><div class="card v20-news-list">${detail.news.slice(0, 8).map(item => `<article><div><b>${esc(item.title || '未命名公告')}</b><small>${esc(first(item.source, '公開來源'))} · ${esc(first(item.eventDate, item.publishedAt?.slice?.(0, 10), '日期待補'))}</small></div></article>`).join('')}</div></section>` : ''}

@@ -637,17 +637,22 @@ function reusableDiagnostic(analysis: Record<string, any> | null | undefined, ke
   return ["ok", "reused"].includes(String(analysis?.sourceDiagnostics?.[key]?.status || ""));
 }
 
-function analysisRepairReasons(deep: Record<string, any>, group: Group) {
+function analysisRepairReasons(deep: Record<string, any>, group: Group, stock: Record<string, any> = {}) {
   if (group === "etf") return [];
+  const isDepositaryReceipt = /^91\d{2}$/.test(String(stock.symbol || deep?.symbol || "")) ||
+    /(?:-|－)DR$/i.test(String(stock.name || ""));
   const essential = ["revenue", "income", "balance", "cashflow", "institutional", "margin"];
   const reasons = essential.filter((key) => {
+    if (key === "margin") return false;
+    if (isDepositaryReceipt && ["income", "balance", "cashflow"].includes(key)) return false;
     const diagnostic = deep?.sourceDiagnostics?.[key];
     return diagnostic?.retryable === true &&
-      ["empty-no-history", "stale-source-period"].includes(String(diagnostic?.status || ""));
+      String(diagnostic?.status || "") === "stale-source-period";
   });
   const coverage = deep?.financial?.sourceCoverage || {};
   const financialDiagnostics = ["income", "balance", "cashflow"].map((key) => deep?.sourceDiagnostics?.[key]);
-  if (["incomeRows", "balanceRows", "cashflowRows"].some((key) => Number(coverage[key]) <= 0) &&
+  if (!isDepositaryReceipt &&
+      ["incomeRows", "balanceRows", "cashflowRows"].some((key) => Number(coverage[key]) <= 0) &&
       financialDiagnostics.some((diagnostic) => diagnostic?.retryable === true)) {
     reasons.push("financial-source-coverage");
   }
@@ -1285,7 +1290,7 @@ function persistenceRows(
     margin: deep.margin?.date || stock.source_dates?.margin || null,
     lending: deep.lending?.date || null,
   };
-  const repairReasons = analysisRepairReasons(deep, group);
+  const repairReasons = analysisRepairReasons(deep, group, cacheStock);
   return {
     cache: {
       symbol: String(stock.symbol),
@@ -1501,7 +1506,7 @@ async function persistDeep(stock: Record<string, any>, group: Group, deep: Recor
       },
     );
   }
-  const repairReasons = analysisRepairReasons(deep, group);
+  const repairReasons = analysisRepairReasons(deep, group, cacheStock);
   await upsert("stock_analysis_cache", [{
     symbol,
     group_name: group,

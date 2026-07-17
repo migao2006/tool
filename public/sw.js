@@ -1,15 +1,15 @@
-const CACHE='twss-v20.2.0';
+const CACHE='twss-v20.2.1';
 const HOME_SNAPSHOT_PATH='/api/v20/home';
 const HOME_SNAPSHOT_URL=new URL(HOME_SNAPSHOT_PATH,self.location.origin).href;
 const STATIC=[
   '/',
-  '/app.js?v=20.2.0',
-  '/patch.js?v=20.2.0',
-  '/smart.js?v=20.2.0',
-  '/v20.js?v=20.2.0',
-  '/styles.css?v=20.2.0',
-  '/manifest.webmanifest?v=20.2.0',
-  '/icon.svg?v=20.2.0'
+  '/app.js?v=20.2.1',
+  '/patch.js?v=20.2.1',
+  '/smart.js?v=20.2.1',
+  '/v20.js?v=20.2.1',
+  '/styles.css?v=20.2.1',
+  '/manifest.webmanifest?v=20.2.1',
+  '/icon.svg?v=20.2.1'
 ];
 
 async function putSuccessful(cache,key,response){

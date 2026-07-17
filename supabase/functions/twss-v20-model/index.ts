@@ -446,6 +446,26 @@ async function loadMarketContext(dataDate: string) {
       `&model_version=eq.${encodeURIComponent(V20_MODEL_VERSION)}&limit=1`,
   );
   const current = Array.isArray(existing) ? existing[0] || null : null;
+  const currentGlobal = current?.global_context && typeof current.global_context === "object"
+    ? current.global_context
+    : {};
+  let inheritedGlobal: Record<string, unknown> = currentGlobal?.available === true ? currentGlobal : {};
+  if (inheritedGlobal.available !== true) {
+    const { data: candidates } = await rest(
+      "v20_market_context?select=data_date,global_context,source_dates,updated_at" +
+        `&data_date=lte.${encodeURIComponent(dataDate)}` +
+        "&order=data_date.desc,updated_at.desc&limit=40",
+    );
+    const currentTime = Date.parse(`${dataDate}T00:00:00Z`);
+    const match = (Array.isArray(candidates) ? candidates : []).find((row) => {
+      const global = row?.global_context;
+      const globalDate = String(global?.dataDate || row?.source_dates?.global || row?.data_date || "");
+      const observedTime = Date.parse(`${globalDate}T00:00:00Z`);
+      return global?.available === true && Number.isFinite(observedTime)
+        && observedTime <= currentTime && currentTime - observedTime <= 4 * 86400000;
+    });
+    if (match?.global_context) inheritedGlobal = match.global_context;
+  }
 
   const needsOfficial = !current || [
     "taiex_official_index",
@@ -475,9 +495,20 @@ async function loadMarketContext(dataDate: string) {
   }
 
   if (current) {
-    if (!needsOfficial) return current;
+    const needsGlobal = currentGlobal?.available !== true && inheritedGlobal.available === true;
+    if (!needsOfficial && !needsGlobal) return current;
+    const globalReady = needsGlobal ? {
+      ...current,
+      global_context: inheritedGlobal,
+      source_dates: {
+        ...(current.source_dates || {}),
+        global: inheritedGlobal.dataDate || current.source_dates?.global || null,
+      },
+      degraded_sources: (Array.isArray(current.degraded_sources) ? current.degraded_sources : [])
+        .filter((source: string) => source !== "international_context" && !source.startsWith("global_")),
+    } : current;
     const enriched = {
-      ...enrichMarketContextWithOfficial(current, official),
+      ...enrichMarketContextWithOfficial(globalReady, official),
       fetched_at: now(),
     };
     await rest("v20_market_context?on_conflict=data_date,model_version", {
@@ -512,7 +543,7 @@ async function loadMarketContext(dataDate: string) {
   const priorMarketContexts = priorTurnoverContexts(priorContextResponse.data);
   const context = {
     ...enrichMarketContextWithOfficial(
-      buildMarketContext(snapshots, dataDate, {}, priorMarketContexts),
+      buildMarketContext(snapshots, dataDate, inheritedGlobal, priorMarketContexts),
       official,
     ),
     fetched_at: now(),

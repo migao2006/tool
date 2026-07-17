@@ -1596,6 +1596,11 @@ export function buildDeepDataFromStoredSources(
     return Array.isArray(value) ? value : [];
   };
   const isEtf = instrumentType === "ETF" || ETF_SYMBOL.test(symbol);
+  const candidateName = String(
+    options.currentQuote?.name || sourceData.current_quote?.name
+    || sourceData.currentQuote?.name || options.reuse?.stock?.name || "",
+  );
+  const isDepositaryReceipt = /^91\d{2}$/.test(symbol) || /(?:-|－)DR$/i.test(candidateName);
   const priceRows = rows("price_history", "priceHistory").map((row) => ({
     date: row.trade_date ?? row.tradeDate ?? row.date,
     open: row.open,
@@ -1692,12 +1697,12 @@ export function buildDeepDataFromStoredSources(
   Object.assign(output.sourceDiagnostics, {
     holdings: diagnostic("holdings", "Stored TDCC holdings", output.holdings ? 1 : 0, false),
     revenue: diagnostic("stock_monthly_revenues", "Supabase stock_monthly_revenues", normalizedRevenue.length),
-    income: diagnostic("stock_quarterly_financials", "Stored income summary", output.financial?.sourceCoverage?.incomeRows || 0),
-    balance: diagnostic("stock_quarterly_financials", "Stored balance summary", output.financial?.sourceCoverage?.balanceRows || 0),
-    cashflow: diagnostic("stock_quarterly_financials", "Stored cash-flow summary", output.financial?.sourceCoverage?.cashflowRows || 0),
+    income: diagnostic("stock_quarterly_financials", "Stored income summary", output.financial?.sourceCoverage?.incomeRows || 0, !isDepositaryReceipt),
+    balance: diagnostic("stock_quarterly_financials", "Stored balance summary", output.financial?.sourceCoverage?.balanceRows || 0, !isDepositaryReceipt),
+    cashflow: diagnostic("stock_quarterly_financials", "Stored cash-flow summary", output.financial?.sourceCoverage?.cashflowRows || 0, !isDepositaryReceipt),
     institutional: diagnostic("stock_institutional_flows", "Supabase stock_institutional_flows", storedInstitutional.length),
-    margin: diagnostic("stock_margin_history", "Supabase stock_margin_history", storedMargin.length),
-    lending: diagnostic("stock_lending_history", "Supabase stock_lending_history", storedLending.length),
+    margin: diagnostic("stock_margin_history", "Supabase stock_margin_history", storedMargin.length, false),
+    lending: diagnostic("stock_lending_history", "Supabase stock_lending_history", storedLending.length, false),
   });
   if (options.expectedRevenuePeriod &&
       (!output.revenue?.period || output.revenue.period < options.expectedRevenuePeriod)) {
@@ -1710,7 +1715,7 @@ export function buildDeepDataFromStoredSources(
     };
     output.missing.push(`最新月營收期別落後（來源 ${output.revenue?.period || "無"}／應為 ${options.expectedRevenuePeriod}）`);
   }
-  if (options.expectedFinancialPeriod &&
+  if (!isDepositaryReceipt && options.expectedFinancialPeriod &&
       (!output.financial?.period || output.financial.period < options.expectedFinancialPeriod)) {
     for (const key of ["income", "balance", "cashflow"]) {
       output.sourceDiagnostics[key] = {
@@ -1722,6 +1727,15 @@ export function buildDeepDataFromStoredSources(
       };
     }
     output.missing.push(`最新財報期別落後（來源 ${output.financial?.period || "無"}／應為 ${options.expectedFinancialPeriod}）`);
+  }
+  if (isDepositaryReceipt && !output.financial?.period) {
+    for (const key of ["income", "balance", "cashflow"]) {
+      output.sourceDiagnostics[key] = {
+        ...output.sourceDiagnostics[key],
+        status: "source-not-applicable",
+        retryable: false,
+      };
+    }
   }
   if (!finite(output.financial?.revenue)) output.missing.push("最新季營業額");
   [

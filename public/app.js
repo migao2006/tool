@@ -601,7 +601,7 @@ function openAccountModal(){
 }
 
 document.querySelector('#accountBtn').onclick=openAccountModal;
-if('serviceWorker'in navigator)navigator.serviceWorker.register('/sw.js?v=20.1.1',{updateViaCache:'none'}).catch(()=>{});
+if('serviceWorker'in navigator)navigator.serviceWorker.register('/sw.js?v=20.1.2',{updateViaCache:'none'}).catch(()=>{});
 initSession();render();
 if(document.querySelector('script[src^="/v20.js"]'))S.fundStatus='deferred';
 else loadStocks();

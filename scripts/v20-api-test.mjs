@@ -1031,6 +1031,8 @@ try {
   assert.match(ui, /更新完成，部分來源待補/,
     "a complete publication with degraded sources must use an honest mixed status label");
   assert.match(ui, /payload\?\.publicationPhase === 'complete' && \(pending > 0 \|\| degraded\.length > 0\)/);
+  assert.doesNotMatch(ui, /個來源待補/,
+    "the UI must not count individual missing indicators as independent data sources");
   assert.match(ui, /此批次未保存收盤價/,
     "stock details must disclose when the immutable recommendation has no quote snapshot");
   assert.doesNotMatch(ui, /quoteClose\s*=\s*first\([^;]*(?:stock\?\.close|stock\?\.price)/,

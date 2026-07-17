@@ -173,7 +173,7 @@
     const [label, className] = completeWithMissingSources
       ? ['更新完成，部分來源待補', 'partial']
       : stateLabels[state] || stateLabels.partial;
-    return `<div class="v20-data-status ${className}" role="status"><span class="v20-status-dot"></span><div><b>${label}</b><small>資料日期 ${esc(date)}${pending > 0 ? ` · 背景待補 ${displayNumber(pending, 0)} 筆` : degraded.length ? ` · ${degraded.length} 個來源待補` : ''}</small></div>${state === 'refreshing' || state === 'enriching' ? '<span class="spinner" aria-hidden="true"></span>' : ''}</div>`;
+    return `<div class="v20-data-status ${className}" role="status"><span class="v20-status-dot"></span><div><b>${label}</b><small>資料日期 ${esc(date)}${pending > 0 ? ` · 背景待補 ${displayNumber(pending, 0)} 筆` : ''}</small></div>${state === 'refreshing' || state === 'enriching' ? '<span class="spinner" aria-hidden="true"></span>' : ''}</div>`;
   }
 
   function pageHero(eyebrow, title, description, status = '') {

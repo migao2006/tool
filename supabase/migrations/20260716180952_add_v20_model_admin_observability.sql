@@ -12,7 +12,7 @@ begin
       pg_catalog.jsonb_build_object(
         'modelKey', v_model_key,
         'modelVersion', '20.1',
-        'artifactHash', '5dd573115b8695b420af989c3ed21679afba35a57b79306007c639c92ade5292',
+        'artifactHash', '441cc454b03e7d689b1c5f7df71420afd7ec49ad60960286d9e349f19e286689',
         'featureVersion', 'v20.1-separated-engines',
         'costModelVersion', 'tw-market-cost-2026-07',
         'validationStatus', 'passed',

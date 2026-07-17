@@ -8,8 +8,8 @@ const [migration, modelMigration, admin, adminHtml, sharedSource, modelSource, p
   readFile(new URL("../public/admin.js", import.meta.url), "utf8"),
   readFile(new URL("../public/admin.html", import.meta.url), "utf8"),
   readFile(new URL("../api/v20/_shared.js", import.meta.url), "utf8"),
-  readFile(new URL("../supabase/functions/_shared/v20-model.js", import.meta.url)),
-  readFile(new URL("../supabase/functions/_shared/v20-opportunity-policy.js", import.meta.url)),
+  readFile(new URL("../supabase/functions/_shared/v20-model.js", import.meta.url), "utf8"),
+  readFile(new URL("../supabase/functions/_shared/v20-opportunity-policy.js", import.meta.url), "utf8"),
 ]);
 
 assert.match(
@@ -34,7 +34,11 @@ assert.match(
 
 assert.match(modelMigration, /public\.twss_v20_register_model_release/);
 assert.match(modelMigration, /'modelVersion', '20\.1'/);
-const artifactHash = createHash("sha256").update(modelSource).update(policySource).digest("hex");
+const canonicalSource = (source) => source.replace(/\r\n?/g, "\n");
+const artifactHash = createHash("sha256")
+  .update(canonicalSource(modelSource))
+  .update(canonicalSource(policySource))
+  .digest("hex");
 assert.match(modelMigration, new RegExp(`'artifactHash', '${artifactHash}'`),
   "the registered baseline hash must match the deployed model bundle");
 const artifactIdentitySource = await readFile(

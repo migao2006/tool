@@ -1,3 +1,10 @@
+const mainRoutes = new Set(["home", "opportunities", "watchlist"]);
+const routeTitles = {
+  home: "首頁",
+  opportunities: "機會股",
+  stock: "個股分析",
+  watchlist: "自選股",
+};
 const marketNames = {
   listed: "上市",
   otc: "上櫃",
@@ -5,40 +12,133 @@ const marketNames = {
 };
 
 const state = {
-  market: "listed",
-  horizon: "5",
-  limit: "20",
+  route: "home",
+  previousMain: "home",
+  opportunityHorizon: "5",
+  opportunityMarket: "listed",
+  stockHorizon: "5",
+  watchMode: "watchlist",
+  scrollPositions: new Map(),
 };
 
 function activateSegment(group, value) {
-  group.querySelectorAll("button").forEach((button) => {
-    const active = button.dataset.value === value;
-    button.classList.toggle("is-active", active);
-    button.setAttribute("aria-pressed", String(active));
+  group.querySelectorAll("button[data-value]").forEach((button) => {
+    const isActive = button.dataset.value === value;
+    button.classList.toggle("is-active", isActive);
+    button.setAttribute("aria-pressed", String(isActive));
   });
 }
 
-function updateContext() {
-  document.querySelector("#detail-context").textContent =
-    `${marketNames[state.market]} · ${state.horizon} 個交易日預測`;
-  document.querySelector("#ranking-count").textContent = `Top ${state.limit}`;
+function updateOpportunityContext() {
+  const context = document.querySelector("#opportunity-context");
+  if (context) {
+    context.textContent = `${marketNames[state.opportunityMarket]} · ${state.opportunityHorizon} 日`;
+  }
+
+  document.querySelectorAll(".horizon-summary").forEach((item) => {
+    item.classList.toggle("is-selected", item.dataset.horizon === state.opportunityHorizon);
+  });
 }
 
-document.querySelectorAll("[data-control]").forEach((group) => {
-  group.addEventListener("click", (event) => {
-    const button = event.target.closest("button[data-value]");
-    if (!button) return;
-
-    const key = group.dataset.control;
-    state[key] = button.dataset.value;
-    activateSegment(group, state[key]);
-    updateContext();
+function setBottomNavigation(route) {
+  const activeRoute = mainRoutes.has(route) ? route : state.previousMain;
+  document.querySelectorAll(".bottom-nav [data-route]").forEach((button) => {
+    const isActive = button.dataset.route === activeRoute;
+    button.classList.toggle("is-active", isActive);
+    if (isActive) {
+      button.setAttribute("aria-current", "page");
+    } else {
+      button.removeAttribute("aria-current");
+    }
   });
+}
+
+function showPage(route, options = {}) {
+  const { updateHash = true, restoreScroll = false } = options;
+  const target = document.querySelector(`[data-page="${route}"]`);
+  if (!target) return;
+
+  state.scrollPositions.set(state.route, window.scrollY);
+  if (mainRoutes.has(route)) state.previousMain = route;
+  state.route = route;
+
+  document.querySelectorAll("[data-page]").forEach((page) => {
+    const isActive = page === target;
+    page.hidden = !isActive;
+    page.classList.toggle("is-active", isActive);
+  });
+
+  setBottomNavigation(route);
+  document.title = `Alpha Lens｜${routeTitles[route]}`;
+
+  if (updateHash && window.location.hash !== `#${route}`) {
+    window.history.pushState({ route }, "", `#${route}`);
+  }
+
+  const nextScroll = restoreScroll ? state.scrollPositions.get(route) ?? 0 : 0;
+  window.scrollTo({ top: nextScroll, left: 0, behavior: "auto" });
+}
+
+document.addEventListener("click", (event) => {
+  const routeButton = event.target.closest("[data-route]");
+  if (routeButton) {
+    event.preventDefault();
+    if (routeButton.dataset.horizon) {
+      state.opportunityHorizon = routeButton.dataset.horizon;
+      const horizonGroup = document.querySelector('[data-segment="opportunity-horizon"]');
+      if (horizonGroup) activateSegment(horizonGroup, state.opportunityHorizon);
+      updateOpportunityContext();
+    }
+    showPage(routeButton.dataset.route);
+    return;
+  }
+
+  if (event.target.closest("[data-open-stock]")) {
+    state.previousMain = mainRoutes.has(state.route) ? state.route : state.previousMain;
+    showPage("stock");
+    return;
+  }
+
+  if (event.target.closest("[data-stock-back]")) {
+    showPage(state.previousMain, { restoreScroll: true });
+    return;
+  }
+
+  const segmentButton = event.target.closest("[data-segment] button[data-value]");
+  if (!segmentButton) return;
+
+  const group = segmentButton.closest("[data-segment]");
+  const value = segmentButton.dataset.value;
+  activateSegment(group, value);
+
+  switch (group.dataset.segment) {
+    case "opportunity-horizon":
+      state.opportunityHorizon = value;
+      updateOpportunityContext();
+      break;
+    case "market":
+      state.opportunityMarket = value;
+      updateOpportunityContext();
+      break;
+    case "stock-horizon":
+      state.stockHorizon = value;
+      break;
+    case "watch-mode":
+      state.watchMode = value;
+      document.querySelectorAll("[data-watch-view]").forEach((view) => {
+        view.hidden = view.dataset.watchView !== value;
+      });
+      break;
+    default:
+      break;
+  }
 });
 
-document.querySelector("#top-limit").addEventListener("change", (event) => {
-  state.limit = event.target.value;
-  updateContext();
+window.addEventListener("popstate", () => {
+  const route = window.location.hash.slice(1);
+  showPage(routeTitles[route] ? route : "home", { updateHash: false, restoreScroll: true });
 });
 
-updateContext();
+const initialRoute = window.location.hash.slice(1);
+updateOpportunityContext();
+showPage(routeTitles[initialRoute] ? initialRoute : "home", { updateHash: false });

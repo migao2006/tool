@@ -35,10 +35,10 @@ const latest = { listed: "2026-07-16", otc: "2026-07-16", etf: "2026-07-16" };
 const key = groupDateCycleKey(latest, V20_MODEL_VERSION);
 assert.equal(
   key,
-  "20.1|listed=2026-07-16|otc=2026-07-16|etf=2026-07-16",
+  "20.2|listed=2026-07-16|otc=2026-07-16|etf=2026-07-16",
   "a publication cycle must use one point-in-time date",
 );
-assert.equal(V20_MODEL_VERSION, "20.1");
+assert.equal(V20_MODEL_VERSION, "20.2");
 assert.deepEqual(V20_WORKER_GROUPS, ["listed", "otc", "etf"]);
 
 const publicationManifests = buildV20PublicationManifests({
@@ -61,22 +61,42 @@ const officialMarket = normalizeOfficialMarketPayloads({
     { Date: "20260716", Open: "414.88", High: "414.88", Low: "404.89", Close: "407.01", Change: "-9.40" },
   ],
   taifex: [
-    { Date: "20260716", Contract: "TX", "ContractMonth(Week)": "202608", Last: "45700", Change: "-366", "%": "-0.79%", Volume: "70808", SettlementPrice: "45691", OpenInterest: "106669" },
+    { Date: "20260716", Contract: "TX", "ContractMonth(Week)": "202608", Last: "45700", Change: "-366", "%": "-0.79%", Volume: "70808", SettlementPrice: "45691", OpenInterest: "106669", TradingSession: "一般" },
+    { Date: "20260716", Contract: "TX", "ContractMonth(Week)": "202608", Last: "45600", Change: "-466", "%": "-1.01%", Volume: "170808", SettlementPrice: "NULL", OpenInterest: "-", TradingSession: "盤後" },
   ],
 }, "2026-07-16");
 assert.equal(officialMarket.taiex.value, 45_624.98);
 assert.equal(officialMarket.taiex.dataDate, "2026-07-16", "ROC dates must normalize to ISO dates");
 assert.equal(officialMarket.tpex.changePercent, -2.2574);
 assert.equal(officialMarket.txFutures.contractMonth, "202608");
+assert.equal(officialMarket.txFutures.value, 45_700, "the higher-volume after-hours row must not displace the day session");
+assert.equal(officialMarket.txFutures.session, "regular");
+const afterHoursOnly = normalizeOfficialMarketPayloads({
+  taifex: [
+    { Date: "20260716", Contract: "TX", "ContractMonth(Week)": "202608", Last: "45600", Volume: "170808", TradingSession: "盤後" },
+  ],
+}, "2026-07-16");
+assert.equal(afterHoursOnly.txFutures.session, "after_hours");
 const officialContext = enrichMarketContextWithOfficial({
   status: "partial",
   completeness: 50,
+  confidence: 50,
   degraded_sources: ["taiex_official_index", "tpex_official_index", "tx_futures", "international_context"],
   source_dates: { snapshots: "2026-07-16" },
 }, officialMarket);
 assert.deepEqual(officialContext.degraded_sources, ["international_context"]);
 assert.equal(officialContext.completeness, 87.5);
+assert.equal(officialContext.confidence, 87.5, "official enrichment must recompute data confidence from remaining degradation");
 assert.equal(officialContext.status, "partial");
+const completeOfficialContext = enrichMarketContextWithOfficial({
+  status: "partial",
+  completeness: 62.5,
+  confidence: 50,
+  degraded_sources: ["taiex_official_index", "tpex_official_index", "tx_futures"],
+}, officialMarket);
+assert.equal(completeOfficialContext.completeness, 100);
+assert.equal(completeOfficialContext.confidence, 90);
+assert.equal(completeOfficialContext.status, "complete");
 
 const immutableQuote = quoteSnapshotForCacheRow({
   data_date: "2026-07-16",
@@ -260,6 +280,34 @@ for (const regime of regimes) {
   assert.ok(!["bullish", "range", "bearish"].includes(regime), "worker and backtest regime names must match");
 }
 
+const turnoverHistory = Array.from({ length: 5 }, (_, index) => ({
+  data_date: `2026-07-${String(15 - index).padStart(2, "0")}`,
+  breadth: { all: { turnover: 100 } },
+}));
+const scopedMarket = buildMarketContext([
+  { market: "listed", change_pct: 1, trade_value: 150, volume: 100, institutional_buy: 10 },
+  { market: "otc", change_pct: 1, trade_value: 50, volume: 50, institutional_buy: 5 },
+  { market: "listed", instrument_type: "ETF", change_pct: -10, trade_value: 1_000_000, volume: 1_000_000, institutional_buy: -500_000 },
+], "2026-07-16", { available: true, score: 0 }, turnoverHistory);
+assert.equal(scopedMarket.breadth.all.count, 2, "ETF rows must not enter stock-market breadth");
+assert.equal(scopedMarket.breadth.all.turnover, 200, "ETF turnover must not enter the market factor");
+assert.equal(scopedMarket.breadth.all.turnoverBaselineMedian, 100);
+assert.equal(scopedMarket.breadth.all.turnoverBaselineSessions, 5);
+assert.ok(scopedMarket.breadth.all.turnoverScore > 99);
+assert.equal(scopedMarket.institutional.net, 15, "ETF flows must not enter institutional breadth");
+assert.equal(scopedMarket.institutional.volume, 150, "ETF volume must not enter the institutional-flow denominator");
+assert.ok(!scopedMarket.degraded_sources.includes("turnover_baseline"));
+
+const missingTurnoverBaseline = buildMarketContext(
+  [{ market: "listed", change_pct: 10, volume: 1, institutional_buy: 0 }],
+  "2026-07-16",
+  { available: true, score: 100 },
+);
+assert.equal(missingTurnoverBaseline.breadth.all.turnoverScore, null);
+assert.equal(missingTurnoverBaseline.regime_score, 82.35,
+  "the missing 15% turnover factor must be removed and remaining weights renormalized");
+assert.ok(missingTurnoverBaseline.degraded_sources.includes("turnover_baseline"));
+
 const [workerSource, migration, incrementalMigration, staleQueueMigration, verifiableMigration] = await Promise.all([
   readFile(new URL("../supabase/functions/twss-v20-model/index.ts", import.meta.url), "utf8"),
   readFile(new URL("../supabase/migrations/20260716021553_add_v20_quant_models.sql", import.meta.url), "utf8"),
@@ -332,6 +380,14 @@ assert.match(workerSource, /marketContext: input\.marketContext/,
   "the publisher request must carry the exact market context used during scoring");
 assert.match(workerSource, /v20_market_context_reload_failed/,
   "a newly inserted context must be reloaded with database timestamps before publication");
+assert.match(workerSource, /data_date=lt/,
+  "turnover scoring must load only prior market-context sessions");
+assert.match(workerSource, /v20_market_context\?select=data_date,model_version,breadth/,
+  "turnover history must survive a model-version release");
+assert.match(workerSource, /priorTurnoverContexts\(priorContextResponse\.data\)/,
+  "turnover history must deduplicate prior contexts before using them");
+assert.match(workerSource, /\.slice\(0, 20\)/,
+  "turnover scoring must use at most twenty distinct prior sessions");
 assert.match(workerSource, /shouldRunFullMarket/);
 assert.match(workerSource, /twss_claim_v20_dirty_batch/);
 assert.match(workerSource, /incremental_dirty_symbols/);

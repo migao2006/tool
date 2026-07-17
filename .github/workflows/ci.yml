@@ -30,6 +30,8 @@ jobs:
       - name: Validate build artifact
         run: npm run validate
       - name: Run full test suite
-        run: npm test
-      - name: Verify deployment provenance policy
-        run: node scripts/deployment-provenance-test.mjs
+        run: npm run test:all
+      - name: Install WebKit browser
+        run: npx playwright install --with-deps webkit
+      - name: Run mobile and request-race tests
+        run: npm run test:e2e

@@ -400,7 +400,7 @@ async function publishImmutableRun(input: {
     dataDate: input.dataDate,
     dataCutoffAt,
     modelVersion: V20_MODEL_VERSION,
-    featureVersion: "v20.1-separated-engines",
+    featureVersion: "v20.2-separated-engines",
     costModelVersion: V20_COST_POLICY_VERSION,
     calibrationVersion: input.calibrationVersion || null,
     codeHash: V20_MODEL_ARTIFACT_HASH,
@@ -425,6 +425,21 @@ async function publishImmutableRun(input: {
   return data;
 }
 
+function priorTurnoverContexts(rows: any[]) {
+  const byDate = new Map<string, any>();
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const dataDate = String(row?.data_date || "");
+    if (!dataDate) continue;
+    const existing = byDate.get(dataDate);
+    if (!existing || (row?.model_version === V20_MODEL_VERSION && existing?.model_version !== V20_MODEL_VERSION)) {
+      byDate.set(dataDate, row);
+    }
+  }
+  return [...byDate.values()]
+    .sort((left, right) => String(right.data_date).localeCompare(String(left.data_date)))
+    .slice(0, 20);
+}
+
 async function loadMarketContext(dataDate: string) {
   const { data: existing } = await rest(
     `v20_market_context?select=*&data_date=eq.${encodeURIComponent(dataDate)}` +
@@ -447,7 +462,7 @@ async function loadMarketContext(dataDate: string) {
     const entries = await Promise.all(Object.entries(endpoints).map(async ([key, url]) => {
       try {
         const response = await fetch(url, {
-          headers: { accept: "application/json", "user-agent": "tw-stock-screener-v20/20.1" },
+          headers: { accept: "application/json", "user-agent": "tw-stock-screener-v20/20.2.0" },
           signal: AbortSignal.timeout(20_000),
         });
         if (!response.ok) return [key, []];
@@ -480,12 +495,26 @@ async function loadMarketContext(dataDate: string) {
     return reloaded[0];
   }
 
-  const snapshots = await fetchAll(
-    "stock_snapshots?select=symbol,market,instrument_type,change_pct,trade_value,volume,institutional_buy" +
-      `&trade_date=eq.${encodeURIComponent(dataDate)}&order=symbol.asc`,
-  );
+  const [snapshots, priorContextResponse] = await Promise.all([
+    fetchAll(
+      "stock_snapshots?select=symbol,market,instrument_type,change_pct,trade_value,volume,institutional_buy" +
+        `&trade_date=eq.${encodeURIComponent(dataDate)}&order=symbol.asc`,
+    ),
+    rest(
+      // Turnover is a market observation, so a model release must retain the
+      // immutable baseline from earlier versions. Same-date current-version
+      // contexts are preferred below before the latest twenty dates are used.
+      "v20_market_context?select=data_date,model_version,breadth" +
+        `&data_date=lt.${encodeURIComponent(dataDate)}` +
+        "&order=data_date.desc&limit=80",
+    ),
+  ]);
+  const priorMarketContexts = priorTurnoverContexts(priorContextResponse.data);
   const context = {
-    ...enrichMarketContextWithOfficial(buildMarketContext(snapshots, dataDate), official),
+    ...enrichMarketContextWithOfficial(
+      buildMarketContext(snapshots, dataDate, {}, priorMarketContexts),
+      official,
+    ),
     fetched_at: now(),
   };
   await rest("v20_market_context?on_conflict=data_date,model_version", {

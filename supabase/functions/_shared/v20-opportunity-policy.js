@@ -1,7 +1,7 @@
-// Shared v20.1 policy used by the Edge worker adapter and the point-in-time
+// Shared v20.2 policy used by the Edge worker adapter and the point-in-time
 // research model. Monetary rates below are percentage points, not decimals.
 
-export const V20_MODEL_VERSION = "20.1";
+export const V20_MODEL_VERSION = "20.2";
 export const SHORT_HORIZONS = Object.freeze([2, 3, 5, 10]);
 export const MEDIUM_HORIZONS = Object.freeze([10, 20, 40]);
 export const MEDIUM_RESEARCH_HORIZONS = Object.freeze([60]);

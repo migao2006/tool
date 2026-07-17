@@ -132,7 +132,7 @@ assert.deepEqual(SHORT_HORIZONS, [2, 3, 5, 10]);
 assert.deepEqual(MEDIUM_HORIZONS, [10, 20, 40]);
 assert.deepEqual(MEDIUM_RESEARCH_HORIZONS, [60]);
 assert.deepEqual(PRODUCTION_HORIZONS.medium, [10, 20, 40]);
-assert.equal(PRODUCTION_MODEL_VERSION, "20.1");
+assert.equal(PRODUCTION_MODEL_VERSION, "20.2");
 assert.equal(Object.values(SHORT_WEIGHTS).reduce((total, value) => total + value, 0), 100);
 assert.equal(Object.values(MEDIUM_WEIGHTS).reduce((total, value) => total + value, 0), 100);
 assert.notDeepEqual(SHORT_WEIGHTS, MEDIUM_WEIGHTS, "short and medium weights must remain independent");

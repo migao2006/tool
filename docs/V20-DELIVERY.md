@@ -1,10 +1,10 @@
-# 台股智選 v20.1 交付與部署說明
+# 台股智選 v20.2 交付與部署說明
 
 ## 升級原則
 
 v20 是現有 Vanilla JavaScript PWA、Vercel Functions 與雙 Supabase 架構的增量升級。CORE 專案繼續負責登入、管理員與自選清單；MARKET 專案繼續保存市場、分析、排行榜與回測資料。升級不搬移、不重新命名、不刪除既有資料表，也不改變 v19 API。
 
-v20.1 不提供真實持股、成本、損益、投資紀錄或下單功能。前台只保留自選股；既有 `portfolio_positions` 表與資料為相容性而保留，但不在使用者介面讀寫，也不執行破壞性刪除。
+v20.2 不提供真實持股、成本、損益、投資紀錄或下單功能。前台只保留自選股；既有 `portfolio_positions` 表與資料為相容性而保留，但不在使用者介面讀寫，也不執行破壞性刪除。
 
 產品定位是可驗證的機會排序，不宣稱預知漲跌。量化規則與模型負責排序；語言模型只能整理新聞、解釋理由與指出矛盾。核心排名在語言模型服務不可用時仍可運作。
 
@@ -31,10 +31,12 @@ MARKET 專案包含下列 v20 專用資料表：
 - `supabase/migrations/20260716031500_harden_v20_public_read_model.sql`
 - `supabase/migrations/20260716101225_add_db_first_enrichment_pipeline.sql`
 
-v20.1 的關鍵 MARKET migration：
+v20.2 的關鍵 MARKET migration：
 
 - `supabase/migrations/20260716173332_verifiable_opportunity_snapshots.sql`：不可變推薦快照、成本後欄位、模型版本通道與不可變結果。
 - `supabase/migrations/20260716174105_operational_maintenance_control.sql`：維護狀態、Cron 精確暫停／恢復與稽核事件。
+- `supabase/migrations/20260717083846_add_v20_medium_blend_rankings.sql`：不可變 10／20／40 日中期綜合排名與 keyset 分頁。
+- `supabase/migrations/20260717090140_register_v20_2_model_release.sql`：v20.2 正確性修補的 Champion／Challenger 發布與回滾軌跡。
 
 目前 repository 的歷史 migration 仍包含早期 CORE 與 MARKET 檔案；因此不得直接對任一 linked project 執行未檢查的 `db push --include-all`。部署者必須使用獨立目標清單或先完成 migration history reconciliation。
 
@@ -140,7 +142,7 @@ DB-first migration 在 MARKET 專案建立或取代以下 UTC 排程：
 1. 先切換維護模式，暫停舊的 deep／v20 排程，或確認沒有作用中的同步租約。
 2. 依「測試」章節完成本機驗證。
 3. 在 MARKET 專案部署新版 `twss-sync-batch` 與 `twss-v20-model`，但在 schema 尚未完成前不呼叫；不要部署到 CORE 專案。
-4. 比對 MARKET 遠端 migration history，只對尚未套用的 MARKET migration 做 transaction dry-run；先套用 v20.1 不可變快照，再套用維護控制。不要直接 `db push --include-all`，也不要在 CORE 專案套用市場表 migration。
+4. 比對 MARKET 遠端 migration history，只對尚未套用的 MARKET migration 做 transaction dry-run；先套用 v20 不可變快照，再依版本套用後續 migration。不要直接 `db push --include-all`，也不要在 CORE 專案套用市場表 migration。
 5. 執行 Supabase Security 與 Performance Advisor，確認資料表、RLS、RPC 與排程，再以 Vault 授權分別做小批次 Base 及 Enrichment 驗證。
 6. 部署 Vercel API 與 UI，確認所有公開端點指向同一 `publishedDataDate`。
 7. 驗證首頁、排行榜、個股、管理員與既有 v19 API 後恢復排程，最後移除維護模式。
@@ -192,7 +194,7 @@ npm run maintenance:resume -- --confirm
 
 - `src/v20-backtest.js` 的 point-in-time Walk-forward 引擎、測試、資料表與唯讀摘要 API 已完成；但正式 MARKET 專案尚無可安全回溯的歷史 v20 特徵快照，因此本次不捏造歷史結果，也不把現有資料倒灌成過去訊號。`v20_backtest_runs`／`v20_backtest_outcomes` 初期為空，API 會回傳 `partial`／`insufficient_history`。正式歷史 backfill runner 是後續項目；每日正式訊號則由 `v20_signal_outcomes` 持續累積真實成熟結果與校準。
 - S&P 500、NASDAQ 100、SOX、台積電 ADR、NVIDIA、VIX、美債殖利率與 USD/TWD 屬選用國際資料。只有伺服器端設定 `FINNHUB_API_KEY`／`ALPHA_VANTAGE_API_KEY` 並以內部授權觸發更新時才顯示；未設定時明確列為待補，不使用 Yahoo 非正式端點或假值。加權、櫃買與台指期仍沿用既有已驗證資料來源並逐卡顯示來源及日期。
-- Supabase Advisor 對沒有 client policy 的內部 v20 表可能提出 INFO；這些表刻意採 RLS deny-by-default 且只授權 `service_role`。v20.1 的推薦、個股與驗證讀取 RPC 全部為 service-only，由 Vercel API 回傳白名單欄位；瀏覽器角色不能讀 raw staging、不可變 outcome 明細或管理通道。
+- Supabase Advisor 對沒有 client policy 的內部 v20 表可能提出 INFO；這些表刻意採 RLS deny-by-default 且只授權 `service_role`。v20.2 的推薦、個股與驗證讀取 RPC 僅回傳白名單欄位；瀏覽器角色不能讀 raw staging、不可變 outcome 明細或管理通道。
 
 ## 回滾
 

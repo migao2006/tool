@@ -19,7 +19,7 @@ assert.match(ci, /node-version:\s*24\b/, "CI must use Node 24");
 assert.match(ci, /npm ci\b/, "CI must use the lockfile");
 assert.match(ci, /npm run build\b/, "CI must build the application");
 assert.match(ci, /npm run validate\b/, "CI must validate the build artifact");
-assert.match(ci, /npm test\b/, "CI must run the full test suite");
+assert.match(ci, /npm run test:all\b/, "CI must run the full test suite without rebuilding twice");
 
 const snapshots = workflows.get("update-market-data.yml");
 assert.ok(snapshots, "snapshot workflow is required");
@@ -55,7 +55,7 @@ const clean = versionPayload({
 assert.equal(clean.gitSha, sha);
 assert.equal(clean.source.type, "vercel-git");
 assert.equal(clean.source.state, "clean");
-assert.equal(clean.model, "20.1");
+assert.equal(clean.model, "20.2");
 assert.equal(clean.deployment.environment, "production");
 assert.doesNotMatch(JSON.stringify(clean), /must-never-appear/, "version payload must not leak environment secrets");
 

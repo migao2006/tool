@@ -55,14 +55,37 @@ function indexSnapshot(payload, dataDate, fields, source, code, name) {
   };
 }
 
+function tradingSession(row) {
+  const raw = String(
+    row?.TradingSession ?? row?.tradingSession ?? row?.Session ?? row?.session ?? "",
+  ).trim();
+  const normalized = raw.toLowerCase().replace(/[\s_-]+/g, "");
+  if (
+    normalized.includes("一般") || normalized.includes("日盤") ||
+    normalized.includes("regular") || normalized.includes("daysession") || normalized === "day"
+  ) return "regular";
+  if (
+    normalized.includes("盤後") || normalized.includes("夜盤") ||
+    normalized.includes("afterhours") || normalized.includes("aftersession") || normalized === "night"
+  ) return "after_hours";
+  return raw ? `unknown:${raw}` : "unknown";
+}
+
 function txSnapshot(payload, dataDate) {
   const candidates = rows(payload)
     .filter((row) => isoDate(row?.Date) === dataDate)
     .filter((row) => String(row?.Contract || "").trim() === "TX")
     .filter((row) => /^\d{6}$/.test(String(row?.["ContractMonth(Week)"] || "").trim()))
     .filter((row) => number(row?.Last) !== null)
-    .sort((left, right) => (number(right?.Volume) || 0) - (number(left?.Volume) || 0));
-  const row = candidates[0];
+    .map((row) => ({ row, session: tradingSession(row) }));
+  const preferredSession = candidates.some((entry) => entry.session === "regular")
+    ? "regular"
+    : candidates.some((entry) => entry.session === "after_hours")
+    ? "after_hours"
+    : candidates[0]?.session;
+  const row = candidates
+    .filter((entry) => entry.session === preferredSession)
+    .sort((left, right) => (number(right.row?.Volume) || 0) - (number(left.row?.Volume) || 0))[0]?.row;
   if (!row) return null;
   const value = number(row.Last);
   return {
@@ -81,7 +104,7 @@ function txSnapshot(payload, dataDate) {
     contractMonth: String(row["ContractMonth(Week)"] || "").trim(),
     volume: number(row.Volume),
     openInterest: number(row.OpenInterest),
-    session: "regular",
+    session: preferredSession,
     source: "TAIFEX OpenAPI",
   };
 }
@@ -115,15 +138,18 @@ export function enrichMarketContextWithOfficial(context = {}, official = {}) {
   if (official.taiex) sourceDates.taiex = official.taiex.dataDate;
   if (official.tpex) sourceDates.tpex = official.tpex.dataDate;
   if (official.txFutures) sourceDates.txFutures = official.txFutures.dataDate;
+  const completeness = round(Math.max(0, 100 - remaining.length * 12.5), 2);
+  const confidence = round(Math.min(90, completeness), 2);
+  const status = context.status === "error" ? "error" : remaining.length ? "partial" : "complete";
   return {
     ...context,
     taiex: official.taiex || context.taiex || {},
     tpex: official.tpex || context.tpex || {},
     tx_futures: official.txFutures || context.tx_futures || {},
-    completeness: round(Math.max(0, 100 - remaining.length * 12.5), 2),
-    status: remaining.length ? "partial" : "complete",
+    completeness,
+    confidence,
+    status,
     source_dates: sourceDates,
     degraded_sources: remaining,
   };
 }
-

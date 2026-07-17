@@ -5,8 +5,8 @@ import {
   SHORT_WEIGHTS,
 } from "../supabase/functions/_shared/v20-opportunity-policy.js";
 
-const API_VERSION = "20.1";
-const MODEL_VERSION = "20.1";
+const API_VERSION = "20.2";
+const MODEL_VERSION = "20.2";
 const PAGE_TTL_MS = 30_000;
 const MARKET_TTL_MS = 60_000;
 const STOCK_TTL_MS = 30_000;
@@ -27,7 +27,7 @@ const GLOBAL_ALIASES = Object.freeze({
 });
 const SORTS = Object.freeze({
   net_opportunity_desc: "net_opportunity_score.desc.nullslast,rank_position.asc,symbol.asc",
-  score_desc: "net_opportunity_score.desc.nullslast,rank_position.asc,symbol.asc",
+  score_desc: "raw_opportunity_score.desc.nullslast,net_opportunity_score.desc.nullslast,symbol.asc",
   risk_asc: "risk_score.asc.nullslast,net_opportunity_score.desc.nullslast,symbol.asc",
   change_desc: "rank_delta.desc.nullslast,net_opportunity_score.desc.nullslast,symbol.asc",
 });
@@ -380,7 +380,10 @@ async function persistGlobalMarket(liveGlobal, token) {
 
 function normalizeRanking(row = {}) {
   const model = row.model_key === "medium" ? "medium" : "short";
-  const horizon = Number(row.horizon_days) || DEFAULT_HORIZON[model];
+  const rawHorizon = row.horizon_days ?? row.horizon;
+  const horizon = model === "medium" && String(rawHorizon).toLowerCase() === "blend"
+    ? "blend"
+    : Number(rawHorizon) || DEFAULT_HORIZON[model];
   const predictionState = predictionStateFor(row);
   const calibrated = predictionState.status === "calibrated";
   const probabilityBasis = predictionState.basis;
@@ -456,6 +459,8 @@ function normalizeRanking(row = {}) {
     rawOpportunityScore,
     netOpportunityScore,
     opportunityScore: netOpportunityScore,
+    componentHorizons: cleanObject(row.component_horizons || row.componentHorizons),
+    blendWeights: cleanObject(row.blend_weights || row.blendWeights),
     riskScore: numeric(row.risk_score),
     confidence: numeric(row.confidence),
     completeness: numeric(row.completeness),
@@ -662,11 +667,16 @@ function parseText(params, key, max = 60) {
   return value;
 }
 
-function parseModel(params) {
+function parseModel(params, options = {}) {
   const model = String(params.get("model") || "short").toLowerCase();
   if (!MODEL_HORIZONS[model]) throw new V20PublicError("invalid_model");
-  const horizon = Number(params.get("horizon") || DEFAULT_HORIZON[model]);
-  if (!MODEL_HORIZONS[model].includes(horizon)) throw new V20PublicError("invalid_horizon");
+  const requestedHorizon = String(params.get("horizon") || DEFAULT_HORIZON[model]).toLowerCase();
+  const horizon = options.allowBlend && model === "medium" && requestedHorizon === "blend"
+    ? "blend"
+    : Number(requestedHorizon);
+  if (horizon !== "blend" && !MODEL_HORIZONS[model].includes(horizon)) {
+    throw new V20PublicError("invalid_horizon");
+  }
   return { model, horizon };
 }
 
@@ -718,7 +728,7 @@ function decodeCursor(value, query) {
 }
 
 export function parseV20RankingQuery(params) {
-  const { model, horizon } = parseModel(params);
+  const { model, horizon } = parseModel(params, { allowBlend: true });
   const limit = Number(params.get("limit") || 10);
   if (!Number.isInteger(limit) || limit < 1 || limit > MAX_LIMIT) throw new V20PublicError("invalid_limit");
   const sort = String(params.get("sort") || "net_opportunity_desc").toLowerCase();
@@ -765,6 +775,7 @@ function normalizeRpcRanking(row, runId) {
 }
 
 function isPublicModelHorizon(item) {
+  if (item?.model === "medium" && item?.horizon === "blend") return true;
   return MODEL_HORIZONS[item?.model]?.includes(Number(item?.horizon)) === true;
 }
 
@@ -780,11 +791,76 @@ function sortPublicRankings(rows, sort) {
     let order = 0;
     if (sort === "risk_asc") order = compareNullable(left.riskScore, right.riskScore, "asc");
     else if (sort === "change_desc") order = compareNullable(left.rankDelta, right.rankDelta);
+    else if (sort === "score_desc") order = compareNullable(left.rawOpportunityScore, right.rawOpportunityScore);
     else order = compareNullable(left.netOpportunityScore, right.netOpportunityScore);
     if (order) return order;
     order = compareNullable(left.netOpportunityScore, right.netOpportunityScore);
     return order || left.symbol.localeCompare(right.symbol, "en");
   });
+}
+
+async function loadMediumBlendPage(query) {
+  const keyset = query.sort === "net_opportunity_desc";
+  const requiresCompleteSet = !keyset || Boolean(query.strategy || query.search);
+  const groupName = query.market === "twse" ? "listed" : query.market === "tpex" ? "otc" : query.market || null;
+  const baseQuery = {
+    runId: query.runId,
+    groupName,
+    industry: query.industry || null,
+  };
+  const readPage = async (afterRank, limit) => {
+    const { data } = await publicRpcRequest("twss_v20_read_medium_blend", {
+      p_query: { ...baseQuery, afterRank, limit },
+    });
+    return cleanObject(data);
+  };
+
+  if (!requiresCompleteSet) {
+    const payload = await readPage(query.afterRank, query.limit);
+    const run = cleanObject(payload.run);
+    return {
+      items: arrays(payload.items)
+        .map((row) => normalizeRpcRanking(row, query.runId))
+        .filter((item) => item.symbol && item.model === "medium" && item.horizon === "blend"
+          && item.publicVisible && !item.researchOnly && item.official && item.gatePassed),
+      total: numeric(payload.total),
+      hasMore: payload.hasMore === true,
+      rankingDate: isoDate(run.dataDate || run.data_date) || query.rankingDate,
+      runId: numeric(run.runId ?? run.run_id) || query.runId,
+      paginationMode: "keyset",
+    };
+  }
+
+  const collected = [];
+  let afterRank = 0;
+  let run = {};
+  for (let page = 0; page < 100; page += 1) {
+    const payload = await readPage(afterRank, 200);
+    run = cleanObject(payload.run);
+    collected.push(...arrays(payload.items));
+    if (payload.hasMore !== true) break;
+    const nextAfterRank = numeric(payload.nextAfterRank ?? payload.next_after_rank);
+    if (!nextAfterRank || nextAfterRank <= afterRank) throw new Error("invalid_public_blend_cursor");
+    afterRank = nextAfterRank;
+    if (page === 99) throw new Error("public_blend_page_limit_exceeded");
+  }
+  const search = query.search.replace(/[.*]/g, "").toLocaleLowerCase("en");
+  const filtered = collected
+    .map((row) => normalizeRpcRanking(row, query.runId))
+    .filter((item) => item.symbol && item.model === "medium" && item.horizon === "blend"
+      && item.publicVisible && !item.researchOnly && item.official && item.gatePassed)
+    .filter((item) => !query.strategy || item.strategy === query.strategy)
+    .filter((item) => !search || `${item.symbol} ${item.name}`.toLocaleLowerCase("en").includes(search));
+  const sorted = sortPublicRankings(filtered, query.sort);
+  const items = sorted.slice(query.offset, query.offset + query.limit);
+  return {
+    items,
+    total: filtered.length,
+    hasMore: query.offset + items.length < filtered.length,
+    rankingDate: isoDate(run.dataDate || run.data_date) || query.rankingDate,
+    runId: numeric(run.runId ?? run.run_id) || query.runId,
+    paginationMode: "offset",
+  };
 }
 
 async function loadPublicRankingPage(query) {
@@ -861,6 +937,7 @@ async function loadRankingPage(query) {
   if (!query.runId) {
     return { items: [], total: 0, hasMore: false, rankingDate: null, runId: null };
   }
+  if (query.model === "medium" && query.horizon === "blend") return loadMediumBlendPage(query);
   if (!marketServiceKey) return loadPublicRankingPage(query);
   const params = new URLSearchParams({
     select: "*",
@@ -981,6 +1058,11 @@ export async function readV20Rankings(url, options = {}) {
       limit: query.limit,
     },
     sort: query.sort,
+    scoreSemantics: {
+      rawOpportunityScore: { deprecated: false, basis: "pre_cost_risk_adjustment" },
+      netOpportunityScore: { deprecated: false, basis: "cost_risk_adjusted" },
+      opportunityScore: { deprecated: true, aliasOf: "netOpportunityScore" },
+    },
   };
 }
 
@@ -1085,17 +1167,26 @@ function buildAtomicDailyReport(meta, market, short, medium) {
     symbol: row.symbol,
     name: row.name,
     whyNotice: row.summary || row.recommendedAction || "通過同日量化條件",
+    rawOpportunityScore: row.rawOpportunityScore,
+    netOpportunityScore: row.netOpportunityScore,
     opportunityScore: row.opportunityScore,
     riskScore: row.riskScore,
   }));
   const mainRisks = riskItems.length
     ? riskItems.map((risk) => ({ title: "量化風險", explanation: risk }))
-    : [{ title: "資料仍可能補齊", explanation: "背景資料完成後，分數與排序可能同日再次更新。" }];
+    : [{
+      title: "資料仍可能補齊",
+      explanation: "目前批次保持不變；資料補齊後會發布可追溯的新修訂批次。",
+    }];
   return {
     ...meta,
     updateStatus: meta.publicationPhase,
     generatedAt: meta.fetchedAt || new Date().toISOString(),
-    source: "v20-atomic-base-report",
+    title: "每日市場摘要",
+    source: "v20-deterministic-market-summary",
+    generationMethod: "deterministic_rules",
+    aiGenerated: false,
+    publicationSemantics: "immutable_revision",
     cachedFallback: false,
     report: {
       oneLine,
@@ -1131,7 +1222,7 @@ export async function readV20Home() {
   const [market, short, medium] = await Promise.all([
     readV20Market({ publication }),
     readV20Rankings(rankingUrl("short", 5, 10), { publication }),
-    readV20Rankings(rankingUrl("medium", 40, 10), { publication }),
+    readV20Rankings(rankingUrl("medium", "blend", 10), { publication }),
   ]);
   const degraded = unique([
     ...market.degradedSources,

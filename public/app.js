@@ -97,7 +97,7 @@ function updateMarketHeader(){
     warning=true;label.textContent=`盤後行情 上市 ${dates.listed}／上櫃 ${dates.otc}（日期待對齊）`;mode.textContent='部分官方資料';
   }else{
     label.textContent=dates.common?`最新交易日 ${dates.common} · 盤後資料（非即時）`:'資料日期待補';
-    mode.textContent=S.mode==='live'?'官方日期已核對':S.mode==='partial'?'部分官方資料':'資料載入中';
+    mode.textContent=dates.aligned?'官方日期已核對':dates.listed||dates.otc||S.mode==='partial'?'部分官方資料':'資料載入中';
   }
   label.classList.toggle('date-warning',warning)
 }
@@ -165,17 +165,18 @@ async function loadStocks(){
   }
 }
 
-const MARKET_BOOT_CACHE='twss-market-boot-v19.2';
+const MARKET_BOOT_CACHE='twss-market-boot-v20.2';
+const MARKET_BOOT_MAX_AGE_MS=7*24*60*60*1000;
 const BOOT_STOCK_FIELDS=['symbol','name','market','instrumentType','industry','close','change','open','high','low','volume','value','transactions','pe','pb','yield','revenue','revenuePreviousMonth','revenueLastYearMonth','revenueYtd','revenueLastYearYtd','rev','revMom','revYtd','revAcceleration','revPeriod','eps','roe','roeEstimated','roePeriod','grossMargin','operatingMargin','netMargin','debt','equityRatio','foreign','trust','dealer','inst','marginBalance','marginChange','shortBalance','shortChange','disp','full'];
 function compactBootStock(stock){return Object.fromEntries(BOOT_STOCK_FIELDS.filter(key=>stock?.[key]!=null).map(key=>[key,stock[key]]))}
-function readMarketBootCache(){try{const payload=JSON.parse(localStorage.getItem(MARKET_BOOT_CACHE)||'null');return Array.isArray(payload?.stocks)&&payload.stocks.length>=20?payload:null}catch{return null}}
+function readMarketBootCache(){try{const payload=JSON.parse(localStorage.getItem(MARKET_BOOT_CACHE)||'null'),age=Date.now()-Date.parse(payload?.cachedAt||'');return Array.isArray(payload?.stocks)&&payload.stocks.length>=20&&Number.isFinite(age)&&age>=0&&age<=MARKET_BOOT_MAX_AGE_MS?payload:null}catch{return null}}
 function writeMarketBootCache(payload){try{localStorage.setItem(MARKET_BOOT_CACHE,JSON.stringify({...payload,stocks:payload.stocks.map(compactBootStock),cachedAt:new Date().toISOString()}))}catch{}}
 function applyMarketPayload(payload,source='live'){
   S.stocks=payload.stocks.map(normalizeStock);S.mode=source==='live'?(payload.mode||'partial'):'partial';S.date=payload.date||'';S.dataStatus=payload.sourceStatus||{};S.sourceDates=payload.dates||{};S.loading=false;
   render();settleInitialHomeScroll()
 }
 function loadLatestSnapshot(){
-  if(!globalThis.twssLatestSnapshotPromise)globalThis.twssLatestSnapshotPromise=fetch('/data/latest.json?v=19.2.0',{cache:'force-cache',headers:{accept:'application/json'}}).then(response=>response.ok?response.json():null).catch(()=>null);
+  if(!globalThis.twssLatestSnapshotPromise)globalThis.twssLatestSnapshotPromise=fetch('/data/latest.json?schema=16.3',{cache:'force-cache',headers:{accept:'application/json'}}).then(response=>response.ok?response.json():null).catch(()=>null);
   return globalThis.twssLatestSnapshotPromise
 }
 function applySnapshotBoot(snapshot){
@@ -231,6 +232,7 @@ async function getDeepAnalysis(symbol){
 /* Supabase auth and optional cloud sync */
 const CORE_SESSION_KEY='twss-core-session-v18';
 const LEGACY_SHARED_SESSION_KEY='twss-supabase-session-v15';
+const watchMutationQueues=new Map();
 function sessionUserId(session=S.session){return session?.user?.id||decodeJwtSub(session?.access_token)||null}
 function updateAccountUi(){const account=q('#accountBtn');if(account)account.textContent=S.session?'帳戶':'登入'}
 function storeSession(session){
@@ -260,7 +262,7 @@ async function refreshCoreAdminRole(){
 async function login(email,password){const s=await coreSb('/auth/v1/token?grant_type=password',{method:'POST',body:{email,password},auth:false});s.expires_at=Math.floor(Date.now()/1000)+(s.expires_in||3600);storeSession(s);await refreshCoreAdminRole();await cloudPull()}
 async function signup(email,password){const s=await coreSb(`/auth/v1/signup?redirect_to=${encodeURIComponent(location.origin)}`,{method:'POST',body:{email,password},auth:false});if(s?.access_token){s.expires_at=Math.floor(Date.now()/1000)+(s.expires_in||3600);storeSession(s);await refreshCoreAdminRole();await cloudPull();return true}return false}
 async function cloudPull(){
-  if(!await refreshSession())return;const userId=sessionUserId(),pendingWatch=getWatchlist().filter(x=>x._sync_state==='pending');S.syncState='同步中…';
+  if(!await refreshSession())return;const userId=sessionUserId(),guestWatch=getWatchlist(null),accountWatch=getWatchlist(userId),pendingWatch=[...accountWatch.filter(x=>x._sync_state==='pending'),...guestWatch.map(item=>{const id=item.id||item.local_id||uid();return{...item,id,local_id:id,_sync_state:'pending'}})];S.syncState='同步中…';
   try{
     const [groups,watchlist]=await Promise.all([
       coreSb('/rest/v1/watchlist_groups?select=id,name,sort_order&order=sort_order.asc,id.asc'),
@@ -271,8 +273,10 @@ async function cloudPull(){
     const cloudWatch=(watchlist||[]).map(x=>({id:x.id,local_id:x.id,groupId:x.group_id,symbol:String(x.symbol),addedPrice:x.added_price,addedAt:x.added_at,note:x.note||'',_sync_state:'synced'}));
     for(const item of pendingWatch)if(!cloudWatch.some(row=>row.symbol===item.symbol))cloudWatch.unshift(item);
     setWatchlist(cloudWatch,userId);
-    Promise.allSettled(pendingWatch.map(item=>upsertWatchlistCloud(item,userId))).catch(()=>{});
-    S.syncState='雲端已同步';render();
+    const uniquePending=[...new Map(pendingWatch.map(item=>[String(item.symbol),item])).values()];
+    const synced=await Promise.allSettled(uniquePending.map(item=>enqueueWatchMutation(userId,item.symbol,()=>upsertWatchlistCloud(item,userId))));
+    if(guestWatch.length&&synced.every(result=>result.status==='fulfilled'))setWatchlist([],null);
+    S.syncState=synced.some(result=>result.status==='rejected')?'部分自選尚待同步':'雲端已同步';render();
   }catch(e){if(sessionUserId()===userId)S.syncState=`同步失敗：${e.message}`}
 }
 async function ensureWatchlistGroup(owner=sessionUserId()){
@@ -285,6 +289,13 @@ async function ensureWatchlistGroup(owner=sessionUserId()){
 async function upsertWatchlistCloud(record,owner=sessionUserId()){
   if(!owner||!S.session||sessionUserId()!==owner)return null;const groupId=await ensureWatchlistGroup(owner);if(!groupId||sessionUserId()!==owner)return null;const id=record.id||record.local_id||uid(),body={id,user_id:owner,group_id:groupId,symbol:record.symbol,added_price:record.addedPrice??null,added_at:record.addedAt||new Date().toISOString(),note:record.note||''};
   const rows=await coreSb('/rest/v1/watchlist_items?on_conflict=group_id,symbol',{method:'POST',headers:{Prefer:'resolution=merge-duplicates,return=representation'},body});const saved=rows?.[0];if(saved&&sessionUserId()===owner){const list=getWatchlist(owner),index=list.findIndex(x=>x.symbol===record.symbol);if(index>=0){list[index]={...record,id:saved.id,local_id:saved.id,groupId:saved.group_id,_sync_state:'synced'};setWatchlist(list,owner)}}return saved||null
+}
+function enqueueWatchMutation(owner,symbol,operation){
+  const key=`${owner||'guest'}:${String(symbol)}`,previous=watchMutationQueues.get(key)||Promise.resolve();
+  const current=previous.catch(()=>{}).then(operation);
+  watchMutationQueues.set(key,current);
+  current.finally(()=>{if(watchMutationQueues.get(key)===current)watchMutationQueues.delete(key)}).catch(()=>{});
+  return current
 }
 function decodeJwtSub(token){try{return JSON.parse(atob(token.split('.')[1].replace(/-/g,'+').replace(/_/g,'/'))).sub}catch{return null}}
 async function logoutAccount(){try{if(S.session?.access_token)await coreSb('/auth/v1/logout',{method:'POST'})}catch{}finally{storeSession(null);S.syncState='本機模式';closeModal();render()}}
@@ -491,11 +502,11 @@ async function toggleWatch(symbol){
   const owner=sessionUserId(),list=getWatchlist(owner),index=list.findIndex(x=>x.symbol===symbol);
   if(index>=0){
     const [removed]=list.splice(index,1);setWatchlist(list,owner);render();if(S.detailSymbol)openDetail(S.detailSymbol,false);
-    if(owner&&S.session){try{if(!await refreshSession()||sessionUserId()!==owner)throw new Error('登入已過期，自選刪除尚未同步');await coreSb(`/rest/v1/watchlist_items?id=eq.${encodeURIComponent(removed.id||removed.local_id)}`,{method:'DELETE',headers:{Prefer:'return=minimal'}})}catch(error){const restored=getWatchlist(owner);restored.splice(Math.min(index,restored.length),0,removed);setWatchlist(restored,owner);if(sessionUserId()===owner){S.syncState=`自選同步失敗：${error.message}`;render()}}}
+    if(owner&&S.session){try{await enqueueWatchMutation(owner,symbol,async()=>{if(!await refreshSession()||sessionUserId()!==owner)throw new Error('登入已過期，自選刪除尚未同步');const groupId=removed.groupId||await ensureWatchlistGroup(owner);if(!groupId)throw new Error('找不到自選股群組');await coreSb(`/rest/v1/watchlist_items?group_id=eq.${encodeURIComponent(groupId)}&symbol=eq.${encodeURIComponent(symbol)}`,{method:'DELETE',headers:{Prefer:'return=minimal'}})})}catch(error){const restored=getWatchlist(owner);if(!restored.some(item=>item.symbol===symbol)){restored.splice(Math.min(index,restored.length),0,removed);setWatchlist(restored,owner)}if(sessionUserId()===owner){S.syncState=`自選同步失敗：${error.message}`;render()}}}
     return
   }
   const stock=S.stocks.find(x=>x.symbol===symbol),id=uid(),item={id,local_id:id,symbol,addedPrice:stock?.close??null,addedAt:new Date().toISOString(),note:'',_sync_state:owner&&S.session?'pending':'local'};list.push(item);setWatchlist(list,owner);render();if(S.detailSymbol)openDetail(S.detailSymbol,false);
-  if(owner&&S.session)upsertWatchlistCloud(item,owner).catch(error=>{if(sessionUserId()===owner)S.syncState=`自選同步失敗：${error.message}`})
+  if(owner&&S.session)enqueueWatchMutation(owner,symbol,()=>upsertWatchlistCloud(item,owner)).catch(error=>{if(sessionUserId()===owner)S.syncState=`自選同步失敗：${error.message}`})
 }
 
 /* v18: the embedded administrator implementation is intentionally disabled.
@@ -601,7 +612,7 @@ function openAccountModal(){
 }
 
 document.querySelector('#accountBtn').onclick=openAccountModal;
-if('serviceWorker'in navigator)navigator.serviceWorker.register('/sw.js?v=20.1.3',{updateViaCache:'none'}).catch(()=>{});
+if('serviceWorker'in navigator)navigator.serviceWorker.register('/sw.js?v=20.2.0',{updateViaCache:'none'}).catch(()=>{});
 initSession();render();
 if(document.querySelector('script[src^="/v20.js"]'))S.fundStatus='deferred';
 else loadStocks();

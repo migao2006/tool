@@ -14,13 +14,13 @@ export function workerTaskKey(task) {
   }
   return `${group}:${dataDate}:${symbol}`;
 }
-export function groupDateCycleKey(groupDates, modelVersion = "20.1") {
+export function groupDateCycleKey(groupDates, modelVersion = "20.2") {
   const dates = V20_WORKER_GROUPS.map((group) => {
     const dataDate = text(groupDates?.[group]);
     if (!dataDate) throw new Error(`missing_ready_date:${group}`);
     return `${group}=${dataDate}`;
   });
-  return `${text(modelVersion) || "20.1"}|${dates.join("|")}`;
+  return `${text(modelVersion) || "20.2"}|${dates.join("|")}`;
 }
 
 function cleanProgress(group, dataDate, input = {}) {
@@ -74,7 +74,7 @@ function dedupeRetries(items, groupDates, limit = V20_RETRY_QUEUE_LIMIT) {
  * cycle keeps its target vector stable so a faster group cannot starve a group
  * whose official data date is one session behind.
  */
-export function reconcileWorkerCycle({ previous, latestGroupDates, totals = {}, modelVersion = "20.1", force = false }) {
+export function reconcileWorkerCycle({ previous, latestGroupDates, totals = {}, modelVersion = "20.2", force = false }) {
   const latestKey = groupDateCycleKey(latestGroupDates, modelVersion);
   const old = previous && typeof previous === "object" ? previous : {};
   const oldDates = old.groupDates && typeof old.groupDates === "object" ? old.groupDates : {};
@@ -115,7 +115,7 @@ export function reconcileWorkerCycle({ previous, latestGroupDates, totals = {}, 
   return {
     cycleKey,
     latestCycleKey: latestKey,
-    modelVersion: text(modelVersion) || "20.1",
+    modelVersion: text(modelVersion) || "20.2",
     groupDates,
     groups,
     retryQueue,

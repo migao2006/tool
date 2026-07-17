@@ -6,12 +6,17 @@
   globalThis.twssV20Active = true;
 
   const API = '/api/v20';
+  const CACHE_SCHEMA = 'v20.2-immutable-1';
+  const CACHE_BUILD = new URL(document.currentScript?.src || location.href, location.href).searchParams.get('v') || '20.2.0';
+  const CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
   // Deliberately do not reuse pre-immutable v20.1 cache entries, which may
   // contain mutable v19 enrichment from an older frontend release.
-  const CACHE_PREFIX = 'twss-v20.1-immutable-cache:';
+  const CACHE_PREFIX = 'twss-v20.2-immutable-cache:';
   const VALID_TABS = new Set(['home', 'short', 'medium', 'watchlist', 'validation']);
   const HORIZONS = { short: [2, 3, 5, 10], medium: [10, 20, 40] };
-  const DEFAULT_HORIZON = { short: 5, medium: 20 };
+  const RANKING_HORIZONS = { short: HORIZONS.short, medium: ['blend', ...HORIZONS.medium] };
+  const DEFAULT_HORIZON = { short: 5, medium: 'blend' };
+  const DEFAULT_SIGNAL_HORIZON = { short: 5, medium: 20 };
   const RANKING_SORTS = new Set(['net_opportunity_desc', 'score_desc', 'risk_asc', 'change_desc']);
   const MIN_VALIDATION_SAMPLES = 100;
   const stateLabels = {
@@ -31,7 +36,7 @@
   const probability = value => num(value) == null ? '資料不足' : `${Number(value).toFixed(1)}%`;
   const safeArray = value => Array.isArray(value) ? value : [];
   const first = (...values) => values.find(value => value != null && value !== '');
-  const supportedPayload = payload => String(payload?.version || '') === '20.1';
+  const supportedPayload = payload => String(payload?.version || '') === '20.2';
   const strategyLabels = {
     momentum_breakout: '動能突破',
     trend_pullback: '趨勢拉回',
@@ -42,6 +47,7 @@
     institutional_positioning: '法人布局',
     industry_trend: '產業趨勢',
     medium_breakout: '中期突破',
+    medium_blend: '10／20／40 日綜合',
     value_recovery: '價值回升',
     cycle_recovery: '景氣復甦'
   };
@@ -55,13 +61,16 @@
   function readCache(key) {
     try {
       const parsed = JSON.parse(localStorage.getItem(`${CACHE_PREFIX}${key}`) || 'null');
-      return supportedPayload(parsed?.payload) ? parsed.payload : null;
+      const savedAt = Date.parse(parsed?.savedAt || '');
+      const compatible = parsed?.schema === CACHE_SCHEMA && parsed?.build === CACHE_BUILD;
+      const freshEnough = Number.isFinite(savedAt) && Date.now() - savedAt >= 0 && Date.now() - savedAt <= CACHE_MAX_AGE_MS;
+      return compatible && freshEnough && supportedPayload(parsed?.payload) ? parsed.payload : null;
     } catch { return null; }
   }
 
   function writeCache(key, payload) {
     if (!supportedPayload(payload)) return;
-    try { localStorage.setItem(`${CACHE_PREFIX}${key}`, JSON.stringify({ savedAt: new Date().toISOString(), payload })); } catch { /* cache is optional */ }
+    try { localStorage.setItem(`${CACHE_PREFIX}${key}`, JSON.stringify({ schema: CACHE_SCHEMA, build: CACHE_BUILD, savedAt: new Date().toISOString(), payload })); } catch { /* cache is optional */ }
   }
 
   function unwrapDailyReport(value) {
@@ -86,9 +95,9 @@
   function rankingState(model) {
     const cachedCandidate = readCache(`rankings:${model}`);
     const cached = samePublication(cachedCandidate, cachedHome) ? cachedCandidate : null;
-    const cachedHorizon = Number(cached?.horizon);
+    const cachedHorizon = normalizeRankingHorizon(model, cached?.horizon);
     const cachedSort = String(cached?.sort || '');
-    const horizon = HORIZONS[model].includes(cachedHorizon) ? cachedHorizon : DEFAULT_HORIZON[model];
+    const horizon = RANKING_HORIZONS[model].includes(cachedHorizon) ? cachedHorizon : DEFAULT_HORIZON[model];
     return {
       items: publicModelRows(cached?.items, model)
         .filter(row => publicHorizon(row) === horizon),
@@ -112,7 +121,9 @@
       industry: cached?.filters?.industry || '',
       sort: RANKING_SORTS.has(cachedSort) ? cachedSort : 'net_opportunity_desc',
       search: cached?.filters?.search || '',
-      requestId: 0
+      requestId: 0,
+      querySignature: '',
+      abortController: null
     };
   }
 
@@ -133,15 +144,19 @@
     watchAttempted: new Set(),
     watchErrors: new Map(),
     watchLoading: false,
+    watchGeneration: 0,
     newsVisible: 5,
     analysisSymbol: '',
     analysisMessage: '',
     validation: null,
     validationModel: 'short',
-    validationHorizon: DEFAULT_HORIZON.short,
+    validationHorizon: DEFAULT_SIGNAL_HORIZON.short,
     validationLoading: false,
     validationLoaded: false,
-    validationError: ''
+    validationError: '',
+    validationRequestId: 0,
+    validationQuerySignature: '',
+    validationAbortController: null
   };
 
   function enforceDarkOnly() {
@@ -152,28 +167,31 @@
     document.querySelectorAll('[data-theme-toggle],#themeToggle,.theme-toggle').forEach(node => node.remove());
   }
 
-  async function apiJson(path, timeout = 9000) {
+  async function apiJson(path, { timeout = 9000, signal } = {}) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeout);
+    const abortFromCaller = () => controller.abort();
+    if (signal?.aborted) controller.abort();
+    else signal?.addEventListener('abort', abortFromCaller, { once: true });
     try {
       const response = await fetch(`${API}${path}`, { cache: 'no-store', signal: controller.signal, headers: { accept: 'application/json' } });
       const payload = await response.json().catch(() => null);
-      if (!response.ok || !payload) throw new Error(payload?.error?.message || `HTTP ${response.status}`);
+      if (!response.ok || !payload || payload?.error || payload?.maintenance === true) throw new Error(payload?.error?.message || `HTTP ${response.status}`);
       return payload;
-    } finally { clearTimeout(timer); }
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', abortFromCaller);
+    }
   }
 
   function statusBanner(payload, phase, error = '') {
-    const state = error ? 'error' : phase === 'refreshing' ? 'refreshing' : phase === 'cache' ? 'cache' : payload?.publicationPhase || payload?.dataState || 'partial';
+    const qualityState = payload?.dataState || (['complete', 'partial', 'error'].includes(phase) ? phase : 'partial');
+    const state = error ? 'error' : phase === 'refreshing' || phase === 'enriching' ? phase : qualityState;
     const date = payload?.dataDate || S.date || '日期待補';
-    const degraded = safeArray(payload?.degradedSources);
     const pending = num(payload?.enrichmentPending);
-    const completeWithMissingSources = !error && phase !== 'refreshing'
-      && payload?.publicationPhase === 'complete' && (pending > 0 || degraded.length > 0);
-    const [label, className] = completeWithMissingSources
-      ? ['更新完成，部分來源待補', 'partial']
-      : stateLabels[state] || stateLabels.partial;
-    return `<div class="v20-data-status ${className}" role="status"><span class="v20-status-dot"></span><div><b>${label}</b><small>資料日期 ${esc(date)}${pending > 0 ? ` · 背景待補 ${displayNumber(pending, 0)} 筆` : ''}</small></div>${state === 'refreshing' || state === 'enriching' ? '<span class="spinner" aria-hidden="true"></span>' : ''}</div>`;
+    const [label, className] = stateLabels[state] || stateLabels.partial;
+    const publicationNote = payload?.publicationPhase === 'complete' ? ' · 推薦批次已封存' : '';
+    return `<div class="v20-data-status ${className}" role="status"><span class="v20-status-dot"></span><div><b>${label}</b><small>資料日期 ${esc(date)}${publicationNote}${pending > 0 ? ` · 背景待補 ${displayNumber(pending, 0)} 筆` : ''}</small></div>${state === 'refreshing' || state === 'enriching' ? '<span class="spinner" aria-hidden="true"></span>' : ''}</div>`;
   }
 
   function pageHero(eyebrow, title, description, status = '') {
@@ -184,8 +202,19 @@
     return first(value?.value, value?.close, value?.index, value?.price, value?.settlement);
   }
 
-  function marketChange(value) {
-    return first(value?.changePercent, value?.change_pct, value?.change);
+  function marketChangePercent(value) {
+    return first(value?.changePercent, value?.change_pct);
+  }
+
+  function marketChangePoints(value) {
+    return first(value?.changePoints, value?.change_points, value?.change);
+  }
+
+  function marketMovement(value) {
+    const percent = num(marketChangePercent(value));
+    if (percent != null) return { value: percent, label: displayPercent(percent, 2) };
+    const points = num(marketChangePoints(value));
+    return points == null ? { value: null, label: '—' } : { value: points, label: `${points > 0 ? '+' : ''}${displayNumber(points, 2)} 點` };
   }
 
   const globalIndicatorDefinitions = [[['nasdaq'], 'NASDAQ'], [['sp500'], 'S&P 500'], [['sox'], 'SOX'], [['tsmAdr'], '台積電 ADR'], [['nvidia', 'nvda'], 'NVIDIA'], [['vix'], 'VIX'], [['us10y', 'usTreasury'], '美債 10Y'], [['usdTwd', 'twdUsd'], 'USD/TWD']];
@@ -194,14 +223,18 @@
     return num(marketValue(value)) != null;
   }
 
-  function visibleDegradedSources(sources, market = {}) {
+  function visibleDegradedSources(sources, market = {}, publicationDate = '') {
+    const expectedDate = dateKey(publicationDate);
+    const currentValue = value => usableMarketValue(value)
+      && expectedDate !== ''
+      && dateKey(first(value?.dataDate, value?.date)) === expectedDate;
     const resolved = new Set([
-      usableMarketValue(market.taiex) && 'taiex_official_index',
-      usableMarketValue(market.tpex) && 'tpex_official_index',
-      usableMarketValue(market.txFutures) && 'tx_futures',
+      currentValue(market.taiex) && 'taiex_official_index',
+      currentValue(market.tpex) && 'tpex_official_index',
+      currentValue(market.txFutures) && 'tx_futures',
     ].filter(Boolean));
     const context = market.globalContext || {};
-    const resolvedGlobal = globalIndicatorDefinitions.filter(([keys]) => keys.some(key => usableMarketValue(context[key])));
+    const resolvedGlobal = globalIndicatorDefinitions.filter(([keys]) => keys.some(key => currentValue(context[key])));
     resolvedGlobal.forEach(([keys]) => keys.forEach(key => resolved.add(`global_${key}`)));
     if (resolvedGlobal.length === globalIndicatorDefinitions.length) {
       resolved.add('international_context');
@@ -212,11 +245,11 @@
 
   function marketCard(label, value) {
     const quote = marketValue(value);
-    const change = marketChange(value);
+    const movement = marketMovement(value);
     const source = first(value?.source, value?.provider, '來源待補');
     const contract = value?.contractMonth ? ` · ${value.contractMonth}` : '';
     const session = value?.session ? ` · ${value.session}` : '';
-    return `<article class="v20-market-card"><small>${esc(label)}</small><strong>${displayNumber(quote, 2)}</strong><b class="${num(change) > 0 ? 'up' : num(change) < 0 ? 'down' : 'muted'}">${num(change) == null ? '資料待補' : displayPercent(change, 2)}</b><em>${esc(source)}${esc(contract)}${esc(session)}</em><time>${esc(first(value?.dataDate, value?.date, '日期待補'))}</time></article>`;
+    return `<article class="v20-market-card"><small>${esc(label)}</small><strong>${displayNumber(quote, 2)}</strong><b class="${movement.value > 0 ? 'up' : movement.value < 0 ? 'down' : 'muted'}">${movement.value == null ? '資料待補' : movement.label}</b><em>${esc(source)}${esc(contract)}${esc(session)}</em><time>${esc(first(value?.dataDate, value?.date, '日期待補'))}</time></article>`;
   }
 
   function forecastFor(row) {
@@ -256,7 +289,18 @@
   }
 
   function publicHorizon(row) {
-    return num(first(row?.horizon, row?.horizonDays, row?.horizon_days));
+    const value = first(row?.horizon, row?.horizonDays, row?.horizon_days);
+    return String(value || '').toLowerCase() === 'blend' ? 'blend' : num(value);
+  }
+
+  function normalizeRankingHorizon(model, value) {
+    if (model === 'medium' && String(value || '').toLowerCase() === 'blend') return 'blend';
+    const numeric = num(value);
+    return HORIZONS[model].includes(numeric) ? numeric : DEFAULT_HORIZON[model];
+  }
+
+  function rawOpportunityValue(row) {
+    return num(first(row?.rawOpportunityScore, row?.rawOpportunityValue, row?.raw_opportunity_score));
   }
 
   function publicModelRows(rows, model) {
@@ -269,8 +313,20 @@
         && !researchOnly
         && publicVisible !== false
         && (rowModel == null || rowModel === model)
-        && HORIZONS[model].includes(horizon);
+        && (HORIZONS[model].includes(horizon) || (model === 'medium' && horizon === 'blend'));
     });
+  }
+
+  function blendBreakdown(row) {
+    if (row?.model !== 'medium' || publicHorizon(row) !== 'blend') return '';
+    const weights = row.blendWeights || {};
+    const components = row.componentHorizons || {};
+    const rows = [10, 20, 40].map(horizon => {
+      const weight = num(weights[horizon] ?? weights[String(horizon)]);
+      const component = components[horizon] || components[String(horizon)] || {};
+      return `<span><b>${horizon} 日 ${weight == null ? '權重待補' : `${displayNumber(weight * 100, 0)}%`}</b>機會 ${displayNumber(rawOpportunityValue(component), 1)}／成本後 ${displayNumber(first(component.netOpportunityScore, component.netOpportunityValue), 1)}</span>`;
+    });
+    return `<div class="v20-inline-note"><b>中期綜合（非單一期）：</b>10／20／40 日依 25%／50%／25% 組成。</div><div class="v20-plan-grid v20-blend-components">${rows.join('')}</div>`;
   }
 
   function cardConditions(row) {
@@ -287,12 +343,15 @@
     const rank = first(row.rank, row.rankPosition, row.rank_position, '—');
     const netValue = costAdjustedValue(row);
     const cost = estimatedCost(row, forecast);
+    const horizon = publicHorizon(row);
+    const validationHorizon = horizon === 'blend' ? '10／20／40 日綜合' : `${horizon} 日`;
     return `<article class="card v20-model-card ${reference ? 'reference' : ''}" data-v20-detail="${esc(row.symbol)}">
-      <div class="v20-card-head"><span class="v20-rank">${esc(rank)}</span><div class="v20-card-name"><b>${esc(row.name || row.symbol)}</b><small>${esc(row.symbol)} · ${esc(first(row.market, row.group, '市場待補'))}</small></div><div class="v20-card-score"><small>${reference ? '舊資料參考' : '機會分數'}</small><strong>${reference ? '—' : displayNumber(row.opportunityScore, 0)}</strong></div></div>
+      <div class="v20-card-head"><span class="v20-rank">${esc(rank)}</span><div class="v20-card-name"><b>${esc(row.name || row.symbol)}</b><small>${esc(row.symbol)} · ${esc(first(row.market, row.group, '市場待補'))}</small></div><div class="v20-card-score"><small>${reference ? '舊資料參考' : '機會分數'}</small><strong>${reference ? '—' : displayNumber(rawOpportunityValue(row), 0)}</strong></div></div>
       <p class="v20-summary">${esc(localizeStrategyText(first(row.summary, safeArray(row.reasons)[0], reference ? 'v20 模型建立中，暫不提供推測分數。' : '分析原因待補')))}</p>
       <div class="v20-chip-row"><span>${esc(strategyLabel(row.strategy))}</span><span>風險 ${displayNumber(row.riskScore, 0)}</span><span>資料完整度 ${probability(row.completeness)}</span><span>資料 ${esc(first(row.dataDate, '日期待補'))}</span></div>
+      ${blendBreakdown(row)}
       <div class="v20-forecast-row"><div><small>成本後機會值</small><b>${netValue == null ? '尚未產生' : displayNumber(netValue, 1)}</b></div><div><small>預估交易成本</small><b>${cost == null ? '尚未產生' : displayPercent(-Math.abs(cost), 3)}</b></div><div><small>校準狀態</small><b>${validation.publishable ? `已驗證 · ${displayNumber(validation.samples, 0)} 筆` : validation.samples == null ? '樣本數待補' : `累積中 · ${displayNumber(validation.samples, 0)} 筆`}</b></div></div>
-      ${validation.publishable ? `<div class="v20-inline-note"><b>歷史驗證：</b>${row.horizon} 日成本後正報酬比例 ${probability(forecast.upProbability)}；這是相似條件歷史結果，不是未來保證。</div>` : `<div class="v20-inline-note"><b>不公開機率：</b>${esc(hiddenForecastReason(validation))}</div>`}
+      ${validation.publishable ? `<div class="v20-inline-note"><b>歷史驗證：</b>${validationHorizon}成本後正報酬比例 ${probability(forecast.upProbability)}；這是相似條件歷史結果，不是未來保證。</div>` : `<div class="v20-inline-note"><b>不公開機率：</b>${esc(hiddenForecastReason(validation))}</div>`}
       ${cardConditions(row)}
       <div class="row v20-card-actions"><button class="btn secondary grow" type="button" data-watch="${esc(row.symbol)}">${isWatched(row.symbol) ? '✓ 已自選' : '＋ 加入自選'}</button><button class="btn grow" type="button" data-v20-detail="${esc(row.symbol)}">查看分析</button></div>
     </article>`;
@@ -301,7 +360,7 @@
   function compactList(rows, model) {
     const visible = publicModelRows(rows, model);
     if (!visible.length) return '<div class="card v20-empty"><b>模型資料正在建立</b><p>先顯示頁面，完成校準後會自動補上排行，不會使用猜測數字。</p></div>';
-    return `<div class="v20-top-list">${visible.slice(0, 5).map(row => `<button type="button" data-v20-detail="${esc(row.symbol)}"><span>${esc(first(row.rank, row.rankPosition, row.rank_position, '—'))}</span><div><b>${esc(row.name || row.symbol)}</b><small>${esc(row.symbol)} · ${esc(first(strategyLabel(row.strategy), row.industry, '資料待補'))}</small></div><strong>${row.legacyReference ? '—' : displayNumber(row.opportunityScore, 0)}</strong><i>›</i></button>`).join('')}</div><button class="v20-more-link" type="button" data-tab-jump="${model}">查看完整${model === 'short' ? '短期' : '中期'}排行 →</button>`;
+    return `<div class="v20-top-list">${visible.slice(0, 5).map(row => `<button type="button" data-v20-detail="${esc(row.symbol)}"><span>${esc(first(row.rank, row.rankPosition, row.rank_position, '—'))}</span><div><b>${esc(row.name || row.symbol)}</b><small>${esc(row.symbol)} · ${esc(first(strategyLabel(row.strategy), row.industry, '資料待補'))}</small></div><strong>${row.legacyReference ? '—' : displayNumber(rawOpportunityValue(row), 0)}</strong><i>›</i></button>`).join('')}</div><button class="v20-more-link" type="button" data-tab-jump="${model}">查看完整${model === 'short' ? '短期' : '中期'}排行 →</button>`;
   }
 
   function globalStrip(market) {
@@ -311,7 +370,10 @@
       return value ? [[label, value]] : [];
     });
     if (!rows.length) return '<div class="v20-inline-note">國際指標快取尚未同步；目前保留其他已載入資料，不顯示推測值。</div>';
-    return `<div class="v20-global-strip">${rows.map(([label, value]) => `<div><small>${esc(value?.label || (value?.proxy ? `${label}（ETF 代理）` : label))}</small><b>${displayNumber(marketValue(value), 2)}</b><span>${num(marketChange(value)) == null ? '—' : displayPercent(marketChange(value), 2)}</span><time>${esc(first(value?.dataDate, '日期待補'))}</time><em>${esc(first(value?.source, value?.symbol, '來源待補'))}</em></div>`).join('')}</div>`;
+    return `<div class="v20-global-strip">${rows.map(([label, value]) => {
+      const movement = marketMovement(value);
+      return `<div><small>${esc(value?.label || (value?.proxy ? `${label}（ETF 代理）` : label))}</small><b>${displayNumber(marketValue(value), 2)}</b><span>${movement.label}</span><time>${esc(first(value?.dataDate, '日期待補'))}</time><em>${esc(first(value?.source, value?.symbol, '來源待補'))}</em></div>`;
+    }).join('')}</div>`;
   }
 
   function dailyReportSection() {
@@ -324,9 +386,8 @@
     const focus = safeArray(first(report.watchStocks, report.opportunityStocks)).slice(0, 4);
     const risks = safeArray(first(report.mainRisks, report.risks)).slice(0, 3);
     const changes = safeArray(report.watchlistChanges).slice(0, 4);
-    const degradedSources = visibleDegradedSources(meta.degradedSources, v20.home?.market);
-    if (!wrapped) return `<section class="v20-section"><div class="v20-section-title"><div><span>DAILY AI BRIEF</span><h3>AI 每日報告</h3></div></div><div class="card v20-empty">${v20.dailyPhase === 'refreshing' ? '<span class="spinner"></span> 正在背景讀取最近一次報告，首頁其他內容可先使用。' : '每日報告更新失敗，保留其他已載入內容。'}</div></section>`;
-    return `<section class="v20-section"><div class="v20-section-title"><div><span>DAILY AI BRIEF</span><h3>AI 每日報告</h3></div><small>${esc(meta.dataDate || '日期待補')}</small></div><article class="card v20-daily-report">${statusBanner({ dataState: degradedSources.length ? meta.updateStatus || meta.dataState : 'complete', dataDate: meta.dataDate, publicationPhase: meta.publicationPhase, enrichmentPending: meta.enrichmentPending, degradedSources }, v20.dailyPhase, v20.dailyError)}<p class="v20-daily-lead">${esc(first(report.oneLine, report.todayInOneSentence, '今日市場結論待補'))}</p><div class="v20-daily-grid"><div><small>市場強弱</small><b>${esc(first(strength.level, strength.label, '資料不足'))}</b><p>${esc(first(strength.explanation, '等待市場廣度資料補齊。'))}</p></div><div><small>法人方向</small><b>${esc(first(institutional.direction, institutional.label, '資料不足'))}</b><p>${esc(first(institutional.explanation, '等待法人資料補齊。'))}</p></div></div>${industries.length ? `<div class="v20-daily-block"><h4>熱門產業</h4><div class="v20-chip-row">${industries.map(item => `<span>${esc(item.industry || item.name || item)}${num(item.averageChangePct) == null ? '' : ` ${displayPercent(item.averageChangePct)}`}</span>`).join('')}</div></div>` : ''}${focus.length ? `<div class="v20-daily-block"><h4>值得關注</h4><div class="v20-report-stocks">${focus.map(item => `<button type="button" data-v20-detail="${esc(item.symbol)}"><b>${esc(item.name || item.symbol)}</b><small>${esc(item.symbol)} · ${esc(first(item.whyNotice, item.advantage, '查看量化分析'))}</small></button>`).join('')}</div></div>` : ''}${risks.length ? `<div class="v20-daily-block"><h4>主要風險</h4><ul>${risks.map(item => `<li><b>${esc(item.title || '風險提醒')}</b> ${esc(item.explanation || item.risk || item)}</li>`).join('')}</ul></div>` : ''}<div class="v20-daily-block"><h4>自選股變化</h4>${changes.length ? `<ul>${changes.map(item => `<li>${esc(typeof item === 'string' ? item : first(item.explanation, item.message, item.title, item.symbol))}</li>`).join('')}</ul>` : '<p class="muted">目前沒有已驗證的重要變化。</p>'}</div></article></section>`;
+    if (!wrapped) return `<section class="v20-section"><div class="v20-section-title"><div><span>DAILY MARKET SUMMARY</span><h3>每日市場摘要</h3></div></div><div class="card v20-empty">${v20.dailyPhase === 'refreshing' ? '<span class="spinner"></span> 正在背景讀取最近一次摘要，首頁其他內容可先使用。' : '每日摘要更新失敗，保留其他已載入內容。'}</div></section>`;
+    return `<section class="v20-section"><div class="v20-section-title"><div><span>DAILY MARKET SUMMARY</span><h3>每日市場摘要</h3></div><small>${esc(meta.dataDate || '日期待補')}</small></div><article class="card v20-daily-report"><p class="v20-daily-lead">${esc(first(report.oneLine, report.todayInOneSentence, '今日市場結論待補'))}</p><div class="v20-daily-grid"><div><small>市場強弱</small><b>${esc(first(strength.level, strength.label, '資料不足'))}</b><p>${esc(first(strength.explanation, '等待市場廣度資料補齊。'))}</p></div><div><small>法人方向</small><b>${esc(first(institutional.direction, institutional.label, '資料不足'))}</b><p>${esc(first(institutional.explanation, '等待法人資料補齊。'))}</p></div></div>${industries.length ? `<div class="v20-daily-block"><h4>熱門產業</h4><div class="v20-chip-row">${industries.map(item => `<span>${esc(item.industry || item.name || item)}${num(item.averageChangePct) == null ? '' : ` ${displayPercent(item.averageChangePct)}`}</span>`).join('')}</div></div>` : ''}${focus.length ? `<div class="v20-daily-block"><h4>值得關注</h4><div class="v20-report-stocks">${focus.map(item => `<button type="button" data-v20-detail="${esc(item.symbol)}"><b>${esc(item.name || item.symbol)}</b><small>${esc(item.symbol)} · ${esc(first(item.whyNotice, item.advantage, '查看量化分析'))}</small></button>`).join('')}</div></div>` : ''}${risks.length ? `<div class="v20-daily-block"><h4>主要風險</h4><ul>${risks.map(item => `<li><b>${esc(item.title || '風險提醒')}</b> ${esc(item.explanation || item.risk || item)}</li>`).join('')}</ul></div>` : ''}<div class="v20-daily-block"><h4>自選股變化</h4>${changes.length ? `<ul>${changes.map(item => `<li>${esc(typeof item === 'string' ? item : first(item.explanation, item.message, item.title, item.symbol))}</li>`).join('')}</ul>` : '<p class="muted">目前沒有已驗證的重要變化。</p>'}</div></article></section>`;
   }
 
   function homePageV20() {
@@ -334,16 +395,15 @@
     const market = home.market || {};
     const news = safeArray(home.importantNews);
     const newsReason = first(home.importantNewsState?.reason, '此推薦批次尚未保存可驗證的新聞與公告快照。');
-    const visibleDegraded = visibleDegradedSources(home.degradedSources, market);
+    const visibleDegraded = visibleDegradedSources(home.degradedSources, market, home.dataDate);
     const state = statusBanner({
       ...home,
-      dataState: visibleDegraded.length ? home.dataState : 'complete',
       degradedSources: visibleDegraded,
     }, v20.homePhase, v20.homeError);
     return `<div class="v20-dashboard">
       ${pageHero('MARKET INTELLIGENCE · v20', '今日重點', '先看結論，再展開需要的細節。', state)}
       <section class="v20-section"><div class="v20-section-title"><div><span>MARKET REGIME</span><h3>今日市場環境</h3></div><strong>${esc(market.regime || '資料不足')}</strong></div>
-        <div class="card v20-market-panel"><div class="v20-market-grid">${marketCard('加權指數', market.taiex)}${marketCard('櫃買指數', market.tpex)}${marketCard('台指期', market.txFutures)}</div><div class="v20-regime-line"><span>市場強弱</span><b>${displayNumber(market.regimeScore, 0)} / 100</b><span>信心 ${probability(market.confidence)}</span></div>${globalStrip(market)}</div>
+        <div class="card v20-market-panel"><div class="v20-market-grid">${marketCard('加權指數', market.taiex)}${marketCard('櫃買指數', market.tpex)}${marketCard('台指期', market.txFutures)}</div><div class="v20-regime-line"><span>市場強弱</span><b>${displayNumber(market.regimeScore, 0)}，範圍 -100～+100</b><span>信心 ${probability(market.confidence)}</span></div>${globalStrip(market)}</div>
       </section>
       ${dailyReportSection()}
       <div class="v20-home-columns"><section class="v20-section"><div class="v20-section-title"><div><span>SHORT-TERM</span><h3>短期 Top 5</h3></div><small>2／3／5／10 日</small></div>${compactList(safeArray(home.shortTop), 'short')}</section>
@@ -355,8 +415,8 @@
 
   function rankingFilters(model, page) {
     const label = model === 'short' ? '短期' : '中期';
-    const horizonLabel = value => model === 'medium' ? `${value / 5} 週（${value} 個交易日）` : `${value} 個交易日`;
-    return `<div class="card v20-filters"><div class="v20-filter-grid"><label>觀察期間<select id="v20Horizon">${HORIZONS[model].map(value => `<option value="${value}" ${page.horizon === value ? 'selected' : ''}>${horizonLabel(value)}</option>`).join('')}</select></label><label>市場<select id="v20Market"><option value="all">全部</option><option value="listed" ${page.market === 'listed' ? 'selected' : ''}>上市</option><option value="otc" ${page.market === 'otc' ? 'selected' : ''}>上櫃</option><option value="etf" ${page.market === 'etf' ? 'selected' : ''}>ETF</option></select></label><label>產業<input id="v20Industry" value="${esc(page.industry)}" placeholder="全部產業"></label><label>排序<select id="v20Sort"><option value="net_opportunity_desc" ${page.sort === 'net_opportunity_desc' ? 'selected' : ''}>成本後機會值</option><option value="score_desc" ${page.sort === 'score_desc' ? 'selected' : ''}>機會分數</option><option value="risk_asc" ${page.sort === 'risk_asc' ? 'selected' : ''}>風險較低</option><option value="change_desc" ${page.sort === 'change_desc' ? 'selected' : ''}>排名上升</option></select></label></div><div class="search-row"><input id="v20Search" value="${esc(page.search)}" inputmode="search" placeholder="搜尋股票代號或名稱" aria-label="搜尋${label}機會股"><button id="v20SearchBtn" class="btn" type="button">搜尋</button></div></div>`;
+    const horizonLabel = value => value === 'blend' ? '綜合（10／20／40 日）' : model === 'medium' ? `${value / 5} 週（${value} 個交易日）` : `${value} 個交易日`;
+    return `<div class="card v20-filters"><div class="v20-filter-grid"><label>觀察期間<select id="v20Horizon">${RANKING_HORIZONS[model].map(value => `<option value="${value}" ${page.horizon === value ? 'selected' : ''}>${horizonLabel(value)}</option>`).join('')}</select></label><label>市場<select id="v20Market"><option value="all">全部</option><option value="listed" ${page.market === 'listed' ? 'selected' : ''}>上市</option><option value="otc" ${page.market === 'otc' ? 'selected' : ''}>上櫃</option><option value="etf" ${page.market === 'etf' ? 'selected' : ''}>ETF</option></select></label><label>產業<input id="v20Industry" value="${esc(page.industry)}" placeholder="全部產業"></label><label>排序<select id="v20Sort"><option value="net_opportunity_desc" ${page.sort === 'net_opportunity_desc' ? 'selected' : ''}>成本後機會值</option><option value="score_desc" ${page.sort === 'score_desc' ? 'selected' : ''}>機會分數</option><option value="risk_asc" ${page.sort === 'risk_asc' ? 'selected' : ''}>風險較低</option><option value="change_desc" ${page.sort === 'change_desc' ? 'selected' : ''}>排名上升</option></select></label></div><div class="search-row"><input id="v20Search" value="${esc(page.search)}" inputmode="search" placeholder="搜尋股票代號或名稱" aria-label="搜尋${label}機會股"><button id="v20SearchBtn" class="btn" type="button">搜尋</button></div></div>`;
   }
 
   function rankingPageV20(model) {
@@ -372,14 +432,19 @@
       ${page.nextCursor ? `<button id="v20LoadMore" class="btn secondary v20-load-more" type="button" ${page.loading ? 'disabled' : ''}>${page.loading ? '載入中…' : '載入更多 20 檔'}</button>` : ''}${disclaimer()}</div>`;
   }
 
+  function watchDetailForPublication(symbol) {
+    const candidate = v20.detailCache.get(symbol) || readCache(`stock:${symbol}`);
+    return samePublication(candidate, v20.home) ? candidate : null;
+  }
+
   function watchlistRowsV20() {
     const watched = getWatchlist();
     return watched.map(item => {
-      const symbol = String(item.symbol || '');
-      const detail = v20.detailCache.get(symbol) || readCache(`stock:${symbol}`);
-      const short = safeArray(detail?.short).find(signal => signal.horizon === DEFAULT_HORIZON.short) || safeArray(detail?.short)[0];
+      const symbol = String(item.symbol || '').trim().toUpperCase();
+      const detail = watchDetailForPublication(symbol);
+      const short = safeArray(detail?.short).find(signal => signal.horizon === DEFAULT_SIGNAL_HORIZON.short) || safeArray(detail?.short)[0];
       const mediumRows = publicModelRows(detail?.medium, 'medium');
-      const medium = mediumRows.find(signal => publicHorizon(signal) === DEFAULT_HORIZON.medium) || mediumRows[0];
+      const medium = mediumRows.find(signal => publicHorizon(signal) === DEFAULT_SIGNAL_HORIZON.medium) || mediumRows[0];
       return { item, detail, short, medium, stock: detail?.stock || S.stocks.find(stock => String(stock.symbol) === symbol) };
     }).filter(({ item }) => item.symbol);
   }
@@ -391,7 +456,7 @@
         const quote = detail?.quote || {};
         const quoteClose = quote?.close;
         const quoteDate = first(quote?.tradeDate, detail?.tradeDate);
-        return `<article class="card v20-watch-card" data-v20-detail="${esc(item.symbol)}"><div class="head"><div><b>${esc(stock?.name || item.symbol)}</b><small>${esc(item.symbol)} · ${esc(first(stock?.market, '市場待補'))}</small></div><button type="button" class="icon-btn" data-watch="${esc(item.symbol)}">移除</button></div><div class="v20-watch-metrics"><div><small>${num(quoteClose) == null ? '此批次未保存收盤價' : '最新價格'}</small><b>${displayNumber(quoteClose, 2)}</b></div><div><small>短期機會／風險</small><b>${displayNumber(short?.opportunityScore, 0)}／${displayNumber(short?.riskScore, 0)}</b></div><div><small>中期機會／風險</small><b>${displayNumber(medium?.opportunityScore, 0)}／${displayNumber(medium?.riskScore, 0)}</b></div><div><small>行情日期</small><b>${esc(first(quoteDate, '此批次未保存'))}</b></div></div><div class="v20-inline-note"><b>重要提醒：</b>${esc(reminder)}</div><button type="button" class="btn v20-full" data-v20-detail="${esc(item.symbol)}">查看短中期分析</button></article>`;
+        return `<article class="card v20-watch-card" data-v20-detail="${esc(item.symbol)}"><div class="head"><div><b>${esc(stock?.name || item.symbol)}</b><small>${esc(item.symbol)} · ${esc(first(stock?.market, '市場待補'))}</small></div><button type="button" class="icon-btn" data-watch="${esc(item.symbol)}">移除</button></div><div class="v20-watch-metrics"><div><small>${num(quoteClose) == null ? '此批次未保存收盤價' : '最新價格'}</small><b>${displayNumber(quoteClose, 2)}</b></div><div><small>短期機會／風險</small><b>${displayNumber(rawOpportunityValue(short), 0)}／${displayNumber(short?.riskScore, 0)}</b></div><div><small>中期機會／風險</small><b>${displayNumber(rawOpportunityValue(medium), 0)}／${displayNumber(medium?.riskScore, 0)}</b></div><div><small>行情日期</small><b>${esc(first(quoteDate, '此批次未保存'))}</b></div></div><div class="v20-inline-note"><b>重要提醒：</b>${esc(reminder)}</div><button type="button" class="btn v20-full" data-v20-detail="${esc(item.symbol)}">查看短中期分析</button></article>`;
       }).join('')}</div>` : '<div class="card v20-empty"><h3>尚未加入自選股票</h3><p>可在短期、中期排行榜或個股分析中加入。</p></div>';
   }
 
@@ -401,30 +466,46 @@
 
   async function ensureWatchDetails() {
     if (v20.watchLoading) return;
-    const symbols = [...new Set(getWatchlist().map(item => String(item.symbol || '').trim().toUpperCase()))]
-      .filter(symbol => /^[0-9]{4,6}[A-Z]?$/.test(symbol))
-      .filter(symbol => !v20.detailCache.has(symbol) && !v20.watchAttempted.has(symbol))
-      .slice(0, 20);
-    if (!symbols.length) return;
     v20.watchLoading = true;
-    symbols.forEach(symbol => v20.watchAttempted.add(symbol));
-    for (let index = 0; index < symbols.length; index += 4) {
-      const batch = symbols.slice(index, index + 4);
-      const settled = await Promise.allSettled(batch.map(symbol => apiJson(`/stocks?symbol=${encodeURIComponent(symbol)}`)));
-      settled.forEach((result, offset) => {
-        const symbol = batch[offset];
-        if (result.status !== 'fulfilled') {
-          v20.watchAttempted.delete(symbol);
-          v20.watchErrors.set(symbol, '量化分析更新失敗；保留既有資料，可稍後重試。');
-          return;
+    const generation = v20.watchGeneration;
+    const attemptedThisCycle = new Set();
+    const failedThisCycle = new Set();
+    try {
+      while (generation === v20.watchGeneration) {
+        const wave = [...new Set(getWatchlist().map(item => String(item.symbol || '').trim().toUpperCase()))]
+          .filter(symbol => /^[0-9]{4,6}[A-Z]?$/.test(symbol))
+          .filter(symbol => !watchDetailForPublication(symbol) && !v20.watchAttempted.has(symbol) && !attemptedThisCycle.has(symbol))
+          .slice(0, 20);
+        if (!wave.length) break;
+        wave.forEach(symbol => {
+          attemptedThisCycle.add(symbol);
+          v20.watchAttempted.add(symbol);
+        });
+        for (let index = 0; index < wave.length && generation === v20.watchGeneration; index += 4) {
+          const batch = wave.slice(index, index + 4);
+          const settled = await Promise.allSettled(batch.map(symbol => apiJson(`/stocks?symbol=${encodeURIComponent(symbol)}`)));
+          settled.forEach((result, offset) => {
+            const symbol = batch[offset];
+            if (generation !== v20.watchGeneration) return;
+            if (result.status !== 'fulfilled' || !samePublication(result.value, v20.home)) {
+              failedThisCycle.add(symbol);
+              v20.watchErrors.set(symbol, result.status === 'fulfilled'
+                ? '推薦批次已更新，正在重新同步量化分析。'
+                : '量化分析更新失敗；保留既有資料，可稍後重試。');
+              return;
+            }
+            v20.watchErrors.delete(symbol);
+            v20.detailCache.set(symbol, result.value);
+            writeCache(`stock:${symbol}`, result.value);
+          });
+          if (S.tab === 'watchlist') render();
         }
-        v20.watchErrors.delete(symbol);
-        v20.detailCache.set(symbol, result.value);
-        writeCache(`stock:${symbol}`, result.value);
-      });
-      if (S.tab === 'watchlist') render();
+      }
+    } finally {
+      failedThisCycle.forEach(symbol => v20.watchAttempted.delete(symbol));
+      v20.watchLoading = false;
+      if (generation !== v20.watchGeneration && S.tab === 'watchlist') void ensureWatchDetails();
     }
-    v20.watchLoading = false;
   }
 
   function validationRows(payload) {
@@ -477,20 +558,31 @@
   }
 
   async function loadValidation() {
-    if (v20.validationLoading) return;
+    const query = Object.freeze({ model: v20.validationModel, horizon: Number(v20.validationHorizon) });
+    const signature = JSON.stringify(query);
+    v20.validationAbortController?.abort();
+    const controller = new AbortController();
+    v20.validationAbortController = controller;
+    v20.validationQuerySignature = signature;
+    const requestId = ++v20.validationRequestId;
     v20.validationLoading = true;
     v20.validationError = '';
     if (S.tab === 'validation') render();
     try {
-      const payload = await apiJson(`/backtest?model=${encodeURIComponent(v20.validationModel)}&horizon=${encodeURIComponent(v20.validationHorizon)}`);
+      const payload = await apiJson(`/backtest?model=${encodeURIComponent(query.model)}&horizon=${encodeURIComponent(query.horizon)}`, { signal: controller.signal });
+      if (requestId !== v20.validationRequestId || signature !== v20.validationQuerySignature || controller !== v20.validationAbortController) return;
       v20.validation = payload;
       v20.validationLoaded = true;
     } catch (error) {
+      if (requestId !== v20.validationRequestId || signature !== v20.validationQuerySignature || controller !== v20.validationAbortController) return;
       v20.validationError = error.name === 'AbortError' ? '驗證資料讀取逾時。' : error.message;
       v20.validationLoaded = true;
     } finally {
-      v20.validationLoading = false;
-      if (S.tab === 'validation') render();
+      if (requestId === v20.validationRequestId && signature === v20.validationQuerySignature && controller === v20.validationAbortController) {
+        v20.validationLoading = false;
+        v20.validationAbortController = null;
+        if (S.tab === 'validation') render();
+      }
     }
   }
 
@@ -559,7 +651,7 @@
         ? `<div class="v20-forecast-row"><div><small>歷史正報酬比例</small><b>${probability(forecast.upProbability)}</b></div><div><small>歷史成本後平均</small><b>${displayPercent(forecast.expectedNetReturn)}</b></div><div><small>樣本／完整度</small><b>${displayNumber(validation.samples, 0)}／${probability(signal.completeness)}</b></div></div>`
         : `<div class="v20-inline-note"><b>機率尚未公開：</b>${esc(hiddenForecastReason(validation))}目前仍可參考機會分數、風險、因子與交易條件。</div><div class="v20-forecast-row"><div><small>校準狀態</small><b>${validation.samples == null ? '樣本數待補' : `累積 ${displayNumber(validation.samples, 0)} 筆`}</b></div><div><small>模型信心</small><b>${probability(signal.confidence)}</b></div><div><small>資料完整度</small><b>${probability(signal.completeness)}</b></div></div>`;
       const calibratedRanges = validation.publishable ? `<span>歷史 P10／P50／P90 <b>${displayPercent(range.p10)}／${displayPercent(range.p50)}／${displayPercent(range.p90)}</b></span><span>MFE／MAE <b>${displayPercent(forecast.averageMfe)}／${displayPercent(forecast.averageMae)}</b></span>` : '';
-      return `<article class="card v20-signal-card"><div class="head"><div><span class="tag info">${signal.horizon} 日 · ${esc(first(signal.dataDate, '日期待補'))}</span><h3>${esc(strategyLabel(signal.strategy))}</h3></div><div class="v20-card-score"><small>機會／風險</small><strong>${displayNumber(signal.opportunityScore, 0)}<i>／${displayNumber(signal.riskScore, 0)}</i></strong></div></div>${forecastBlock}${scoreExplanationGrid(signal)}${marketImpactSummary(signal)}${reasons.length ? `<h4>為什麼值得注意</h4><ul class="v20-detail-list">${reasons.slice(0, 5).map(item => `<li>${esc(localizeStrategyText(item))}</li>`).join('')}</ul>` : `<p><b>為什麼值得注意：</b>${esc(localizeStrategyText(first(signal.summary, '尚未整理出已驗證的正面原因')))}</p>`}${risks.length ? `<h4>主要風險</h4><ul class="v20-detail-list v20-risk-text">${risks.slice(0, 6).map(item => `<li>${esc(localizeStrategyText(item))}</li>`).join('')}</ul>` : '<p class="v20-risk-text"><b>主要風險：</b>尚未發現額外風險，但仍須遵守停損與失效條件。</p>'}${gateSummary(signal)}<div class="v20-plan-grid">${calibratedRanges}<span>布局區 <b>${displayNumber(signal.tradePlan?.entryLow, 2)}–${displayNumber(signal.tradePlan?.entryHigh, 2)}</b></span><span>突破確認價 <b>${displayNumber(signal.tradePlan?.breakoutPrice, 2)}</b></span><span>不追價價格 <b>${displayNumber(signal.tradePlan?.noChasePrice, 2)}</b></span><span>停損 <b>${displayNumber(signal.tradePlan?.stopLoss, 2)}</b></span><span>第一／第二停利 <b>${displayNumber(signal.tradePlan?.takeProfit1, 2)}／${displayNumber(signal.tradePlan?.takeProfit2, 2)}</b></span><span>風報比／持有期 <b>${displayNumber(signal.tradePlan?.riskRewardRatio, 2)}／${displayNumber(signal.tradePlan?.recommendedHoldingDays, 0)} 日</b></span></div>${invalidations.length ? `<h4>失效條件</h4><ul class="v20-detail-list">${invalidations.slice(0, 6).map(item => `<li>${esc(localizeStrategyText(item))}</li>`).join('')}</ul>` : ''}<div class="v20-action">${esc(signal.recommendedAction || '資料不足')}</div></article>`;
+      return `<article class="card v20-signal-card"><div class="head"><div><span class="tag info">${signal.horizon} 日 · ${esc(first(signal.dataDate, '日期待補'))}</span><h3>${esc(strategyLabel(signal.strategy))}</h3></div><div class="v20-card-score"><small>機會／風險</small><strong>${displayNumber(rawOpportunityValue(signal), 0)}<i>／${displayNumber(signal.riskScore, 0)}</i></strong></div></div>${forecastBlock}${scoreExplanationGrid(signal)}${marketImpactSummary(signal)}${reasons.length ? `<h4>為什麼值得注意</h4><ul class="v20-detail-list">${reasons.slice(0, 5).map(item => `<li>${esc(localizeStrategyText(item))}</li>`).join('')}</ul>` : `<p><b>為什麼值得注意：</b>${esc(localizeStrategyText(first(signal.summary, '尚未整理出已驗證的正面原因')))}</p>`}${risks.length ? `<h4>主要風險</h4><ul class="v20-detail-list v20-risk-text">${risks.slice(0, 6).map(item => `<li>${esc(localizeStrategyText(item))}</li>`).join('')}</ul>` : '<p class="v20-risk-text"><b>主要風險：</b>尚未發現額外風險，但仍須遵守停損與失效條件。</p>'}${gateSummary(signal)}<div class="v20-plan-grid">${calibratedRanges}<span>布局區 <b>${displayNumber(signal.tradePlan?.entryLow, 2)}–${displayNumber(signal.tradePlan?.entryHigh, 2)}</b></span><span>突破確認價 <b>${displayNumber(signal.tradePlan?.breakoutPrice, 2)}</b></span><span>不追價價格 <b>${displayNumber(signal.tradePlan?.noChasePrice, 2)}</b></span><span>停損 <b>${displayNumber(signal.tradePlan?.stopLoss, 2)}</b></span><span>第一／第二停利 <b>${displayNumber(signal.tradePlan?.takeProfit1, 2)}／${displayNumber(signal.tradePlan?.takeProfit2, 2)}</b></span><span>風報比／持有期 <b>${displayNumber(signal.tradePlan?.riskRewardRatio, 2)}／${displayNumber(signal.tradePlan?.recommendedHoldingDays, 0)} 日</b></span></div>${invalidations.length ? `<h4>失效條件</h4><ul class="v20-detail-list">${invalidations.slice(0, 6).map(item => `<li>${esc(localizeStrategyText(item))}</li>`).join('')}</ul>` : ''}<div class="v20-action">${esc(signal.recommendedAction || '資料不足')}</div></article>`;
     }).join('')}</div></section>`;
   }
 
@@ -644,26 +736,39 @@
     }
   }
 
-  function queryFor(model, page, cursor = '') {
-    const params = new URLSearchParams({ model, horizon: String(page.horizon), limit: cursor ? '20' : '10', sort: page.sort });
-    if (page.market !== 'all') params.set('market', page.market);
-    if (page.industry) params.set('industry', page.industry);
-    if (page.search) params.set('search', page.search);
-    if (cursor) params.set('cursor', cursor);
-    return `/rankings?${params}`;
+  function rankingRequest(model, page, cursor = '') {
+    const query = Object.freeze({
+      model,
+      horizon: normalizeRankingHorizon(model, page.horizon),
+      market: String(page.market || 'all'),
+      industry: String(page.industry || ''),
+      search: String(page.search || ''),
+      sort: String(page.sort || 'net_opportunity_desc'),
+      cursor: String(cursor || '')
+    });
+    const params = new URLSearchParams({ model: query.model, horizon: String(query.horizon), limit: query.cursor ? '20' : '10', sort: query.sort });
+    if (query.market !== 'all') params.set('market', query.market);
+    if (query.industry) params.set('industry', query.industry);
+    if (query.search) params.set('search', query.search);
+    if (query.cursor) params.set('cursor', query.cursor);
+    return { query, path: `/rankings?${params}`, signature: JSON.stringify(query) };
   }
 
   async function loadRankings(model, append = false) {
     const page = v20.pages[model];
-    if (page.loading) return;
+    const request = rankingRequest(model, page, append ? page.nextCursor : '');
+    page.abortController?.abort();
+    const controller = new AbortController();
+    page.abortController = controller;
+    page.querySignature = request.signature;
     page.loading = true;
     page.phase = page.items.length ? 'refreshing' : page.phase;
     page.error = '';
     const requestId = ++page.requestId;
     if (S.tab === model) render();
     try {
-      const payload = await apiJson(queryFor(model, page, append ? page.nextCursor : ''));
-      if (requestId !== page.requestId) return;
+      const payload = await apiJson(request.path, { signal: controller.signal });
+      if (requestId !== page.requestId || request.signature !== page.querySignature || controller !== page.abortController) return;
       if (v20.home && !samePublication(payload, v20.home)) {
         void loadHome();
         throw new Error('推薦批次已更新，正在重新同步排行。');
@@ -671,7 +776,7 @@
       const existing = append ? page.items : [];
       const bySymbol = new Map(existing.map(item => [item.symbol, item]));
       publicModelRows(payload.items, model)
-        .filter(item => publicHorizon(item) === page.horizon)
+        .filter(item => publicHorizon(item) === request.query.horizon)
         .forEach(item => bySymbol.set(item.symbol, item));
       page.items = [...bySymbol.values()];
       page.nextCursor = payload.nextCursor || null;
@@ -689,18 +794,32 @@
       page.loaded = true;
       if (!append) writeCache(`rankings:${model}`, payload);
     } catch (error) {
-      if (requestId !== page.requestId) return;
+      if (requestId !== page.requestId || request.signature !== page.querySignature || controller !== page.abortController) return;
       page.phase = 'error';
       page.error = error.name === 'AbortError' ? '更新逾時，保留目前資料。' : error.message;
     } finally {
-      if (requestId === page.requestId) page.loading = false;
-      if (S.tab === model) render();
+      if (requestId === page.requestId && request.signature === page.querySignature && controller === page.abortController) {
+        page.loading = false;
+        page.abortController = null;
+        if (S.tab === model) render();
+      }
     }
   }
 
   function ensureRankings(model) {
     const page = v20.pages[model];
     if (!page.loaded && !page.loading) void loadRankings(model);
+  }
+
+  function applyHomeSourceDates(payload) {
+    const sourceDates = payload?.sourceDates && typeof payload.sourceDates === 'object' ? payload.sourceDates : {};
+    const listed = dateKey(sourceDates.listed);
+    const otc = dateKey(sourceDates.otc);
+    const aligned = Boolean(listed && otc && listed === otc);
+    S.sourceDates = {
+      ...sourceDates,
+      price: { twse: listed, tpex: otc, common: aligned ? listed : '', aligned }
+    };
   }
 
   async function loadHome() {
@@ -714,6 +833,7 @@
       v20.homeError = '';
       S.loading = false;
       S.date = payload.dataDate || S.date;
+      applyHomeSourceDates(payload);
       S.mode = payload.dataState === 'complete' ? 'live' : 'partial';
       updateMarketHeader();
       const atomicReport = unwrapDailyReport(payload.dailyReport);
@@ -724,10 +844,13 @@
       } else {
         v20.dailyReport = null;
         v20.dailyPhase = 'error';
-        v20.dailyError = '每日報告未綁定目前推薦批次，已停止顯示。';
+        v20.dailyError = '每日摘要未綁定目前推薦批次，已停止顯示。';
       }
       if (previousHome && !samePublication(previousHome, payload)) {
         v20.detailCache.clear();
+        v20.watchAttempted.clear();
+        v20.watchErrors.clear();
+        v20.watchGeneration += 1;
         Object.values(v20.pages).forEach(page => {
           if (page.runId && !samePublication(page, payload)) {
             page.items = [];
@@ -744,6 +867,7 @@
       v20.homeError = error.name === 'AbortError' ? '背景更新逾時，保留快取資料。' : error.message;
       S.loading = false;
       S.date = v20.home?.dataDate || S.date;
+      applyHomeSourceDates(v20.home);
       S.mode = v20.home ? 'partial' : 'error';
       updateMarketHeader();
     }
@@ -763,7 +887,7 @@
     const model = S.tab === 'short' || S.tab === 'medium' ? S.tab : null;
     if (model) {
       const page = v20.pages[model];
-      q('#v20Horizon')?.addEventListener('change', event => { page.horizon = Number(event.target.value); page.nextCursor = null; page.loaded = false; loadRankings(model); });
+      q('#v20Horizon')?.addEventListener('change', event => { page.horizon = normalizeRankingHorizon(model, event.target.value); page.nextCursor = null; page.loaded = false; loadRankings(model); });
       q('#v20Market')?.addEventListener('change', event => { page.market = event.target.value; page.nextCursor = null; page.loaded = false; loadRankings(model); });
       q('#v20Industry')?.addEventListener('change', event => { page.industry = event.target.value.trim(); page.nextCursor = null; page.loaded = false; loadRankings(model); });
       q('#v20Industry')?.addEventListener('keydown', event => { if (event.key === 'Enter') { page.industry = event.target.value.trim(); page.nextCursor = null; page.loaded = false; loadRankings(model); } });
@@ -780,7 +904,7 @@
       ensureValidation();
       q('#v20ValidationModel')?.addEventListener('change', event => {
         v20.validationModel = event.target.value === 'medium' ? 'medium' : 'short';
-        v20.validationHorizon = DEFAULT_HORIZON[v20.validationModel];
+        v20.validationHorizon = DEFAULT_SIGNAL_HORIZON[v20.validationModel];
         v20.validationLoaded = false;
         void loadValidation();
       });
@@ -837,6 +961,12 @@
   };
 
   openDetail = openV20Detail;
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.addEventListener('message', event => {
+      if (event.data?.type !== 'twss-home-publication-updated') return;
+      if (!samePublication(event.data.publication, v20.home)) void loadHome();
+    });
+  }
   enforceDarkOnly();
   render();
   void loadHome();

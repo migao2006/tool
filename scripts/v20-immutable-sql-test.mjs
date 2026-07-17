@@ -17,6 +17,10 @@ const publicReadRpcMigrationUrl = new URL(
   "../supabase/migrations/20260716190000_enable_v20_public_read_rpc.sql",
   import.meta.url,
 );
+const mediumBlendMigrationUrl = new URL(
+  "../supabase/migrations/20260717083846_add_v20_medium_blend_rankings.sql",
+  import.meta.url,
+);
 
 const db = new PGlite({ extensions: { pgcrypto } });
 const prerequisiteSql = `
@@ -331,6 +335,7 @@ try {
   await db.exec(await readFile(migrationUrl, "utf8"));
   await db.exec(await readFile(pointInTimeValidationMigrationUrl, "utf8"));
   await db.exec(await readFile(publicReadRpcMigrationUrl, "utf8"));
+  await db.exec(await readFile(mediumBlendMigrationUrl, "utf8"));
   await db.exec(seedSql);
 
   const dates = (
@@ -653,6 +658,34 @@ try {
   assert.equal(rankings.hasMore, true);
   assert.equal(rankings.items.length, 3);
 
+  const mediumBlend = (
+    await db.query(`
+      select public.twss_v20_read_medium_blend(
+        '{"limit":2}'::jsonb
+      ) result
+    `)
+  ).rows[0].result;
+  assert.equal(mediumBlend.items.length, 2);
+  assert.equal(mediumBlend.hasMore, true);
+  assert.deepEqual(mediumBlend.blendWeights, { 10: 0.25, 20: 0.5, 40: 0.25 });
+  assert.equal(mediumBlend.items.every((item) => item.horizonDays === "blend"), true);
+  assert.equal(mediumBlend.items.every((item) =>
+    Object.keys(item.componentHorizons).join(",") === "10,20,40"), true);
+  assert.equal(mediumBlend.items[0].netOpportunityScore >= mediumBlend.items[1].netOpportunityScore, true);
+  assert.equal(mediumBlend.items[0].riskScore,
+    Math.max(...Object.values(mediumBlend.items[0].componentHorizons).map((item) => item.riskScore)));
+  assert.equal(mediumBlend.items[0].confidence,
+    Math.min(...Object.values(mediumBlend.items[0].componentHorizons).map((item) => item.confidence)));
+  assert.equal(mediumBlend.items[0].completeness,
+    Math.min(...Object.values(mediumBlend.items[0].componentHorizons).map((item) => item.completeness)));
+  const mediumBlendNext = (
+    await db.query(
+      "select public.twss_v20_read_medium_blend($1::jsonb) result",
+      [JSON.stringify({ limit: 2, afterRank: mediumBlend.nextAfterRank })],
+    )
+  ).rows[0].result;
+  assert.equal(mediumBlendNext.items.every((item) => item.rankPosition > mediumBlend.nextAfterRank), true);
+
   const stock = (
     await db.query(`
       select public.twss_v20_read_stock_snapshot('{"symbol":"1001"}'::jsonb) result
@@ -730,6 +763,9 @@ try {
           'anon', 'public.twss_v20_read_rankings(jsonb)', 'execute'
         ) anon_ranking_read,
         has_function_privilege(
+          'anon', 'public.twss_v20_read_medium_blend(jsonb)', 'execute'
+        ) anon_blend_read,
+        has_function_privilege(
           'authenticated', 'public.twss_v20_read_stock_snapshot(jsonb)', 'execute'
         ) authenticated_stock_read,
         has_function_privilege(
@@ -749,6 +785,7 @@ try {
     service_read: true,
     anon_publication_read: true,
     anon_ranking_read: true,
+    anon_blend_read: true,
     authenticated_stock_read: true,
     authenticated_validation_read: true,
     public_cutoff: false,
@@ -767,6 +804,7 @@ try {
       where p.oid in (
         'public.twss_v20_read_publication_state()'::regprocedure,
         'public.twss_v20_read_rankings(jsonb)'::regprocedure,
+        'public.twss_v20_read_medium_blend(jsonb)'::regprocedure,
         'public.twss_v20_read_stock_snapshot(jsonb)'::regprocedure,
         'public.twss_v20_read_validation_summary(jsonb)'::regprocedure
       )
@@ -793,6 +831,11 @@ try {
       select public.twss_v20_read_stock_snapshot('{"symbol":"1001"}'::jsonb) result
     `)
   ).rows[0].result;
+  const anonBlend = (
+    await db.query(`
+      select public.twss_v20_read_medium_blend('{"limit":2}'::jsonb) result
+    `)
+  ).rows[0].result;
   const anonValidation = (
     await db.query(`
       select public.twss_v20_read_validation_summary(
@@ -810,6 +853,8 @@ try {
   assert.equal(anonPublicationState.runId, publication.runId);
   assert.equal(anonRankings.items.length, 2);
   assert.equal(anonRankings.items.every((item) => item.horizonDays !== 60), true);
+  assert.equal(anonBlend.items.length, 2);
+  assert.equal(anonBlend.items.every((item) => item.horizonDays === "blend"), true);
   assert.equal(anonStock.items.length, 7);
   assert.equal(anonStock.items.every((item) => item.horizonDays !== 60), true);
   assert.equal(anonValidation.status, "ready");

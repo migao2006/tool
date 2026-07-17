@@ -2,9 +2,10 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 
-const [migration, modelMigration, admin, adminHtml, sharedSource, modelSource, policySource] = await Promise.all([
+const [migration, modelMigration, releaseMigration, admin, adminHtml, sharedSource, modelSource, policySource] = await Promise.all([
   readFile(new URL("../supabase/migrations/20260716142257_harden_admin_operations_observability.sql", import.meta.url), "utf8"),
   readFile(new URL("../supabase/migrations/20260716180952_add_v20_model_admin_observability.sql", import.meta.url), "utf8"),
+  readFile(new URL("../supabase/migrations/20260717090140_register_v20_2_model_release.sql", import.meta.url), "utf8"),
   readFile(new URL("../public/admin.js", import.meta.url), "utf8"),
   readFile(new URL("../public/admin.html", import.meta.url), "utf8"),
   readFile(new URL("../api/v20/_shared.js", import.meta.url), "utf8"),
@@ -39,8 +40,15 @@ const artifactHash = createHash("sha256")
   .update(canonicalSource(modelSource))
   .update(canonicalSource(policySource))
   .digest("hex");
-assert.match(modelMigration, new RegExp(`'artifactHash', '${artifactHash}'`),
-  "the registered baseline hash must match the deployed model bundle");
+assert.match(modelMigration, /'artifactHash', '441cc454b03e7d689b1c5f7df71420afd7ec49ad60960286d9e349f19e286689'/,
+  "the historical v20.1 release identity must remain immutable");
+assert.match(releaseMigration, /'modelVersion', '20\.2'/);
+assert.match(releaseMigration, new RegExp(`'artifactHash', '${artifactHash}'`),
+  "the v20.2 release hash must match the deployable model bundle");
+assert.match(releaseMigration, /'performanceStatus', 'collecting'/,
+  "the correctness patch must not claim forward performance");
+assert.match(releaseMigration, /twss_v20_set_model_channel[\s\S]*'challenger'[\s\S]*twss_v20_promote_challenger/,
+  "v20.2 must pass through the auditable challenger channel before promotion");
 const artifactIdentitySource = await readFile(
   new URL("../supabase/functions/_shared/v20-model-artifact.js", import.meta.url),
   "utf8",

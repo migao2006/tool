@@ -11,6 +11,8 @@ dist/
 *.log
 coverage/
 artifacts/
+playwright-report/
+test-results/
 site.tar.gz
 *.zip
 *.tar.gz

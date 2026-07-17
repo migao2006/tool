@@ -28,6 +28,37 @@ const weightedScore = (values, weights) => {
     ? round(usable.reduce((total, [key, weight]) => total + clamp(values[key]) * weight, 0) / availableWeight, 2)
     : null;
 };
+const weightedSignedScore = (values, weights) => {
+  const usable = Object.entries(weights).filter(([key]) => finite(values[key]));
+  const availableWeight = usable.reduce((total, [, weight]) => total + weight, 0);
+  return availableWeight
+    ? round(usable.reduce((total, [key, weight]) => total + clamp(values[key], -100, 100) * weight, 0) / availableWeight, 2)
+    : null;
+};
+
+function median(values) {
+  const usable = values.filter((value) => finite(value) && Number(value) > 0).map(Number).sort((left, right) => left - right);
+  if (!usable.length) return null;
+  const middle = Math.floor(usable.length / 2);
+  return usable.length % 2 ? usable[middle] : (usable[middle - 1] + usable[middle]) / 2;
+}
+
+function turnoverFactor(currentTurnover, priorMarketContexts) {
+  const priorTurnovers = (Array.isArray(priorMarketContexts) ? priorMarketContexts : [])
+    .slice(0, 20)
+    .map((context) => context?.breadth?.all?.turnover)
+    .filter((value) => finite(value) && Number(value) > 0)
+    .map(Number);
+  const baselineMedian = priorTurnovers.length >= 5 ? median(priorTurnovers) : null;
+  const score = finite(currentTurnover) && Number(currentTurnover) > 0 && baselineMedian
+    ? clamp(100 * Math.tanh(4 * Math.log(Number(currentTurnover) / baselineMedian)), -100, 100)
+    : null;
+  return {
+    score: round(score, 2),
+    baselineMedian: round(baselineMedian, 0),
+    baselineSessions: priorTurnovers.length,
+  };
+}
 
 function resultCategories(row) {
   return Array.isArray(row?.result?.categories) ? row.result.categories : [];
@@ -580,7 +611,7 @@ function groupBreadth(rows) {
   };
 }
 
-export function buildMarketContext(snapshotRows, dataDate, globalContext = {}) {
+export function buildMarketContext(snapshotRows, dataDate, globalContext = {}, priorMarketContexts = []) {
   const rows = Array.isArray(snapshotRows) ? snapshotRows : [];
   const listed = rows.filter((row) => marketGroup(row) === "listed");
   const otc = rows.filter((row) => marketGroup(row) === "otc");
@@ -592,16 +623,24 @@ export function buildMarketContext(snapshotRows, dataDate, globalContext = {}) {
   const etfBreadth = groupBreadth(etf);
   const trendScore = clamp((number(breadth.averageChange, 0)) * 20, -100, 100);
   const breadthScore = finite(breadth.advanceRatio) ? clamp((breadth.advanceRatio - 50) * 4, -100, 100) : 0;
-  const totalVolume = rows.reduce((sum, row) => sum + Math.abs(Number(row?.volume || 0)), 0);
-  const institutionalNet = rows.reduce((sum, row) => sum + Number(row?.institutional_buy || 0), 0);
+  const totalVolume = allStocks.reduce((sum, row) => sum + Math.abs(Number(row?.volume || 0)), 0);
+  const institutionalNet = allStocks.reduce((sum, row) => sum + Number(row?.institutional_buy || 0), 0);
   const institutionalScore = totalVolume ? clamp(Math.tanh(institutionalNet / totalVolume * 20) * 100, -100, 100) : 0;
-  const turnoverScore = 0;
-  const globalScore = clamp(number(globalContext?.score, 0), -100, 100);
-  const regimeScore = round(
-    trendScore * 0.35 + breadthScore * 0.20 + turnoverScore * 0.15 +
-      institutionalScore * 0.15 + globalScore * 0.15,
-    2,
-  );
+  const turnover = turnoverFactor(breadth.turnover, priorMarketContexts);
+  const globalScore = globalContext?.available ? clamp(number(globalContext?.score, 0), -100, 100) : null;
+  const regimeScore = weightedSignedScore({
+    trend: trendScore,
+    breadth: breadthScore,
+    turnover: turnover.score,
+    institutional: institutionalScore,
+    global: globalScore,
+  }, {
+    trend: 0.35,
+    breadth: 0.20,
+    turnover: 0.15,
+    institutional: 0.15,
+    global: 0.15,
+  });
   const regime = regimeScore >= 60 ? "strong_bull"
     : regimeScore >= 25 ? "bull"
     : regimeScore <= -60 ? "strong_bear"
@@ -611,6 +650,7 @@ export function buildMarketContext(snapshotRows, dataDate, globalContext = {}) {
     "taiex_official_index",
     "tpex_official_index",
     "tx_futures",
+    ...(turnover.score === null ? ["turnover_baseline"] : []),
     ...(globalContext?.available ? [] : ["international_context"]),
   ];
   const completeness = clamp(100 - degraded.length * 12.5);
@@ -625,8 +665,22 @@ export function buildMarketContext(snapshotRows, dataDate, globalContext = {}) {
     taiex: { ...listedBreadth, basis: "listed-market-breadth-proxy" },
     tpex: { ...otcBreadth, basis: "otc-market-breadth-proxy" },
     tx_futures: {},
-    breadth: { all: breadth, listed: listedBreadth, otc: otcBreadth, etf: etfBreadth },
-    institutional: { net: round(institutionalNet, 3), score: round(institutionalScore, 2) },
+    breadth: {
+      all: {
+        ...breadth,
+        turnoverScore: turnover.score,
+        turnoverBaselineMedian: turnover.baselineMedian,
+        turnoverBaselineSessions: turnover.baselineSessions,
+      },
+      listed: listedBreadth,
+      otc: otcBreadth,
+      etf: etfBreadth,
+    },
+    institutional: {
+      net: round(institutionalNet, 3),
+      volume: round(totalVolume, 3),
+      score: round(institutionalScore, 2),
+    },
     global_context: globalContext || {},
     source_dates: { snapshots: dataDate, global: globalContext?.dataDate || null },
     degraded_sources: degraded,
@@ -642,4 +696,5 @@ export const v20ModelInternals = {
   liquidityScore,
   calibrationFor,
   groupBreadth,
+  turnoverFactor,
 };

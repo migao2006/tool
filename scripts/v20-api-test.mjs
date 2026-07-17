@@ -153,6 +153,19 @@ const rankingRows = [1, 2, 3].map((rank) => ({
   recorded_at: "2026-07-16T10:00:00Z",
 }));
 
+const blendRows = rankingRows.map((row) => ({
+  ...row,
+  model_key: "medium",
+  horizon_days: "blend",
+  strategy_key: "medium_blend",
+  component_horizons: {
+    10: { rawOpportunityScore: row.raw_opportunity_score - 2, netOpportunityScore: row.net_opportunity_score - 2 },
+    20: { rawOpportunityScore: row.raw_opportunity_score, netOpportunityScore: row.net_opportunity_score },
+    40: { rawOpportunityScore: row.raw_opportunity_score + 2, netOpportunityScore: row.net_opportunity_score + 2 },
+  },
+  blend_weights: { 10: 0.25, 20: 0.5, 40: 0.25 },
+}));
+
 const detailSignalRow = {
   ...rankingRows[0],
   symbol: "2330",
@@ -253,6 +266,21 @@ globalThis.fetch = async (input, init = {}) => {
   if (url.pathname.endsWith("/rpc/twss_v20_persist_global_context")) {
     return Response.json(true);
   }
+  if (url.pathname.endsWith("/rpc/twss_v20_read_medium_blend")) {
+    const query = JSON.parse(init.body).p_query;
+    const afterRank = Number(query.afterRank || 0);
+    const limit = Number(query.limit || 10);
+    const items = blendRows.filter((row) => row.rank_position > afterRank).slice(0, limit);
+    return Response.json({
+      run: { runId: PUBLICATION_RUN_ID, dataDate: "2026-07-16" },
+      items,
+      total: blendRows.length,
+      pageCount: items.length,
+      hasMore: afterRank + items.length < blendRows.length,
+      nextAfterRank: items.at(-1)?.rank_position || null,
+      blendWeights: { 10: 0.25, 20: 0.5, 40: 0.25 },
+    });
+  }
   throw new Error(`unexpected Supabase path: ${url.pathname}`);
 };
 
@@ -276,6 +304,10 @@ try {
   for (const horizon of [10, 20, 40]) {
     assert.equal(backend.parseV20RankingQuery(new URLSearchParams({ model: "medium", horizon })).horizon, horizon);
   }
+  assert.equal(
+    backend.parseV20RankingQuery(new URLSearchParams({ model: "medium", horizon: "blend" })).horizon,
+    "blend",
+  );
   assert.throws(
     () => backend.parseV20RankingQuery(new URLSearchParams({ model: "medium", horizon: "60" })),
     (error) => error?.code === "invalid_horizon",
@@ -584,6 +616,10 @@ try {
   assert.equal(first.enrichmentPending, 0);
   assert.equal(first.dataCompleteness, 100);
   assert.equal(first.sort, "net_opportunity_desc");
+  assert.deepEqual(first.scoreSemantics.opportunityScore, {
+    deprecated: true,
+    aliasOf: "netOpportunityScore",
+  });
   assert.deepEqual(first.items.map((row) => row.netOpportunityScore), [87, 86]);
   assert.equal(first.items[0].rawOpportunityScore, 93);
   assert.deepEqual(first.items[0].executionCosts, {
@@ -672,14 +708,68 @@ try {
 
   backend.v20BackendInternals.clearCache();
   calls.length = 0;
+  const rawScoreResponse = await rankingsRoute.fetch(new Request(
+    "https://app.test/api/v20/rankings?model=short&horizon=5&sort=score_desc",
+  ));
+  assert.equal(rawScoreResponse.status, 200);
+  const rawScoreCall = calls.find((call) => call.url.pathname.endsWith("/v20_recommendation_items"));
+  assert.equal(
+    rawScoreCall.url.searchParams.get("order"),
+    "raw_opportunity_score.desc.nullslast,net_opportunity_score.desc.nullslast,symbol.asc",
+    "score_desc must sort the unadjusted opportunity score",
+  );
+
+  backend.v20BackendInternals.clearCache();
+  calls.length = 0;
+  const blendFirstResponse = await rankingsRoute.fetch(new Request(
+    "https://app.test/api/v20/rankings?model=medium&horizon=blend&limit=2",
+  ));
+  assert.equal(blendFirstResponse.status, 200);
+  const blendFirst = await blendFirstResponse.json();
+  assert.equal(blendFirst.horizon, "blend");
+  assert.deepEqual(blendFirst.items.map((row) => row.rank), [1, 2]);
+  assert.ok(blendFirst.nextCursor);
+  assert.equal(blendFirst.items.every((row) => row.gatePassed && row.official), true);
+  const blendRpcCall = calls.find((call) => call.url.pathname.endsWith("/rpc/twss_v20_read_medium_blend"));
+  assert.deepEqual(JSON.parse(blendRpcCall.init.body).p_query, {
+    runId: PUBLICATION_RUN_ID,
+    groupName: null,
+    industry: null,
+    afterRank: 0,
+    limit: 2,
+  });
+  backend.v20BackendInternals.clearCache();
+  calls.length = 0;
+  const blendNextResponse = await rankingsRoute.fetch(new Request(
+    `https://app.test/api/v20/rankings?model=medium&horizon=blend&limit=2&cursor=${encodeURIComponent(blendFirst.nextCursor)}`,
+  ));
+  assert.equal(blendNextResponse.status, 200);
+  assert.deepEqual((await blendNextResponse.json()).items.map((row) => row.rank), [3]);
+  const blendNextCall = calls.find((call) => call.url.pathname.endsWith("/rpc/twss_v20_read_medium_blend"));
+  assert.equal(JSON.parse(blendNextCall.init.body).p_query.afterRank, 2);
+
+  backend.v20BackendInternals.clearCache();
+  calls.length = 0;
   const home = await backend.readV20Home();
   assert.equal(home.dataDate, "2026-07-16");
   assert.equal(home.publicationPhase, "complete");
   assert.equal(home.runId, PUBLICATION_RUN_ID);
   assert.equal(home.dailyReport.dataDate, home.dataDate,
     "the base daily report must switch with the same atomic publication date");
-  assert.equal(home.dailyReport.source, "v20-atomic-base-report");
+  assert.equal(home.dailyReport.title, "每日市場摘要");
+  assert.equal(home.dailyReport.source, "v20-deterministic-market-summary");
+  assert.equal(home.dailyReport.generationMethod, "deterministic_rules");
+  assert.equal(home.dailyReport.aiGenerated, false);
+  assert.equal(home.dailyReport.publicationSemantics, "immutable_revision");
   assert.equal(home.dailyReport.cachedFallback, false);
+  assert.equal(home.mediumTop.every((row) => row.horizon === "blend"), true);
+  assert.deepEqual(home.mediumTop[0].blendWeights, { 10: 0.25, 20: 0.5, 40: 0.25 });
+  assert.deepEqual(Object.keys(home.mediumTop[0].componentHorizons), ["10", "20", "40"]);
+  assert.doesNotMatch(
+    home.dailyReport.report.mainRisks[0].explanation,
+    /分數與排序可能同日再次更新/,
+    "an immutable publication must only change by publishing a traceable revision",
+  );
   assert.ok(home.dailyReport.report.oneLine);
   assert.deepEqual(home.importantNews, []);
   assert.equal(home.importantNewsState.status, "not_recorded_in_publication");
@@ -1025,12 +1115,31 @@ try {
   assert.match(ui, /payload\.dailyReport/);
   assert.match(ui, /samePublication\(atomicReport\.meta, payload\)/,
     "the UI must bind its report to the exact recommendation run, key and content hash");
-  assert.match(ui, /AI 每日報告/);
+  assert.match(ui, /DAILY MARKET SUMMARY/);
+  assert.match(ui, /每日市場摘要/);
+  assert.doesNotMatch(ui, /AI 每日報告|DAILY AI BRIEF/,
+    "the deterministic summary must not be presented as AI-generated");
   assert.doesNotMatch(ui, /twssV19Benchmarks|officialIndices/,
     "v20 market cards must use only the run's market_context_snapshot");
-  assert.match(ui, /更新完成，部分來源待補/,
-    "a complete publication with degraded sources must use an honest mixed status label");
-  assert.match(ui, /payload\?\.publicationPhase === 'complete' && \(pending > 0 \|\| degraded\.length > 0\)/);
+  assert.match(ui, /const qualityState = payload\?\.dataState/,
+    "data quality must come from dataState instead of publication completion");
+  assert.doesNotMatch(ui, /dataState: visibleDegraded\.length \? home\.dataState : 'complete'/,
+    "the browser must never upgrade backend partial or error data to complete");
+  const dailySectionStart = ui.indexOf("function dailyReportSection()");
+  const dailySectionEnd = ui.indexOf("function homePageV20()", dailySectionStart);
+  assert.ok(dailySectionStart >= 0 && dailySectionEnd > dailySectionStart);
+  assert.doesNotMatch(ui.slice(dailySectionStart, dailySectionEnd), /statusBanner\(/,
+    "the daily summary must not repeat the page's primary data-status banner");
+  assert.match(ui, /dateKey\(first\(value\?\.dataDate, value\?\.date\)\) === expectedDate/,
+    "a degraded source may resolve only when its value belongs to the publication date");
+  assert.match(ui, /marketChangePercent[\s\S]*first\(value\?\.changePercent, value\?\.change_pct\)/);
+  assert.match(ui, /marketChangePoints[\s\S]*value\?\.change[\s\S]*\} 點/,
+    "point changes must be labelled as points rather than percentages");
+  assert.match(ui, /範圍 -100～\+100/);
+  assert.match(ui, /price: \{ twse: listed, tpex: otc, common: aligned \? listed : '', aligned \}/,
+    "v20 home source dates must populate the canonical listed/OTC header shape");
+  assert.match(ui, /S\.date = payload\.dataDate \|\| S\.date;\s*applyHomeSourceDates\(payload\);\s*S\.mode[\s\S]*updateMarketHeader\(\);/,
+    "official source dates must be written before the market header is rendered");
   assert.doesNotMatch(ui, /個來源待補/,
     "the UI must not count individual missing indicators as independent data sources");
   assert.match(ui, /此批次未保存收盤價/,
@@ -1058,11 +1167,49 @@ try {
   assert.match(ui, /平均 MAE/);
   assert.match(ui, /不產生成功率或上漲機率/);
   assert.match(ui, /HORIZONS = \{ short: \[2, 3, 5, 10\], medium: \[10, 20, 40\] \}/);
+  assert.match(ui, /RANKING_HORIZONS = \{ short: HORIZONS\.short, medium: \['blend', \.\.\.HORIZONS\.medium\] \}/);
+  assert.match(ui, /DEFAULT_HORIZON = \{ short: 5, medium: 'blend' \}/,
+    "the public medium ranking must default to the three-horizon blend");
   assert.doesNotMatch(ui, /medium: \[20, 40, 60\]/);
+  assert.match(ui, /String\(value \|\| ''\)\.toLowerCase\(\) === 'blend' \? 'blend' : num\(value\)/,
+    "public rows must preserve the blend horizon instead of coercing it to NaN");
+  assert.match(ui, /model === 'medium' && horizon === 'blend'/,
+    "medium blend rows, including home mediumTop, must remain publicly visible");
+  assert.match(ui, /horizon: normalizeRankingHorizon\(model, page\.horizon\)/);
+  assert.doesNotMatch(ui, /horizon: Number\(page\.horizon\)/,
+    "the ranking query must send horizon=blend verbatim");
+  assert.match(ui, /normalizeRankingHorizon\(model, event\.target\.value\)/,
+    "the period filter must retain the blend string");
+  assert.match(ui, /綜合（10／20／40 日）/);
+  assert.match(ui, /中期綜合（非單一期）/);
+  assert.match(ui, /10／20／40 日依 25%／50%／25% 組成/);
+  assert.match(ui, /componentHorizons/);
+  assert.match(ui, /blendWeights/);
+  assert.match(ui, /function rawOpportunityValue[\s\S]*rawOpportunityScore/,
+    "visible opportunity scores must come from the raw score field");
+  assert.doesNotMatch(ui, /\.opportunityScore\b/,
+    "the deprecated net-backed opportunityScore alias must never be presented as a raw opportunity score");
   assert.match(ui, /visibleItems\.map\(row => modelCard\(row\)\)/,
     "ranking cards must use only sanitized immutable rows and preserve the API rank");
-  assert.match(ui, /supportedPayload = payload => String\(payload\?\.version \|\| ''\) === '20\.1'/,
-    "v20.0 browser caches must never enter the immutable v20.1 read model");
+  assert.match(ui, /supportedPayload = payload => String\(payload\?\.version \|\| ''\) === '20\.2'/,
+    "older browser caches must never enter the immutable v20.2 read model");
+  assert.match(ui, /const CACHE_SCHEMA = 'v20\.2-immutable-1'/);
+  assert.match(ui, /const CACHE_BUILD = new URL\(document\.currentScript\?\.src \|\| location\.href, location\.href\)\.searchParams\.get\('v'\) \|\| '20\.2\.0'/,
+    "browser cache compatibility must follow the exact loaded frontend build");
+  assert.match(ui, /CACHE_MAX_AGE_MS = 7 \* 24 \* 60 \* 60 \* 1000/,
+    "browser placeholders must expire after seven days");
+  assert.match(ui, /parsed\?\.schema === CACHE_SCHEMA && parsed\?\.build === CACHE_BUILD/,
+    "browser caches must require exact schema and frontend build compatibility");
+  assert.match(ui, /page\.abortController\?\.abort\(\)[\s\S]*page\.querySignature = request\.signature[\s\S]*requestId !== page\.requestId \|\| request\.signature !== page\.querySignature/,
+    "ranking filters must abort and reject stale immutable query signatures");
+  assert.match(ui, /validationAbortController\?\.abort\(\)[\s\S]*validationQuerySignature = signature[\s\S]*requestId !== v20\.validationRequestId \|\| signature !== v20\.validationQuerySignature/,
+    "validation filters must abort and reject stale immutable query signatures");
+  assert.match(ui, /function watchDetailForPublication[\s\S]*samePublication\(candidate, v20\.home\)/,
+    "watchlist details must belong to the current immutable publication");
+  assert.match(ui, /while \(generation === v20\.watchGeneration\)[\s\S]*\.slice\(0, 20\)[\s\S]*index \+= 4/,
+    "all watchlist stocks must load in waves of twenty with concurrency four");
+  assert.match(ui, /v20\.detailCache\.clear\(\);\s*v20\.watchAttempted\.clear\(\);\s*v20\.watchErrors\.clear\(\);/,
+    "a publication change must invalidate every watchlist detail state");
   assert.match(ui, /researchOnly/);
   assert.match(ui, /publicVisible/);
   assert.match(ui, /row\.rank, row\.rankPosition, row\.rank_position/);
@@ -1095,8 +1242,14 @@ try {
     "maintenance responses must not make the whole service-worker install fail");
   assert.doesNotMatch(sw, /cache\.addAll\(STATIC\)/,
     "one unavailable precache URL must not delay the client update");
-  assert.match(sw, /url\.pathname===HOME_SNAPSHOT_PATH[\s\S]*cache\.match\(HOME_SNAPSHOT_URL\)[\s\S]*event\.waitUntil\(refresh\.catch/,
-    "the home read model must render the last successful snapshot while refreshing in the background");
+  assert.match(sw, /url\.pathname===HOME_SNAPSHOT_PATH[\s\S]*setTimeout\(\(\)=>resolve\(cached\),2000\)[\s\S]*Promise\.race\(\[networkFirst,timeout\]\)/,
+    "the home read model must prefer the network and use cache only after two seconds");
+  assert.match(sw, /previousPublication&&!sameHomePublication\(previousPublication,nextPublication\)[\s\S]*notifyHomePublication\(nextPublication\)/,
+    "clients must be notified only when the immutable home publication changes");
+  assert.match(sw, /key\.startsWith\('twss-'\)&&key!==CACHE/,
+    "service-worker activation must leave unrelated same-origin caches intact");
+  assert.match(ui, /twss-home-publication-updated[\s\S]*!samePublication\(event\.data\.publication, v20\.home\)[\s\S]*loadHome\(\)/,
+    "the active page must refresh after a background publication-change notification");
   assert.equal(JSON.parse(manifest).start_url.includes(`v=${assetVersion}`), true);
 
   console.log("v20 API/UI contract: passed");

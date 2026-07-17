@@ -2,7 +2,10 @@
   "use strict";
 
   const sentry = global.Sentry;
-  if (!sentry || typeof sentry.onLoad !== "function") return;
+  if (!sentry || typeof sentry.init !== "function") return;
+
+  const dsn =
+    "https://1ba0c3d11d6ebd560dd356879b422f58@o4511751659651072.ingest.us.sentry.io/4511751671644160";
 
   function stripUrlDetails(value) {
     if (!value) return value;
@@ -44,27 +47,26 @@
     return event;
   }
 
-  sentry.onLoad(function initializeSentry() {
-    sentry.init({
-      environment:
-        global.location.hostname === "tool-dun-psi.vercel.app"
-          ? "production"
-          : "development",
-      sendDefaultPii: false,
-      sampleRate: 1,
-      tracesSampleRate: 0,
-      maxBreadcrumbs: 50,
-      beforeSend: removeSensitiveContext,
-    });
-
-    const testRequested =
-      new URLSearchParams(global.location.search).get("sentry_test") ===
-      "installation";
-
-    if (testRequested) {
-      sentry.captureException(
-        new Error("Alpha Lens Sentry installation verification"),
-      );
-    }
+  sentry.init({
+    dsn,
+    environment:
+      global.location.hostname === "tool-dun-psi.vercel.app"
+        ? "production"
+        : "development",
+    sendDefaultPii: false,
+    sampleRate: 1,
+    tracesSampleRate: 0,
+    maxBreadcrumbs: 50,
+    beforeSend: removeSensitiveContext,
   });
+
+  const testRequested =
+    new URLSearchParams(global.location.search).get("sentry_test") ===
+    "installation";
+
+  if (testRequested) {
+    sentry.captureException(
+      new Error("Alpha Lens Sentry installation verification"),
+    );
+  }
 })(window);

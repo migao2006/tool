@@ -24,6 +24,21 @@
 - 只有遇到登入、雙因素驗證或缺少必要憑證、會新增付費或訂閱、刪除專案／網域／正式資料、不可回復或大規模破壞性操作、跨出本專案資源，或產品方向存在會實質改變結果的選擇時，才需要使用者介入。
 - 本授權不允許顯示、提交或傳送 secret、密碼、私鑰與 access token，也不允許捏造資料、繞過平台安全限制或覆蓋使用者的無關修改。
 
+### 1.2 專案級可觀測性與工具存取授權
+
+為提升代理理解現況、制定計畫、驗證結果及修復失敗流程的能力，代理得在本專案範圍內使用下列專案級權限：
+
+1. 讀取完整 repository 結構、Git 歷史、分支、提交、PR、Issue、review comments、Actions 執行紀錄、checks、logs 與 artifacts。
+2. 讀取 Vercel 本專案的 Preview／Production deployment、build logs、runtime logs、專案設定、環境名稱及環境變數是否存在。
+3. 讀取 Supabase 本專案的 schema、migration history、RLS、Auth 設定、Functions、logs、資料表結構及資料版本資訊。
+4. 建立及更新本專案分支、提交、PR、Issue、workflow、deployment、migration、Edge Functions、RLS、測試資料與必要設定。
+5. 建立並使用 Local、Preview、Development 或 Staging 等隔離環境，在正式發布前執行 migration、瀏覽器、Auth、API、資料品質及回歸驗證。
+6. 建立、更新及輪替本專案所需的 GitHub、Vercel、Supabase 環境變數與 secrets，但不得讀取、列舉、輸出、記錄、提交或傳送既有 secret 明文。
+7. 代理得確認 secret 名稱、適用環境、設定狀態及使用結果，但不得將 secret 值寫入程式、log、PR、Issue、聊天內容或測試輸出。
+8. 正式環境資料庫變更應優先透過版本化 migration 與 CI/CD 執行；直接操作正式資料只限於已明確授權、可稽核且有回復路徑的必要情況，並須符合第 9.1 與 9.2 節。
+9. 上述權限只限本專案及其明確連結的 GitHub repository、Vercel project 與 Supabase project，不包含組織擁有者、帳務、付款、其他專案、帳號刪除或平台全域管理權限。
+10. 若平台支援細分權限，應使用完成任務所需的最小專案級權限；不得因方便而要求 Team Owner、Organization Owner、Billing Administrator 或跨專案管理權限。
+
 ## 二、目前產品範圍
 
 ### 2.1 正式功能

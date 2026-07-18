@@ -140,6 +140,7 @@ class FakeRepository:
         self.etf_rows: list[dict[str, object]] = []
         self.ensure_calls: int = 0
         self.seed_common_calls: int = 0
+        self.snapshot_calls: int = 0
 
     def ensure_finmind_source(self) -> None:
         self.ensure_calls += 1
@@ -198,6 +199,7 @@ class FakeRepository:
         self, *, start_date: date, end_date: date
     ) -> HistoricalBackfillSnapshot:
         _ = (start_date, end_date)
+        self.snapshot_calls += 1
         if len(self.snapshots) > 1:
             return self.snapshots.pop(0)
         return self.snapshots[0]

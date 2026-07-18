@@ -101,6 +101,31 @@ def test_r2_target_uses_object_budget_instead_of_postgres_byte_budget() -> None:
     assert repository.completed == [("2330", True, None)]
 
 
+def test_r2_workers_skip_intermediate_postgres_storage_snapshots() -> None:
+    repository = FakeRepository(
+        [task(index, f"{index:04d}", "TWSE", "COMMON_STOCK") for index in range(1, 21)]
+    )
+    settings = HistoricalBackfillSettings(
+        storage_target="R2",
+        max_archive_objects_per_run=20,
+    )
+
+    summary = make_coordinator(
+        FakeProvider(),
+        repository,
+        FakeLandingService(),
+        settings=settings,
+    ).run(
+        start_date=date(2021, 7, 19),
+        end_date=date(2026, 7, 17),
+        max_tasks=20,
+        worker_id="test",
+    )
+
+    assert summary.succeeded_tasks == 20
+    assert repository.snapshot_calls == 2
+
+
 def test_each_symbol_is_completed_independently_and_order_is_preserved() -> None:
     tasks = [
         task(1, "2330", "TWSE", "COMMON_STOCK"),

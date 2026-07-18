@@ -154,6 +154,7 @@ tests/            # 對應模組測試
 - 登入只使用 Email＋密碼；支援登入、建立帳號及登出，不提供忘記密碼或密碼重設。
 - Supabase 負責 Auth、Email 確認與 Session；不接入其他寄信或驗證碼服務。
 - Auth UI、controller、service 與樣式必須分離，不得堆入主 `app.js`。
+- Supabase 瀏覽器 SDK 必須透過單一、可共用的初始化 Promise 載入；資源失敗只能做有限次重試，之後 fail closed 並停用登入，不得無限重試或讓多個 caller 重複上報同一故障。
 - 前端只能使用 Supabase publishable key。禁止提交 `service_role`、secret、密碼或 access token。
 - 個人資料表必須啟用 RLS，並以 `auth.uid()` 限制資料擁有者。
 - 登入或資料庫未連接時，顯示真實原因並停用不可能成功的操作，不得模擬完成。

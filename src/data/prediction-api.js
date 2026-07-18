@@ -10,7 +10,8 @@ import {
   resolvePredictionApiBaseUrl,
 } from "./api-client.js?v=api-4";
 import { createUnavailableSnapshot, normalizePredictionSnapshot } from "./prediction-contract.js?v=api-4";
-import { readSupabaseAccessToken } from "./session-token.js?v=api-3";
+import { readSupabaseAccessToken } from "./session-token.js?v=api-4";
+import { isSupabaseSdkLoadError } from "./supabase-sdk-loader.js?v=auth-1";
 
 export { PredictionApiError };
 
@@ -52,7 +53,9 @@ export async function loadPredictionSnapshot({
   try {
     accessToken = await readSupabaseAccessToken(config);
   } catch (error) {
-    globalThis.Sentry?.captureException?.(error);
+    if (!isSupabaseSdkLoadError(error)) {
+      globalThis.Sentry?.captureException?.(error);
+    }
   }
   const payload = await requestPredictionApi("prediction-snapshot", {
     query: predictionQuery(normalizedHorizon, settings),

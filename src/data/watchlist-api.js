@@ -1,6 +1,6 @@
 import { publicConfig } from "../core/public-config.js?v=api-3";
 import { PredictionApiError, requestPredictionApi } from "./api-client.js?v=api-4";
-import { readSupabaseAccessToken } from "./session-token.js?v=api-3";
+import { readSupabaseAccessToken } from "./session-token.js?v=api-4";
 
 export async function setWatchlistMembership({
   symbol,

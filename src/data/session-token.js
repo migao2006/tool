@@ -1,8 +1,8 @@
 import { publicConfig } from "../core/public-config.js?v=api-3";
-import { createSupabaseClient } from "./supabase-client.js?v=auth-5";
+import { createSupabaseClient } from "./supabase-client.js?v=auth-6";
 
 export async function readSupabaseAccessToken(config = publicConfig) {
-  const client = createSupabaseClient(config);
+  const client = await createSupabaseClient(config);
   if (!client) return null;
   const { data, error } = await client.auth.getSession();
   if (error) throw error;

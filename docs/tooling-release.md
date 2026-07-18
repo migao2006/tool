@@ -25,6 +25,8 @@ Python：
 - Supabase CLI
 - Vercel CLI
 - GitHub CLI
+- Cloudflare dashboard／connector
+- Wrangler（只有環境已安裝且可驗證版本時才使用）
 
 不得加入功能重疊工具，除非有明確必要。
 
@@ -88,3 +90,18 @@ $env:NODE_OPTIONS = "--use-system-ca"
 - 已確認回復路徑。
 
 無法完成必要驗證時，只能建立 PR 或 Preview，不得宣告正式發布完成。
+
+## 六、歷史回補發布閘門
+
+修改 FinMind、R2、Supabase queue／manifest 或歷史回補 workflow 時，合併前至少確認：
+
+- reusable workflow 的三個 credential slot 保持隔離，不使用 `secrets: inherit`。
+- 只有一個 worker 建立共用 task queue，只有一個 finalizer 更新首頁摘要。
+- Ruff、basedpyright、pytest、actionlint 與 Gitleaks 通過。
+- Supabase migration 已 dry run，函式權限仍只授予 `service_role`。
+- 測試執行中 primary、secondary、tertiary 與 finalizer 全部成功。
+- R2 manifest 的 object／symbol／row／byte 統計增加，且狀態仍為 `UNVERIFIED / RAW_LANDING_ONLY / RESEARCH_ONLY`。
+- `historical_production_eligible_count` 不得因單純完成原始封存而增加。
+
+驗證失敗時可以保留已完成的 immutable R2 object 與 manifest，但必須修復 workflow 後重新執行；
+不得刪除成功資料、竄改統計或把部分成功宣稱為完整回補。

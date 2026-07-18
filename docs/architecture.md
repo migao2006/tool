@@ -47,7 +47,22 @@ data contracts / domain types
 - 禁止循環依賴。
 - 禁止深層模組直接修改全域 UI state。
 
-## 三、模型拆分
+## 三、歷史資料儲存與執行邊界
+
+```text
+GitHub Actions scheduler
+  ↓
+provider client → ingestion / validation
+  ├─→ private Cloudflare R2：immutable Parquet 原始封存
+  └─→ Supabase：queue、manifest、稽核 metadata、首頁摘要
+```
+
+- 多年歷史行情不得經由瀏覽器或 Vercel 前端直接寫入；只有 GitHub Actions 後端 worker 可以執行回補。
+- R2 client 只負責 object I/O；Supabase repository 只負責任務、manifest 與摘要，不得互相複製實作。
+- 三個 FinMind credential worker 可並行下載，但共用任務清單只能由 primary worker 建立，首頁摘要只能由單一 finalizer 更新。
+- 頁面及 React 元件只能透過 service/API 取得已授權的聚合結果，不得直接讀取 R2 object、Supabase SQL 或機密。
+
+## 四、模型拆分
 
 模型必須分成獨立模組：
 
@@ -77,7 +92,7 @@ models/
 
 共用的 artifact、metadata、horizon 驗證及 schema 驗證集中於 `models/common/`，不得在各模型重複實作。
 
-## 四、拆分標準
+## 五、拆分標準
 
 應拆分的情況：
 

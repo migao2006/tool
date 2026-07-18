@@ -42,6 +42,14 @@ available_at <= decision_at
 
 `decision_policy` 不得建立另一套加權排名。
 
+## 三之一、歷史封存契約
+
+- 新增的多年日線原始資料以 ZSTD 壓縮 Parquet 保存於 private Cloudflare R2，object key 與內容雜湊必須可重現及稽核。
+- Supabase `market_data.historical_archive_objects` 只保存 object 位置、來源期間、列數、雜湊、資料品質與版本 metadata，不保存同一份 R2 原始列副本。
+- 既有 `historical_daily_bar_landing` 資料可以保留；首頁統計必須對 R2 logical slice 去重，且不得把 retry 或 revision 重複計數。
+- R2 object 驗證完成後才可寫入 manifest；任一 size、SHA-256 或 metadata 驗證失敗時必須 fail closed 並讓任務重試。
+- `UNVERIFIED / RAW_LANDING_ONLY / RESEARCH_ONLY` 只代表已保存原始資料，不代表可訓練、可回測或已消除生存者偏誤。
+
 ## 四、決策順序
 
 1. Data quality

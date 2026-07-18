@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import date, datetime, timezone
 from hashlib import sha256
 import json
@@ -205,8 +205,14 @@ class FakeRepository:
 
 @final
 class FakeLandingService:
-    def __init__(self, errors: Mapping[str, IngestionError] | None = None) -> None:
+    def __init__(
+        self,
+        errors: Mapping[str, IngestionError] | None = None,
+        *,
+        latency_fn: Callable[[str], None] | None = None,
+    ) -> None:
         self.errors: dict[str, IngestionError] = dict(errors or {})
+        self.latency_fn = latency_fn
         self.symbols: list[str] = []
         self.refresh_calls: int = 0
 
@@ -215,6 +221,8 @@ class FakeLandingService:
     ) -> HistoricalSymbolLandingResult:
         _ = (start_date, end_date)
         self.symbols.append(symbol)
+        if self.latency_fn is not None:
+            self.latency_fn(symbol)
         if symbol in self.errors:
             raise self.errors[symbol]
         return HistoricalSymbolLandingResult(
@@ -235,11 +243,16 @@ class FakeLandingService:
 class Clock:
     def __init__(self) -> None:
         self.value: float = 0.0
+        self.sleep_calls: list[float] = []
 
     def monotonic(self) -> float:
         return self.value
 
     def sleep(self, seconds: float) -> None:
+        self.sleep_calls.append(seconds)
+        self.advance(seconds)
+
+    def advance(self, seconds: float) -> None:
         self.value += seconds
 
 
@@ -249,14 +262,15 @@ def make_coordinator(
     landing: FakeLandingService,
     *,
     settings: HistoricalBackfillSettings | None = None,
+    clock: Clock | None = None,
 ) -> HistoricalBackfillCoordinator:
-    clock = Clock()
+    active_clock = clock or Clock()
     return HistoricalBackfillCoordinator(
         provider=provider,
         repository=repository,
         landing_service=landing,
         settings=settings or HistoricalBackfillSettings(),
-        sleep_fn=clock.sleep,
-        monotonic_fn=clock.monotonic,
+        sleep_fn=active_clock.sleep,
+        monotonic_fn=active_clock.monotonic,
         now_fn=lambda: datetime(2026, 7, 19, tzinfo=timezone.utc),
     )

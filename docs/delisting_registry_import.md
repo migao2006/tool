@@ -43,3 +43,6 @@ python -m scripts.import_delisting_registry
 ```
 
 正式寫入要求 `snapshot_date` 等於兩個來源在台北時區的實際擷取日期。GitHub workflow 的手動執行預設為 dry run，每週排程才會正式保存新觀測版本。
+
+TWSE 與 TPEx 來源會先透過共用協調器受限平行抓取（全域最多 4、單一來源最多 2），
+全部來源成功且通過驗證後才開始寫入，並固定依 TWSE、TPEx 順序產生結果。

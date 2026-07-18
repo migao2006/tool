@@ -90,6 +90,10 @@ class HistoricalBackfillCoordinator:
             selection_snapshot_at=selection_snapshot_at,
         )
         before = self.repository.snapshot(start_date=start_date, end_date=end_date)
+        # Pace logical FinMind calls from request start to request start. Transport
+        # retries remain internal to the HTTP client and are not counted as separate
+        # logical calls by this coordinator.
+        last_request_started_at = self._monotonic()
         try:
             quota_payload = self.provider.fetch_quota()
         except ProviderHttpError as error:
@@ -120,7 +124,6 @@ class HistoricalBackfillCoordinator:
                     "FINMIND_QUOTA_WAIT",
                 ),
             )
-        last_request_at = self._monotonic()
         quota_used, quota_limit = finmind_quota_counters(quota_payload)
         request_budget = max(quota_limit - quota_used - self.settings.quota_reserve, 0)
         storage_budget = storage_task_budget(before, self.settings)
@@ -136,12 +139,12 @@ class HistoricalBackfillCoordinator:
             and storage_budget > 0
         ):
             if self._paced_wait(
-                last_request_at=last_request_at,
+                last_request_at=last_request_started_at,
                 pacing_seconds=pacing_seconds,
                 deadline=deadline,
             ):
+                last_request_started_at = self._monotonic()
                 etf_payload = self.provider.fetch("securities")
-                last_request_at = self._monotonic()
                 request_budget -= 1
                 _ = self.repository.seed_etfs(
                     finmind_etf_schedule_rows(etf_payload),
@@ -162,7 +165,7 @@ class HistoricalBackfillCoordinator:
 
         while attempted < run_budget:
             if not self._paced_wait(
-                last_request_at=last_request_at,
+                last_request_at=last_request_started_at,
                 pacing_seconds=pacing_seconds,
                 deadline=deadline,
             ):
@@ -177,13 +180,13 @@ class HistoricalBackfillCoordinator:
             if task is None:
                 break
             attempted += 1
+            last_request_started_at = self._monotonic()
             try:
                 result = self.landing_service.land_symbol(
                     symbol=task.symbol,
                     start_date=task.start_date,
                     end_date=task.end_date,
                 )
-                last_request_at = self._monotonic()
                 self.repository.complete(
                     task=task,
                     claim_token=claim_token,
@@ -200,7 +203,6 @@ class HistoricalBackfillCoordinator:
                 landed_rows += result.landed_rows
                 quarantined_rows += result.quarantined_rows
             except (IngestionError, ProviderError) as error:
-                last_request_at = self._monotonic()
                 self.repository.complete(
                     task=task,
                     claim_token=claim_token,

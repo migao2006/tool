@@ -28,7 +28,11 @@ FinMind 只提供交易日期，因此 `opens_at`、`closes_at` 與
 
 ## GitHub Actions
 
-工作流程 `Import historical trading calendar` 預設為 dry-run。確認輸出的日期範圍、
-筆數、來源網址、payload SHA-256 與 reason codes 後，才可將 dry-run 改為 false。
+工作流程 `Import historical trading calendar` 的手動執行預設為 dry-run。確認輸出的日期範圍、
+筆數、來源網址、payload SHA-256 與 reason codes 後，才可將手動 dry-run 改為 false。
+
+每週日台北時間 10:45 會自動執行正式冪等匯入，避開 10:15 的下市資料排程。
+排程固定從 `2018-01-01` 重新核對至執行當日，只新增尚未保存的來源交易日，
+既有資料仍由 `market,trading_date` 防重與 `preserve_existing` 保護。
 
 每次執行會保存 90 天的 audit summary。摘要不包含 API 金鑰，也不代表模型已通過驗收。

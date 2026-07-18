@@ -6,8 +6,15 @@ from typing import cast
 
 import pytest
 
+from src.data.ingestion import delisting_registry_import as import_module
 from src.data.ingestion.contracts import IngestionError
 from src.data.ingestion.delisting_registry_import import DelistingRegistryImporter
+from src.data.ingestion.parallel_fetch import (
+    DEFAULT_GLOBAL_FETCH_LIMIT,
+    DEFAULT_PER_PROVIDER_FETCH_LIMIT,
+    PayloadFetchRequest,
+)
+from src.data.providers.contracts import ProviderPayload
 from src.data.providers.settings import ApiProviderSettings
 from tests.support.delisting_registry_fixtures import (
     FakeProvider,
@@ -44,6 +51,66 @@ def test_dry_run_fetches_both_official_registries_without_writes() -> None:
     assert summary.normalized_records == {"TWSE": 200, "TPEX": 500}
     assert summary.system_status == "RESEARCH_ONLY"
     assert "HISTORICAL_IDENTITY_REGISTRY_ONLY" in summary.reason_codes
+
+
+def test_fetch_uses_bounded_parallel_coordinator_with_stable_market_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, object] = {}
+    real_fetch = import_module.fetch_provider_payloads
+
+    def tracked_fetch(
+        requests: Mapping[str, PayloadFetchRequest],
+        *,
+        global_limit: int = DEFAULT_GLOBAL_FETCH_LIMIT,
+        per_provider_limit: int = DEFAULT_PER_PROVIDER_FETCH_LIMIT,
+    ) -> dict[str, ProviderPayload]:
+        observed["markets"] = tuple(requests)
+        observed["provider_keys"] = tuple(
+            request.provider_key for request in requests.values()
+        )
+        observed["global_limit"] = global_limit
+        observed["per_provider_limit"] = per_provider_limit
+        result = real_fetch(
+            requests,
+            global_limit=global_limit,
+            per_provider_limit=per_provider_limit,
+        )
+        observed["result_markets"] = tuple(result)
+        return result
+
+    monkeypatch.setattr(import_module, "fetch_provider_payloads", tracked_fetch)
+    importer = DelistingRegistryImporter(
+        settings=ApiProviderSettings(),
+        registry=registry(),
+        writer=FakeWriter(),
+    )
+
+    _ = importer.run(snapshot_date=SNAPSHOT_DATE, dry_run=True)
+
+    assert observed == {
+        "markets": ("TWSE", "TPEX"),
+        "provider_keys": ("TWSE", "TPEX"),
+        "global_limit": 4,
+        "per_provider_limit": 2,
+        "result_markets": ("TWSE", "TPEX"),
+    }
+
+
+def test_parallel_provider_failure_happens_before_first_write() -> None:
+    providers = registry()
+    providers["TPEX"] = FakeProvider({})
+    writer = FakeWriter()
+
+    with pytest.raises(KeyError, match="delisting_registry"):
+        _ = DelistingRegistryImporter(
+            settings=ApiProviderSettings(),
+            registry=providers,
+            writer=writer,
+        ).run(snapshot_date=SNAPSHOT_DATE)
+
+    assert writer.calls == []
+    assert writer.refresh_calls == 0
 
 
 def test_formal_import_writes_only_sources_then_unresolved_registry() -> None:

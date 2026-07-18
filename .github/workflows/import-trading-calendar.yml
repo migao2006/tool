@@ -18,6 +18,9 @@ on:
         required: true
         default: true
         type: boolean
+  schedule:
+    # Sunday 10:45 Asia/Taipei, after the 10:15 delisting-registry import.
+    - cron: "45 2 * * 0"
 
 permissions:
   contents: read
@@ -50,7 +53,7 @@ jobs:
           DRY_RUN: ${{ inputs.dry_run }}
         shell: bash
         run: |
-          args=(--start-date "$REQUESTED_START_DATE")
+          args=(--start-date "${REQUESTED_START_DATE:-2018-01-01}")
           if [[ -n "$REQUESTED_END_DATE" ]]; then
             args+=(--end-date "$REQUESTED_END_DATE")
           fi

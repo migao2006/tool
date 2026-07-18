@@ -27,7 +27,7 @@ from .security_snapshot_contracts import (
     SECURITY_SNAPSHOT_REASON_CODES,
     SecuritySnapshotSummary,
 )
-from .security_snapshot_ids import returned_id_map, returned_security_id_map
+from .returned_ids import returned_id_map, returned_security_id_map
 from .source_catalog import security_snapshot_source_rows
 from .supabase_writer import SupabaseWriter
 

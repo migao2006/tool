@@ -32,3 +32,7 @@ prediction run，阻擋晚於 `decision_at` 的稽核資料。
 `historical_daily_bar_landing` 與 `historical_daily_bar_quarantine` 只保存尚未完成身分及
 point-in-time 驗證的來源列與問題。它們不含 `security_id`，也不會外鍵連到正式
 `securities` 或 `daily_bars`；資料只能標示為 `RAW_LANDING_ONLY / RESEARCH_ONLY`。
+
+`historical_backfill_tasks` 只管理自動回補的排序、lease、重試及斷點。任務股票池來自
+目前可見的 security master，只能作為排程依據，不會讓歷史落地資料取得 point-in-time
+資格。此佇列只由版本化 migration 建立，不維護第二份重複 SQL。

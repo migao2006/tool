@@ -13,11 +13,8 @@ from src.data.providers.settings import ApiProviderSettings
 
 from .contracts import IngestionError
 from .finmind_historical_probe import validate_probe_request
-from .historical_daily_bar_contracts import NormalizedHistoricalDailyBarBatch
 from .historical_daily_bar_import_contracts import HistoricalDailyBarImportSummary
-from .historical_daily_bar_normalizer import normalize_historical_daily_bars
-from .returned_ids import returned_id_map
-from .source_catalog import finmind_data_source_row
+from .historical_daily_bar_landing_service import HistoricalDailyBarLandingService
 from .supabase_writer import SupabaseWriter
 
 
@@ -82,68 +79,6 @@ def _quota_remaining(payload: ProviderPayload) -> int:
     return max(limit - used, 0)
 
 
-def _source_id(rows: Sequence[Mapping[str, object]]) -> int:
-    source_ids = returned_id_map(
-        rows,
-        code_key="source_code",
-        id_key="source_id",
-    )
-    if set(source_ids) != {"FINMIND"}:
-        raise IngestionError(
-            "DATA_SOURCE_UPSERT_INCOMPLETE",
-            "Supabase did not return the FinMind source identifier",
-        )
-    return source_ids["FINMIND"]
-
-
-def _for_database(
-    rows: Sequence[Mapping[str, object]],
-    *,
-    source_id: int,
-) -> list[dict[str, object]]:
-    prepared: list[dict[str, object]] = []
-    for row in rows:
-        value = dict(row)
-        _ = value.pop("source_code", None)
-        value["source_id"] = source_id
-        prepared.append(value)
-    return prepared
-
-
-def _validate_source_scope(
-    rows: Sequence[Mapping[str, object]],
-    *,
-    symbol: str,
-    start_date: date,
-    end_date: date,
-) -> None:
-    if not rows:
-        raise IngestionError(
-            "HISTORICAL_DAILY_BAR_EMPTY_RESPONSE",
-            f"FinMind returned no daily bars for {symbol}",
-        )
-    for row in rows:
-        if row.get("parse_status") != "PARSED":
-            continue
-        if row.get("source_symbol") != symbol:
-            raise IngestionError(
-                "HISTORICAL_DAILY_BAR_SYMBOL_MISMATCH",
-                "FinMind returned a parsed row for another symbol",
-            )
-        raw_trade_date = row.get("trade_date")
-        if not isinstance(raw_trade_date, str):
-            raise IngestionError(
-                "HISTORICAL_DAILY_BAR_DATE_INVALID",
-                "A parsed historical bar is missing trade_date",
-            )
-        trade_date = date.fromisoformat(raw_trade_date)
-        if not start_date <= trade_date <= end_date:
-            raise IngestionError(
-                "HISTORICAL_DAILY_BAR_DATE_OUTSIDE_REQUEST",
-                "FinMind returned a parsed row outside the requested range",
-            )
-
-
 @final
 class HistoricalDailyBarImporter:
     """Land a small explicit symbol batch without identity or PIT promotion."""
@@ -193,57 +128,27 @@ class HistoricalDailyBarImporter:
 
         fetched_rows = landed_rows = quarantined_rows = quarantine_issues = 0
         payload_hashes: list[str] = []
-        batches: list[NormalizedHistoricalDailyBarBatch] = []
+        landing_service = HistoricalDailyBarLandingService(
+            provider=self.provider,
+            writer=None if dry_run else self._writer(),
+            dry_run=dry_run,
+        )
         for index, symbol in enumerate(normalized_symbols):
             if index and pacing_seconds:
                 self._sleep(pacing_seconds)
-            payload = self.provider.fetch(
-                "daily_bars",
-                data_id=symbol,
-                start_date=start_date,
-                end_date=end_date,
-            )
-            batch = normalize_historical_daily_bars(payload)
-            _validate_source_scope(
-                batch.landing_rows,
+            result = landing_service.land_symbol(
                 symbol=symbol,
                 start_date=start_date,
                 end_date=end_date,
             )
-            fetched_rows += batch.source_row_count
-            landed_rows += len(batch.landing_rows)
-            quarantined_rows += sum(
-                row.get("parse_status") == "QUARANTINED" for row in batch.landing_rows
-            )
-            quarantine_issues += len(batch.quarantine_rows)
-            payload_hashes.append(payload.payload_sha256)
-            batches.append(batch)
+            fetched_rows += result.fetched_rows
+            landed_rows += result.landed_rows
+            quarantined_rows += result.quarantined_rows
+            quarantine_issues += result.quarantine_issues
+            payload_hashes.append(result.source_payload_hash)
 
         if not dry_run:
-            returned = self._writer().upsert(
-                "data_sources",
-                [finmind_data_source_row()],
-                on_conflict="source_code",
-                select="source_id,source_code",
-                return_rows=True,
-            )
-            source_id = _source_id(returned)
-            for batch in batches:
-                landing = _for_database(batch.landing_rows, source_id=source_id)
-                _ = self._writer().upsert(
-                    "historical_daily_bar_landing",
-                    landing,
-                    on_conflict="landing_key",
-                    preserve_existing=True,
-                )
-                if batch.quarantine_rows:
-                    _ = self._writer().upsert(
-                        "historical_daily_bar_quarantine",
-                        batch.quarantine_rows,
-                        on_conflict="landing_key,reason_code,field_name",
-                        preserve_existing=True,
-                    )
-            self._writer().refresh_home_data_status()
+            landing_service.refresh_home_status()
 
         database_counts = (
             {}

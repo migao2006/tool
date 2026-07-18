@@ -19,6 +19,7 @@ from .benchmark_definitions import benchmark_definition_rows
 from .benchmark_observations import normalize_total_return_index
 from .contracts import IngestionError
 from .normalizers import data_source_rows, revision_version
+from .parallel_fetch import PayloadFetchRequest, fetch_provider_payloads
 from .returned_ids import returned_id_map
 from .supabase_writer import SupabaseWriter
 
@@ -86,10 +87,14 @@ class BenchmarkImporter:
         return self.writer
 
     def _fetch_all(self) -> dict[str, ProviderPayload]:
-        return {
-            market: self.registry[market].fetch("return_index")
-            for market in ("TWSE", "TPEX")
-        }
+        return fetch_provider_payloads(
+            {
+                market: PayloadFetchRequest(
+                    market, self.registry[market], "return_index"
+                )
+                for market in ("TWSE", "TPEX")
+            }
+        )
 
     @staticmethod
     def _normalize(

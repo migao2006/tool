@@ -40,3 +40,31 @@ python -m scripts.import_historical_daily_bars `
 GitHub 的兩個手動 workflow 皆限制最多 20 檔、最長 5 年。預設試批股票來自目前可見
 股票池，因此稽核結果固定包含 `REQUEST_UNIVERSE_NOT_POINT_IN_TIME`；它不能用來證明
 歷史股票池完整，也不能消除生存者偏誤。
+
+## 自動漸進回補
+
+`.github/workflows/backfill-historical-daily-bars.yml` 每小時第 17 分鐘啟動一個可續跑的
+FinMind 工作者。固定單一 concurrency group 且不取消進行中的工作，避免多個執行個體共用
+同一 token 時重複消耗額度或同時認領相同任務。
+
+任務順序固定為：
+
+1. 上市普通股。
+2. 上櫃普通股。
+3. ETF。
+
+只有前一層沒有待處理任務時才進入下一層。ETF 與普通股票分開建立任務，不會混入普通股票
+模型資料。每次執行預設最多處理 60 檔；工作開始時先讀取 FinMind 額度，保留安全額度後依
+可用請求數決定實際批次，並在請求之間節流。額度不足或接近執行期限時會安全停止，下一次
+排程從未完成任務繼續，而不是重新抓取整批資料。
+
+工作者也會在寫入前檢查資料庫容量。預設於約 420 MB 停止擴充，保留 Supabase 免費方案的
+操作空間；容量閘門觸發時不會刪除既有資料，也不會改用假資料填補。此門檻是安全上限，不是
+完整股票池已完成的證明。
+
+自動回補和原本手動匯入使用相同 landing 契約。所有結果仍固定為
+`UNRESOLVED / UNVERIFIED / RAW_LANDING_ONLY / RESEARCH_ONLY`；在 security identity、公司
+行動、point-in-time 股票池及正式驗證完成前，不得用於正式推薦、回測或績效宣稱。
+
+手動啟動時只開放調整單次 `max_tasks`。日期範圍、額度保留、執行時間與容量上限由 workflow
+固定，執行摘要保存為 90 天 artifact，供後續稽核實際進度、停止原因及錯誤。

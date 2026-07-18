@@ -1,6 +1,7 @@
 from datetime import date
 
 from src.data.ingestion.contracts import IngestionError
+from src.data.ingestion.historical_backfill_settings import HistoricalBackfillSettings
 from src.data.ingestion.historical_backfill_runtime import finmind_quota_counters
 from tests.support.historical_backfill_fakes import (
     Clock,
@@ -71,6 +72,33 @@ def test_capacity_guard_stops_before_claiming_a_task() -> None:
     )
     assert summary.outcome == "CAPACITY_GUARD"
     assert repository.completed == []
+
+
+def test_r2_target_uses_object_budget_instead_of_postgres_byte_budget() -> None:
+    repository = FakeRepository(
+        [task(1, "2330", "TWSE", "COMMON_STOCK")],
+        snapshots=[snapshot(database_bytes=420_000_000)],
+    )
+    settings = HistoricalBackfillSettings(
+        storage_target="R2",
+        max_archive_objects_per_run=1,
+    )
+
+    summary = make_coordinator(
+        FakeProvider(),
+        repository,
+        FakeLandingService(),
+        settings=settings,
+    ).run(
+        start_date=date(2021, 7, 19),
+        end_date=date(2026, 7, 17),
+        max_tasks=1,
+        worker_id="test",
+    )
+
+    assert summary.outcome == "PROGRESSED"
+    assert summary.storage_task_budget == 1
+    assert repository.completed == [("2330", True, None)]
 
 
 def test_each_symbol_is_completed_independently_and_order_is_preserved() -> None:

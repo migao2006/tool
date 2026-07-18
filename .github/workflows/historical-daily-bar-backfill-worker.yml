@@ -1,0 +1,110 @@
+name: Historical daily bar backfill worker
+
+on:
+  workflow_call:
+    inputs:
+      credential_slot:
+        description: Non-secret identifier used in worker and artifact names
+        required: true
+        type: string
+      max_tasks:
+        description: Maximum FinMind symbols processed by this credential
+        required: true
+        type: number
+    secrets:
+      finmind_token:
+        required: true
+      r2_access_key_id:
+        required: true
+      r2_secret_access_key:
+        required: true
+      supabase_url:
+        required: true
+      supabase_service_role_key:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  backfill:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install uv with dependency caching
+        uses: astral-sh/setup-uv@v8.3.2
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Synchronize locked environment
+        run: uv sync --frozen
+
+      - name: Require backfill credentials
+        env:
+          FINMIND_TOKEN: ${{ secrets.finmind_token }}
+          R2_ACCOUNT_ID: ${{ vars.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.r2_access_key_id }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.r2_secret_access_key }}
+          R2_BUCKET_NAME: ${{ vars.R2_BUCKET_NAME }}
+          SUPABASE_URL: ${{ secrets.supabase_url }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.supabase_service_role_key }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          required=(
+            FINMIND_TOKEN
+            R2_ACCOUNT_ID
+            R2_ACCESS_KEY_ID
+            R2_SECRET_ACCESS_KEY
+            R2_BUCKET_NAME
+            SUPABASE_URL
+            SUPABASE_SERVICE_ROLE_KEY
+          )
+          for name in "${required[@]}"; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "Required worker configuration is not set: $name"
+              exit 1
+            fi
+          done
+
+      - name: Run quota-aware resumable backfill
+        env:
+          FINMIND_TOKEN: ${{ secrets.finmind_token }}
+          R2_ACCOUNT_ID: ${{ vars.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.r2_access_key_id }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.r2_secret_access_key }}
+          R2_BUCKET_NAME: ${{ vars.R2_BUCKET_NAME }}
+          SUPABASE_URL: ${{ secrets.supabase_url }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.supabase_service_role_key }}
+          API_HTTP_TIMEOUT_SECONDS: "30"
+          MAX_TASKS: ${{ inputs.max_tasks }}
+          FINMIND_QUOTA_RESERVE: "20"
+          HISTORICAL_BACKFILL_MAX_RUNTIME_SECONDS: "1200"
+          HISTORICAL_BACKFILL_MAX_DATABASE_BYTES: "420000000"
+          HISTORICAL_BACKFILL_STORAGE_TARGET: R2
+          HISTORICAL_BACKFILL_MAX_ARCHIVE_OBJECTS_PER_RUN: "100"
+          HISTORICAL_BACKFILL_MAX_ARCHIVE_OBJECT_BYTES: "50000000"
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run python -m scripts.backfill_historical_daily_bars \
+            --start-date 2021-07-19 \
+            --end-date 2026-07-17 \
+            --max-tasks "$MAX_TASKS" \
+            --output historical-backfill-summary.json
+
+      - name: Preserve backfill audit summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: historical-backfill-${{ inputs.credential_slot }}-${{ github.run_id }}
+          path: historical-backfill-summary.json
+          if-no-files-found: warn
+          retention-days: 90

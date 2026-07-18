@@ -75,7 +75,14 @@ class BackfillRepository(Protocol):
 
 class BackfillLandingService(Protocol):
     def land_symbol(
-        self, *, symbol: str, start_date: date, end_date: date
+        self,
+        *,
+        symbol: str,
+        start_date: date,
+        end_date: date,
+        scheduled_market: str | None = None,
+        asset_type: str | None = None,
+        backfill_task_id: int | None = None,
     ) -> HistoricalSymbolLandingResult: ...
 
     def refresh_home_status(self) -> None: ...
@@ -111,6 +118,8 @@ def storage_task_budget(
     snapshot: HistoricalBackfillSnapshot,
     settings: HistoricalBackfillSettings,
 ) -> int:
+    if settings.storage_target == "R2":
+        return settings.max_archive_objects_per_run
     remaining_bytes = max(settings.max_database_bytes - snapshot.database_bytes, 0)
     average_bytes = (
         snapshot.landing_bytes / snapshot.landing_symbols

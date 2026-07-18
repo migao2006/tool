@@ -186,6 +186,9 @@ class HistoricalBackfillCoordinator:
                     symbol=task.symbol,
                     start_date=task.start_date,
                     end_date=task.end_date,
+                    scheduled_market=task.market,
+                    asset_type=task.asset_type,
+                    backfill_task_id=task.task_id,
                 )
                 self.repository.complete(
                     task=task,

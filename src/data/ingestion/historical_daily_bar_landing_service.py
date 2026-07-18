@@ -41,6 +41,22 @@ class SymbolLandingWriter(Protocol):
     def refresh_home_data_status(self) -> None: ...
 
 
+class HistoricalSymbolArchive(Protocol):
+    def archive(
+        self,
+        *,
+        rows: Sequence[Mapping[str, object]],
+        quarantine_rows: Sequence[Mapping[str, object]],
+        payload: ProviderPayload,
+        scheduled_market: str,
+        asset_type: str,
+        symbol: str,
+        start_date: date,
+        end_date: date,
+        backfill_task_id: int | None,
+    ) -> object: ...
+
+
 def _source_id(rows: Sequence[Mapping[str, object]]) -> int:
     source_ids = returned_id_map(rows, code_key="source_code", id_key="source_id")
     if set(source_ids) != {"FINMIND"}:
@@ -92,7 +108,9 @@ def _validate_source_scope(
                 "HISTORICAL_DAILY_BAR_DATE_OUTSIDE_REQUEST",
                 "FinMind returned a parsed row outside the requested range",
             )
-        latest_trade_date = max(latest_trade_date or parsed_trade_date, parsed_trade_date)
+        latest_trade_date = max(
+            latest_trade_date or parsed_trade_date, parsed_trade_date
+        )
     if latest_trade_date is None:
         raise IngestionError(
             "HISTORICAL_DAILY_BAR_NO_PARSED_ROWS",
@@ -110,10 +128,12 @@ class HistoricalDailyBarLandingService:
         *,
         provider: SymbolLandingProvider,
         writer: SymbolLandingWriter | None,
+        archive_service: HistoricalSymbolArchive | None = None,
         dry_run: bool = False,
     ) -> None:
         self.provider = provider
         self.writer = writer
+        self.archive_service = archive_service
         self.dry_run = dry_run
         self._source_id_value: int | None = None
 
@@ -138,8 +158,24 @@ class HistoricalDailyBarLandingService:
         return self._source_id_value
 
     def land_symbol(
-        self, *, symbol: str, start_date: date, end_date: date
+        self,
+        *,
+        symbol: str,
+        start_date: date,
+        end_date: date,
+        scheduled_market: str | None = None,
+        asset_type: str | None = None,
+        backfill_task_id: int | None = None,
     ) -> HistoricalSymbolLandingResult:
+        if (
+            self.archive_service is not None
+            and not self.dry_run
+            and (not scheduled_market or not asset_type)
+        ):
+            raise IngestionError(
+                "HISTORICAL_ARCHIVE_CONTEXT_MISSING",
+                "Archive landing requires a scheduled market and asset type",
+            )
         payload = self.provider.fetch(
             "daily_bars",
             data_id=symbol,
@@ -154,21 +190,36 @@ class HistoricalDailyBarLandingService:
             end_date=end_date,
         )
         if not self.dry_run:
-            source_id = self._ensure_source_id()
-            landing = _for_database(batch.landing_rows, source_id=source_id)
-            _ = self._require_writer().upsert(
-                "historical_daily_bar_landing",
-                landing,
-                on_conflict="landing_key",
-                preserve_existing=True,
-            )
-            if batch.quarantine_rows:
+            if self.archive_service is not None:
+                assert scheduled_market is not None
+                assert asset_type is not None
+                _ = self.archive_service.archive(
+                    rows=batch.landing_rows,
+                    quarantine_rows=batch.quarantine_rows,
+                    payload=payload,
+                    scheduled_market=scheduled_market,
+                    asset_type=asset_type,
+                    symbol=symbol,
+                    start_date=start_date,
+                    end_date=end_date,
+                    backfill_task_id=backfill_task_id,
+                )
+            else:
+                source_id = self._ensure_source_id()
+                landing = _for_database(batch.landing_rows, source_id=source_id)
                 _ = self._require_writer().upsert(
-                    "historical_daily_bar_quarantine",
-                    batch.quarantine_rows,
-                    on_conflict="landing_key,reason_code,field_name",
+                    "historical_daily_bar_landing",
+                    landing,
+                    on_conflict="landing_key",
                     preserve_existing=True,
                 )
+                if batch.quarantine_rows:
+                    _ = self._require_writer().upsert(
+                        "historical_daily_bar_quarantine",
+                        batch.quarantine_rows,
+                        on_conflict="landing_key,reason_code,field_name",
+                        preserve_existing=True,
+                    )
         quarantined_rows = sum(
             row.get("parse_status") == "QUARANTINED" for row in batch.landing_rows
         )

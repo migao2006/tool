@@ -8,10 +8,20 @@ MIGRATION = (
     / "migrations"
     / "20260718163123_historical_backfill_control.sql"
 )
+FIX_MIGRATION = (
+    ROOT
+    / "supabase"
+    / "migrations"
+    / "20260718170638_fix_historical_backfill_claim_priority.sql"
+)
 
 
 def migration_sql() -> str:
     return MIGRATION.read_text(encoding="utf-8").lower()
+
+
+def fix_migration_sql() -> str:
+    return FIX_MIGRATION.read_text(encoding="utf-8").lower()
 
 
 def test_backfill_queue_is_service_role_only_and_rls_protected() -> None:
@@ -56,30 +66,69 @@ def test_backfill_rpcs_are_security_invoker_and_not_publicly_executable() -> Non
 
 def test_backfill_priority_is_generated_and_claimed_in_required_order() -> None:
     sql = migration_sql()
+    claim_sql = fix_migration_sql()
 
     assert "when asset_type = 'common_stock' and market = 'twse' then 10" in sql
     assert "when asset_type = 'common_stock' and market = 'tpex' then 20" in sql
     assert "else 30" in sql
+    assert "select min(queued.priority) as priority" in claim_sql
+    assert "queued.priority = active_priority.priority" in claim_sql
     assert (
-        "order by priority, requested_start_date, market, source_symbol, task_id"
-        in sql
-    )
-    assert "select min(priority) as priority" in sql
-    assert "historical_backfill_tasks.priority = active_priority.priority" in sql
-    assert "for update skip locked" in sql
+        "queued.priority,\n"
+        "      queued.requested_start_date,\n"
+        "      queued.market,\n"
+        "      queued.source_symbol,\n"
+        "      queued.task_id"
+    ) in claim_sql
+    assert "for update of queued skip locked" in claim_sql
+
+
+def test_claim_hotfix_qualifies_columns_and_preserves_service_role_boundary() -> None:
+    sql = fix_migration_sql()
+
+    assert "create or replace function market_data.claim_historical_backfill_tasks(" in sql
+    assert "security invoker" in sql
+    assert "select queued.task_id" in sql
+    assert "select min(queued.priority) as priority" in sql
+    assert "queued.priority = active_priority.priority" in sql
+    assert "order by\n      queued.priority" in sql
+    assert "for update of queued skip locked" in sql
+    assert "security definer" not in sql
+    assert (
+        "revoke all on function market_data.claim_historical_backfill_tasks(\n"
+        "  text,\n"
+        "  text,\n"
+        "  uuid,\n"
+        "  integer,\n"
+        "  integer\n"
+        ") from public, anon, authenticated"
+    ) in sql
+    assert (
+        "grant execute on function market_data.claim_historical_backfill_tasks(\n"
+        "  text,\n"
+        "  text,\n"
+        "  uuid,\n"
+        "  integer,\n"
+        "  integer\n"
+        ") to service_role"
+    ) in sql
 
 
 def test_backfill_lease_is_bounded_reclaimable_and_token_fenced() -> None:
     sql = migration_sql()
+    claim_sql = fix_migration_sql()
 
-    assert "if p_limit is null" in sql
-    assert "or p_lease_seconds is null" in sql
-    assert "or p_limit not between 1 and 100" in sql
-    assert "p_lease_seconds not between 60 and 3600" in sql
-    assert "status = 'leased' and lease_expires_at <= now()" in sql
-    assert "attempt_count < max_attempts" in sql
-    assert "attempt_count = task.attempt_count + 1" in sql
-    assert "lease_token = p_claim_token" in sql
+    assert "if p_limit is null" in claim_sql
+    assert "or p_lease_seconds is null" in claim_sql
+    assert "or p_limit not between 1 and 100" in claim_sql
+    assert "p_lease_seconds not between 60 and 3600" in claim_sql
+    assert "update market_data.historical_backfill_tasks as expired" in claim_sql
+    assert "expired.status = 'leased'" in claim_sql
+    assert "expired.lease_expires_at <= now()" in claim_sql
+    assert "expired.attempt_count >= expired.max_attempts" in claim_sql
+    assert "queued.attempt_count < queued.max_attempts" in claim_sql
+    assert "attempt_count = task.attempt_count + 1" in claim_sql
+    assert "lease_token = p_claim_token" in claim_sql
     assert "and task.status = 'leased'" in sql
     assert "and task.lease_token = p_claim_token" in sql
     assert "and task.lease_expires_at > now()" in sql

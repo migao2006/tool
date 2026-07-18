@@ -13,6 +13,9 @@ def test_archive_audit_workflow_is_private_complete_and_auditable() -> None:
     assert "permissions:\n  contents: read" in workflow
     assert "cancel-in-progress: false" in workflow
     assert "scripts.audit_historical_r2_archive" in workflow
+    assert "scripts.audit_historical_dataset_readiness" in workflow
+    assert "--archive-audit historical-r2-audit.json" in workflow
+    assert "--output historical-dataset-readiness.json" in workflow
     assert "--max-objects" not in workflow
     assert "R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}" in workflow
     assert "R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}" in workflow
@@ -21,4 +24,7 @@ def test_archive_audit_workflow_is_private_complete_and_auditable() -> None:
         in workflow
     )
     assert "actions/upload-artifact@v4" in workflow
+    assert "historical-r2-audit.json" in workflow
+    assert "historical-dataset-readiness.json" in workflow
+    assert workflow.count("if: always()") >= 2
     assert "retention-days: 90" in workflow

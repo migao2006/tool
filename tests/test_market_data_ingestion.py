@@ -19,8 +19,12 @@ from src.data.ingestion.supabase_writer import RestResponse, SupabaseWriter
 from src.data.providers.contracts import ProviderPayload
 
 
-def payload(provider: str, dataset: str, rows: list[dict[str, object]]) -> ProviderPayload:
-    digest = sha256(json.dumps(rows, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+def payload(
+    provider: str, dataset: str, rows: list[dict[str, object]]
+) -> ProviderPayload:
+    digest = sha256(
+        json.dumps(rows, ensure_ascii=False, sort_keys=True).encode()
+    ).hexdigest()
     return ProviderPayload(
         provider=provider,
         dataset=dataset,
@@ -39,7 +43,13 @@ class FakeRestTransport:
 
     def request(self, method, url, *, headers, body, timeout):
         self.calls.append(
-            {"method": method, "url": url, "headers": dict(headers), "body": body, "timeout": timeout}
+            {
+                "method": method,
+                "url": url,
+                "headers": dict(headers),
+                "body": body,
+                "timeout": timeout,
+            }
         )
         return self.responses.pop(0)
 
@@ -97,7 +107,9 @@ def test_otc_company_profiles_use_the_official_english_key_contract() -> None:
     assert rows[0]["listing_date"] == "2018-08-08"
 
 
-def test_daily_bars_are_point_in_time_versioned_and_unknown_products_are_excluded() -> None:
+def test_daily_bars_are_point_in_time_versioned_and_unknown_products_are_excluded() -> (
+    None
+):
     source = payload(
         "TWSE",
         "daily_bars",
@@ -131,7 +143,9 @@ def test_daily_bars_are_point_in_time_versioned_and_unknown_products_are_exclude
     assert rows[0]["opening_trade_available"] is True
 
 
-def test_supabase_writer_uses_private_schema_and_never_bearer_wraps_opaque_key() -> None:
+def test_supabase_writer_uses_private_schema_and_never_bearer_wraps_opaque_key() -> (
+    None
+):
     returned = json.dumps([{"source_id": 1, "source_code": "TWSE"}]).encode()
     transport = FakeRestTransport([RestResponse(201, {}, returned)])
     writer = SupabaseWriter(
@@ -166,13 +180,39 @@ def test_supabase_writer_rejects_publishable_key_before_any_request() -> None:
 
 
 def test_supabase_writer_reads_exact_count_header() -> None:
-    transport = FakeRestTransport([RestResponse(200, {"Content-Range": "0-0/27"}, b"[]")])
+    transport = FakeRestTransport(
+        [RestResponse(200, {"Content-Range": "0-0/27"}, b"[]")]
+    )
     writer = SupabaseWriter(
         url="https://example.supabase.co",
         server_key="sb_secret_test-value",
         transport=transport,
     )
     assert writer.count_rows("daily_bars") == 27
+
+
+def test_supabase_writer_counts_rows_with_explicit_filters() -> None:
+    transport = FakeRestTransport(
+        [RestResponse(200, {"Content-Range": "0-0/12"}, b"[]")]
+    )
+    writer = SupabaseWriter(
+        url="https://example.supabase.co",
+        server_key="sb_secret_test-value",
+        transport=transport,
+    )
+
+    count = writer.count_rows(
+        "security_listing_periods",
+        filters={
+            "listing_market": "eq.TWSE",
+            "identity_resolution_status": "eq.VERIFIED",
+        },
+    )
+
+    assert count == 12
+    query = parse_qs(urlsplit(str(transport.calls[0]["url"])).query)
+    assert query["listing_market"] == ["eq.TWSE"]
+    assert query["identity_resolution_status"] == ["eq.VERIFIED"]
 
 
 def test_supabase_writer_selects_private_rows_with_explicit_filters() -> None:
@@ -193,9 +233,7 @@ def test_supabase_writer_selects_private_rows_with_explicit_filters() -> None:
         limit=2,
     )
 
-    assert rows == [
-        {"benchmark_id": 1, "benchmark_code": "TWSE_TOTAL_RETURN_INDEX"}
-    ]
+    assert rows == [{"benchmark_id": 1, "benchmark_code": "TWSE_TOTAL_RETURN_INDEX"}]
     query = parse_qs(urlsplit(str(transport.calls[0]["url"])).query)
     assert query["benchmark_code"] == ["eq.TWSE_TOTAL_RETURN_INDEX"]
     assert query["limit"] == ["2"]

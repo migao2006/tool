@@ -66,7 +66,9 @@ class UrlLibRestTransport:
                 HTTPResponse,
                 urlopen(request, timeout=timeout, context=self.ssl_context),  # noqa: S310
             ) as response:
-                return RestResponse(response.status, dict(response.headers.items()), response.read())
+                return RestResponse(
+                    response.status, dict(response.headers.items()), response.read()
+                )
         except HTTPError as error:
             return RestResponse(
                 error.code,
@@ -149,7 +151,13 @@ class SupabaseWriter:
         url = f"{self.base_url}/{table}"
         if query:
             url = f"{url}?{urlencode(query)}"
-        body = None if rows is None else json.dumps(rows, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        body = (
+            None
+            if rows is None
+            else json.dumps(rows, ensure_ascii=False, separators=(",", ":")).encode(
+                "utf-8"
+            )
+        )
         response = self.transport.request(
             method,
             url,
@@ -189,7 +197,8 @@ class SupabaseWriter:
                 rows=batch,
                 extra_headers={
                     "Prefer": (
-                        "resolution=ignore-duplicates" if preserve_existing
+                        "resolution=ignore-duplicates"
+                        if preserve_existing
                         else "resolution=merge-duplicates"
                     )
                     + ",missing=default,"
@@ -280,15 +289,24 @@ class SupabaseWriter:
                 f"Supabase returned invalid JSON for rpc/{function_name}",
             ) from error
 
-    def count_rows(self, table: str) -> int:
+    def count_rows(
+        self,
+        table: str,
+        *,
+        filters: Mapping[str, str] | None = None,
+    ) -> int:
         response = self._request(
             "GET",
             table,
-            query={"select": "*", "limit": "1"},
+            query={"select": "*", "limit": "1", **dict(filters or {})},
             extra_headers={"Prefer": "count=exact", "Range": "0-0"},
         )
         content_range = next(
-            (value for key, value in response.headers.items() if key.casefold() == "content-range"),
+            (
+                value
+                for key, value in response.headers.items()
+                if key.casefold() == "content-range"
+            ),
             None,
         )
         if not content_range or "/" not in content_range:

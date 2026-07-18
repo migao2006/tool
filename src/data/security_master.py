@@ -1,108 +1,30 @@
-"""Point-in-time security universe and benchmark assignments."""
+"""Point-in-time security universe and benchmark assignment queries."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Iterable
 from datetime import date, datetime
-from enum import Enum
-from typing import Iterable
+from typing import final
 
 from src.core.horizon import PRODUCTION_HORIZON, require_production_horizon
 
-
-class Market(str, Enum):
-    TWSE = "TWSE"
-    TPEX = "TPEX"
-    # Backward-compatible aliases; persistence and API output use TWSE/TPEX.
-    LISTED = "TWSE"
-    OTC = "TPEX"
-    ETF = "ETF"
-
-
-class AssetType(str, Enum):
-    COMMON_STOCK = "COMMON_STOCK"
-    ETF = "ETF"
-
-
-class TradingStatus(str, Enum):
-    UNKNOWN = "UNKNOWN"
-    ACTIVE = "ACTIVE"
-    SUSPENDED = "SUSPENDED"
-    STOPPED = "STOPPED"
-    DELISTED = "DELISTED"
+from .security_master_contracts import (
+    AssetType,
+    BenchmarkAssignment,
+    Market,
+    SecurityRecord,
+    TradingStatus,
+    UniverseSnapshot,
+    require_aware,
+)
+from .security_master_validation import (
+    validate_identity_consistency,
+    validate_non_overlapping_benchmarks,
+    validate_non_overlapping_records,
+)
 
 
-@dataclass(frozen=True)
-class SecurityRecord:
-    """One effective-dated version of a security's identity and trading state."""
-
-    symbol: str
-    name: str
-    market: Market
-    industry: str
-    asset_type: AssetType
-    valid_from: date
-    valid_to: date | None = None
-    listing_date: date | None = None
-    delisting_date: date | None = None
-    trading_status: TradingStatus = TradingStatus.UNKNOWN
-    attention_flag: bool | None = None
-    disposition_flag: bool | None = None
-    altered_trading_method_flag: bool | None = None
-    full_delivery_flag: bool | None = None
-    periodic_auction_flag: bool | None = None
-    suspended_flag: bool | None = None
-
-    def __post_init__(self) -> None:
-        if not self.symbol or not self.name:
-            raise ValueError("security symbol and name are required")
-        if self.valid_to is not None and self.valid_to <= self.valid_from:
-            raise ValueError("valid_to must be later than valid_from")
-        if self.asset_type == AssetType.ETF and self.market not in {Market.TWSE, Market.TPEX, Market.ETF}:
-            raise ValueError("ETF securities must retain their actual TWSE/TPEX venue")
-        if self.asset_type == AssetType.COMMON_STOCK and self.market == Market.ETF:
-            raise ValueError("common stock cannot use the ETF market partition")
-
-    def effective_on(self, as_of_date: date) -> bool:
-        return self.valid_from <= as_of_date and (
-            self.valid_to is None or as_of_date < self.valid_to
-        )
-
-
-@dataclass(frozen=True)
-class BenchmarkAssignment:
-    market: Market
-    benchmark_id: str
-    version: str
-    valid_from: date
-    available_at: datetime
-    valid_to: date | None = None
-
-    def __post_init__(self) -> None:
-        if not self.benchmark_id or not self.version:
-            raise ValueError("benchmark id and version are required")
-        if self.available_at.tzinfo is None or self.available_at.utcoffset() is None:
-            raise ValueError("benchmark available_at must be timezone-aware")
-        if self.valid_to is not None and self.valid_to <= self.valid_from:
-            raise ValueError("benchmark valid_to must be later than valid_from")
-
-    def effective_on(self, as_of_date: date) -> bool:
-        return self.valid_from <= as_of_date and (
-            self.valid_to is None or as_of_date < self.valid_to
-        )
-
-    def available_for(self, as_of_date: date, decision_at: datetime) -> bool:
-        return self.effective_on(as_of_date) and self.available_at <= decision_at
-
-
-@dataclass(frozen=True)
-class UniverseSnapshot:
-    as_of_date: date
-    horizon: int
-    securities: tuple[SecurityRecord, ...]
-    benchmark_version_by_market: dict[Market, tuple[str, str]]
-
-
+@final
 class SecurityMaster:
     """Resolve historical constituents without using today's surviving universe."""
 
@@ -111,20 +33,87 @@ class SecurityMaster:
         records: Iterable[SecurityRecord],
         benchmarks: Iterable[BenchmarkAssignment],
     ) -> None:
-        self._records = tuple(records)
-        self._benchmarks = tuple(benchmarks)
-        self._validate_non_overlapping_records()
-        self._validate_non_overlapping_benchmarks()
+        self._records: tuple[SecurityRecord, ...] = tuple(records)
+        self._benchmarks: tuple[BenchmarkAssignment, ...] = tuple(benchmarks)
+        validate_identity_consistency(self._records)
+        validate_non_overlapping_records(self._records)
+        validate_non_overlapping_benchmarks(self._benchmarks)
 
-    def record_for(self, symbol: str, as_of_date: date) -> SecurityRecord | None:
-        matches = [
-            record
-            for record in self._records
-            if record.symbol == symbol and record.effective_on(as_of_date)
-        ]
-        if len(matches) > 1:
-            raise ValueError(f"overlapping security-master versions for {symbol}")
-        return matches[0] if matches else None
+    def record_for_security_id(
+        self,
+        security_id: int,
+        as_of_date: date,
+        *,
+        decision_at: datetime,
+    ) -> SecurityRecord | None:
+        return self._one_available_record(
+            (
+                record
+                for record in self._records
+                if record.security_id == security_id
+                and record.available_for(as_of_date, decision_at)
+            ),
+            identity=f"security_id={security_id}",
+        )
+
+    def record_for_listing_period(
+        self,
+        listing_period_id: str,
+        as_of_date: date,
+        *,
+        decision_at: datetime,
+    ) -> SecurityRecord | None:
+        return self._one_available_record(
+            (
+                record
+                for record in self._records
+                if record.listing_period_id == listing_period_id
+                and record.available_for(as_of_date, decision_at)
+            ),
+            identity=f"listing_period_id={listing_period_id}",
+        )
+
+    def record_for_market_symbol(
+        self,
+        market: Market,
+        symbol: str,
+        as_of_date: date,
+        *,
+        decision_at: datetime,
+    ) -> SecurityRecord | None:
+        """Resolve a ticker only when its venue and point-in-time are explicit."""
+
+        return self._one_available_record(
+            (
+                record
+                for record in self._records
+                if record.market == market
+                and record.symbol == symbol
+                and record.available_for(as_of_date, decision_at)
+            ),
+            identity=f"market={market.value},symbol={symbol}",
+        )
+
+    @staticmethod
+    def _one_available_record(
+        records: Iterable[SecurityRecord],
+        *,
+        identity: str,
+    ) -> SecurityRecord | None:
+        matches = tuple(records)
+        if not matches:
+            return None
+        latest_available_at = max(record.available_at for record in matches)
+        latest = tuple(
+            record for record in matches if record.available_at == latest_available_at
+        )
+        reference = latest[0]
+        if any(record != reference for record in latest[1:]):
+            raise ValueError(
+                "conflicting security-master revisions at the same available_at "
+                + f"for {identity}"
+            )
+        return reference
 
     def benchmark_for(
         self,
@@ -133,8 +122,7 @@ class SecurityMaster:
         *,
         decision_at: datetime,
     ) -> BenchmarkAssignment:
-        if decision_at.tzinfo is None or decision_at.utcoffset() is None:
-            raise ValueError("decision_at must be timezone-aware")
+        require_aware(decision_at, "decision_at")
         matches = [
             assignment
             for assignment in self._benchmarks
@@ -142,9 +130,9 @@ class SecurityMaster:
             and assignment.available_for(as_of_date, decision_at)
         ]
         if len(matches) != 1:
-            raise ValueError(
-                f"expected one benchmark for market={market.value} at {as_of_date}, got {len(matches)}"
-            )
+            message = f"expected one benchmark for market={market.value}"
+            message += f" at {as_of_date}, got {len(matches)}"
+            raise ValueError(message)
         return matches[0]
 
     def common_stock_universe(
@@ -155,18 +143,32 @@ class SecurityMaster:
         horizon: int = PRODUCTION_HORIZON,
         include_non_active: bool = True,
     ) -> UniverseSnapshot:
-        require_production_horizon(horizon)
-        candidates = [
-            record
-            for record in self._records
-            if record.effective_on(as_of_date)
-            and record.asset_type == AssetType.COMMON_STOCK
-            and record.market in {Market.LISTED, Market.OTC}
-            and (include_non_active or record.trading_status == TradingStatus.ACTIVE)
-        ]
-        # Preserve delisted/suspended records in historical snapshots; quality gates,
-        # not survivorship-filtered universe construction, decide recommendation use.
-        candidates.sort(key=lambda record: (record.market.value, record.symbol))
+        require_aware(decision_at, "decision_at")
+        _ = require_production_horizon(horizon)
+        candidates: list[SecurityRecord] = []
+        for listing_period_id in dict.fromkeys(
+            record.listing_period_id for record in self._records
+        ):
+            record = self.record_for_listing_period(
+                listing_period_id,
+                as_of_date,
+                decision_at=decision_at,
+            )
+            if record is None or record.asset_type != AssetType.COMMON_STOCK:
+                continue
+            if record.market not in {Market.LISTED, Market.OTC}:
+                continue
+            if not include_non_active and record.trading_status != TradingStatus.ACTIVE:
+                continue
+            candidates.append(record)
+
+        candidates.sort(
+            key=lambda record: (
+                record.market.value,
+                record.symbol,
+                record.listing_period_id,
+            )
+        )
         versions: dict[Market, tuple[str, str]] = {}
         for market in {record.market for record in candidates}:
             assignment = self.benchmark_for(
@@ -182,22 +184,13 @@ class SecurityMaster:
             benchmark_version_by_market=versions,
         )
 
-    def _validate_non_overlapping_records(self) -> None:
-        by_symbol: dict[str, list[SecurityRecord]] = {}
-        for record in self._records:
-            by_symbol.setdefault(record.symbol, []).append(record)
-        for symbol, records in by_symbol.items():
-            ordered = sorted(records, key=lambda record: record.valid_from)
-            for previous, current in zip(ordered, ordered[1:]):
-                if previous.valid_to is None or previous.valid_to > current.valid_from:
-                    raise ValueError(f"overlapping security-master ranges for {symbol}")
 
-    def _validate_non_overlapping_benchmarks(self) -> None:
-        by_market: dict[Market, list[BenchmarkAssignment]] = {}
-        for assignment in self._benchmarks:
-            by_market.setdefault(assignment.market, []).append(assignment)
-        for market, assignments in by_market.items():
-            ordered = sorted(assignments, key=lambda assignment: assignment.valid_from)
-            for previous, current in zip(ordered, ordered[1:]):
-                if previous.valid_to is None or previous.valid_to > current.valid_from:
-                    raise ValueError(f"overlapping benchmark ranges for {market.value}")
+__all__ = [
+    "AssetType",
+    "BenchmarkAssignment",
+    "Market",
+    "SecurityMaster",
+    "SecurityRecord",
+    "TradingStatus",
+    "UniverseSnapshot",
+]

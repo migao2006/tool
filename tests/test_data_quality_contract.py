@@ -17,12 +17,23 @@ TAIPEI = ZoneInfo("Asia/Taipei")
 
 def _security(**overrides: object) -> SecurityRecord:
     values = {
+        "security_id": 2330,
+        "listing_period_id": "TWSE:2330:1994-09-05",
         "symbol": "2330",
         "name": "台積電",
         "market": Market.LISTED,
         "industry": "半導體",
         "asset_type": AssetType.COMMON_STOCK,
         "valid_from": date(1994, 9, 5),
+        "available_at": datetime(1994, 9, 5, tzinfo=TAIPEI),
+        "first_observed_at": datetime(1994, 9, 5, tzinfo=TAIPEI),
+        "available_at_basis": "VERSIONED_SNAPSHOT",
+        "point_in_time_status": "VERIFIED",
+        "usage_scope": "POINT_IN_TIME_IDENTITY",
+        "reason_codes": (),
+        "source_id": 1,
+        "source_version": "snapshot-v1",
+        "source_revision_hash": "a" * 64,
         "trading_status": TradingStatus.ACTIVE,
         "attention_flag": False,
         "disposition_flag": False,
@@ -32,6 +43,8 @@ def _security(**overrides: object) -> SecurityRecord:
         "suspended_flag": False,
     }
     values.update(overrides)
+    if "available_at" in overrides and "first_observed_at" not in overrides:
+        values["first_observed_at"] = values["available_at"]
     return SecurityRecord(**values)
 
 
@@ -90,7 +103,9 @@ def test_suspended_or_capacity_exceeded_cannot_be_recommended() -> None:
             adv20_ntd=Decimal("10000000"),
             estimated_order_notional_ntd=Decimal("500000"),
         ),
-        DataQualityConfig(minimum_adv20_ntd=Decimal("1000000"), max_adv_participation=Decimal("0.01")),
+        DataQualityConfig(
+            minimum_adv20_ntd=Decimal("1000000"), max_adv_participation=Decimal("0.01")
+        ),
     )
 
     assert result.hard_fail is True

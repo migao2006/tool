@@ -71,11 +71,23 @@ jobs:
           uv run python -m scripts.audit_historical_r2_archive
           --output historical-r2-audit.json
 
+      - name: Report point-in-time dataset readiness
+        if: always()
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: >-
+          uv run python -m scripts.audit_historical_dataset_readiness
+          --archive-audit historical-r2-audit.json
+          --output historical-dataset-readiness.json
+
       - name: Preserve integrity report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: historical-r2-audit-${{ github.run_id }}
-          path: historical-r2-audit.json
+          path: |
+            historical-r2-audit.json
+            historical-dataset-readiness.json
           if-no-files-found: error
           retention-days: 90

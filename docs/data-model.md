@@ -50,6 +50,15 @@ available_at <= decision_at
 - R2 object 驗證完成後才可寫入 manifest；任一 size、SHA-256 或 metadata 驗證失敗時必須 fail closed 並讓任務重試。
 - `UNVERIFIED / RAW_LANDING_ONLY / RESEARCH_ONLY` 只代表已保存原始資料，不代表可訓練、可回測或已消除生存者偏誤。
 
+## 三之二、歷史資料升級與就緒閘門
+
+- R2 原始列不得直接進入特徵、標籤、訓練或回測；必須先通過 manifest／Parquet 完整性、歷史掛牌身分、交易日曆、公司行動涵蓋與 `available_at` 稽核。
+- 歷史關聯使用 `security_id + listing_period_id`；`scheduled_market` 只是排程提示，不能單獨證明股票所屬市場或身分。
+- `security_listing_periods` 與 `trading_calendar_observations` 是 append-only 證據；後續矛盾只能追加 `CONFLICT`，不得覆寫或回填既有證據。
+- Canonical 日線必須保留 R2 object、archive SHA-256、來源 revision／payload hash、原始 `first_observed_at`／`available_at`、身分 revision 與 publication rule version。
+- 原始資料的取得時間不得回改成歷史日期。若資料在決策時間後才首次取得，該列只能維持 `RESEARCH_ONLY`。
+- 每日就緒度稽核只回答資料是否可交給 dataset builder；即使資料閘門全部通過，模型仍須完成 walk-forward、locked holdout 與成本後驗收，才可能標記為 `PASS`。
+
 ## 四、決策順序
 
 1. Data quality
@@ -110,3 +119,20 @@ available_at <= decision_at
 - 停牌及公司行動
 - 容量限制
 - Staggered cohorts
+
+## 歷史資料正式升級閘門
+
+- R2 Parquet 仍是不可變的原始封存層；完整性通過不等於可供模型訓練。
+- 掛牌身分必須使用穩定的 `listing_period_id`，每筆來源證據另以
+  `listing_evidence_id` 追蹤。VERIFIED 證據必須同時核對市場、資產類型、
+  股票代號及 ISIN。
+- `OFFICIAL_PUBLICATION_AT` 可使用實際發布時間；`VERSIONED_SNAPSHOT` 只能
+  從 `first_observed_at` 起使用；`FIRST_OBSERVED_AT_RETRIEVAL` 一律維持研究用途。
+- 特徵、security master、交易日曆與公司行動證據均須保存
+  `available_at`、`first_observed_at`、可用時間依據、修訂 hash 與使用範圍。
+- Archive integrity 與 dataset readiness 必須使用完全相同的 manifest
+  snapshot hash；LIMITED_SAMPLE 或稽核後發生變動時一律 FAIL。
+- 就緒判斷必須驗證 archive symbol、掛牌身分、交易日曆、交易狀態、公司行動
+  與 canonical row 的實際交集，不得只比較彼此無關的總筆數。
+- 在交集覆蓋 persistence 尚未完成前，就緒狀態固定為 BLOCKED，系統最多只能
+  顯示 `RESEARCH_ONLY`。

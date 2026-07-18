@@ -33,7 +33,9 @@ class TransportResponse:
 
 
 class HttpTransport(Protocol):
-    def get(self, url: str, *, headers: Mapping[str, str], timeout: float) -> TransportResponse: ...
+    def get(
+        self, url: str, *, headers: Mapping[str, str], timeout: float
+    ) -> TransportResponse: ...
 
 
 class UrlLibTransport:
@@ -42,7 +44,9 @@ class UrlLibTransport:
     def __init__(self) -> None:
         self.ssl_context = truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
 
-    def get(self, url: str, *, headers: Mapping[str, str], timeout: float) -> TransportResponse:
+    def get(
+        self, url: str, *, headers: Mapping[str, str], timeout: float
+    ) -> TransportResponse:
         request = Request(url, headers=dict(headers), method="GET")
         try:
             with urlopen(  # noqa: S310 - fixed HTTPS providers
@@ -85,7 +89,9 @@ def redact_url(url: str, sensitive_query_keys: tuple[str, ...] = ()) -> str:
             for key, value in parse_qsl(parts.query, keep_blank_values=True)
         ]
     )
-    return urlunsplit((parts.scheme, parts.netloc, parts.path, safe_query, parts.fragment))
+    return urlunsplit(
+        (parts.scheme, parts.netloc, parts.path, safe_query, parts.fragment)
+    )
 
 
 class JsonHttpClient:
@@ -108,15 +114,56 @@ class JsonHttpClient:
         self.max_attempts = max_attempts
         self.retry_backoff_seconds = retry_backoff_seconds
 
-    def _get_with_retries(
+    def _sleep_before_retry(self, attempt: int) -> None:
+        delay = self.retry_backoff_seconds * (2 ** (attempt - 1))
+        if delay:
+            sleep(delay)
+
+    @staticmethod
+    def _response_content_type(response: TransportResponse) -> str:
+        return next(
+            (
+                value.casefold()
+                for key, value in response.headers.items()
+                if key.casefold() == "content-type"
+            ),
+            "",
+        )
+
+    @classmethod
+    def _retryable_invalid_json(cls, response: TransportResponse) -> bool:
+        """Retry interrupted JSON responses, but not an HTML error page returned as 200."""
+        content_type = cls._response_content_type(response)
+        body_start = response.body.lstrip()[:32].lower()
+        is_html = (
+            "html" in content_type
+            or body_start.startswith(b"<!doctype html")
+            or body_start.startswith(b"<html")
+        )
+        return not is_html and "json" in content_type
+
+    @staticmethod
+    def _decode_json(response: TransportResponse, safe_url: str) -> Any:
+        try:
+            return json.loads(response.body.decode("utf-8-sig"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise ProviderPayloadError(
+                "PROVIDER_INVALID_JSON",
+                f"provider returned invalid JSON: {safe_url}",
+            ) from error
+
+    def _get_json_with_retries(
         self,
         url: str,
         *,
         headers: Mapping[str, str],
-    ) -> TransportResponse:
+        safe_url: str,
+    ) -> tuple[TransportResponse, Any]:
         for attempt in range(1, self.max_attempts + 1):
             try:
-                response = self.transport.get(url, headers=headers, timeout=self.timeout)
+                response = self.transport.get(
+                    url, headers=headers, timeout=self.timeout
+                )
             except ProviderConnectionError:
                 if attempt == self.max_attempts:
                     raise
@@ -125,11 +172,21 @@ class JsonHttpClient:
                     response.status_code in TRANSIENT_HTTP_STATUSES
                     or 500 <= response.status_code < 600
                 )
-                if not is_transient or attempt == self.max_attempts:
-                    return response
-            delay = self.retry_backoff_seconds * (2 ** (attempt - 1))
-            if delay:
-                sleep(delay)
+                if is_transient:
+                    if attempt == self.max_attempts:
+                        raise ProviderHttpError(response.status_code, safe_url)
+                elif not 200 <= response.status_code < 300:
+                    raise ProviderHttpError(response.status_code, safe_url)
+                else:
+                    try:
+                        return response, self._decode_json(response, safe_url)
+                    except ProviderPayloadError:
+                        if (
+                            attempt == self.max_attempts
+                            or not self._retryable_invalid_json(response)
+                        ):
+                            raise
+            self._sleep_before_retry(attempt)
         raise AssertionError("retry loop exhausted without returning or raising")
 
     def get_json(
@@ -150,20 +207,15 @@ class JsonHttpClient:
         if filtered_params:
             url = f"{url}?{urlencode(filtered_params, doseq=True)}"
         safe_url = redact_url(url, sensitive_query_keys)
-        response = self._get_with_retries(
+        response, payload = self._get_json_with_retries(
             url,
-            headers={"Accept": "application/json", "User-Agent": "AlphaLens/0.1", **(headers or {})},
+            headers={
+                "Accept": "application/json",
+                "User-Agent": "AlphaLens/0.1",
+                **(headers or {}),
+            },
+            safe_url=safe_url,
         )
-        if not 200 <= response.status_code < 300:
-            raise ProviderHttpError(response.status_code, safe_url)
-        try:
-            text = response.body.decode("utf-8-sig")
-            payload = json.loads(text)
-        except (UnicodeDecodeError, json.JSONDecodeError) as error:
-            raise ProviderPayloadError(
-                "PROVIDER_INVALID_JSON",
-                f"provider returned invalid JSON: {safe_url}",
-            ) from error
         return JsonHttpResponse(
             safe_url=safe_url,
             status_code=response.status_code,

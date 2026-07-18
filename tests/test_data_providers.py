@@ -70,6 +70,17 @@ class StatusSequenceTransport:
         return TransportResponse(status, {"Content-Type": "application/json"}, b'{"ok": true}')
 
 
+class ResponseSequenceTransport:
+    def __init__(self, responses: list[TransportResponse]) -> None:
+        self.responses = responses
+        self.calls = 0
+
+    def get(self, url: str, *, headers, timeout: float) -> TransportResponse:
+        response = self.responses[self.calls]
+        self.calls += 1
+        return response
+
+
 class FakeUrlOpenResponse:
     status = 200
     headers = {"Content-Type": "application/json"}
@@ -131,6 +142,74 @@ def test_http_client_retries_transient_gateway_status() -> None:
     ).get_json(base_url="https://example.com")
 
     assert response.payload == {"ok": True}
+    assert transport.calls == 2
+
+
+def test_http_client_retries_transient_invalid_json_response() -> None:
+    transport = ResponseSequenceTransport(
+        [
+            TransportResponse(
+                200, {"Content-Type": "application/json"}, b'{"partial":'
+            ),
+            TransportResponse(
+                200, {"Content-Type": "application/json"}, b'{"ok": true}'
+            ),
+        ]
+    )
+
+    response = JsonHttpClient(
+        transport=transport,
+        timeout=7,
+        max_attempts=2,
+        retry_backoff_seconds=0,
+    ).get_json(base_url="https://example.com")
+
+    assert response.payload == {"ok": True}
+    assert transport.calls == 2
+
+
+def test_http_client_does_not_retry_html_error_page_with_ok_status() -> None:
+    transport = ResponseSequenceTransport(
+        [
+            TransportResponse(
+                200, {"Content-Type": "text/html"}, b"<html>temporary proxy page</html>"
+            ),
+            TransportResponse(
+                200, {"Content-Type": "application/json"}, b'{"ok": true}'
+            ),
+        ]
+    )
+    client = JsonHttpClient(
+        transport=transport,
+        timeout=7,
+        max_attempts=2,
+        retry_backoff_seconds=0,
+    )
+
+    with pytest.raises(ProviderPayloadError) as error:
+        client.get_json(base_url="https://example.com")
+
+    assert error.value.reason_code == "PROVIDER_INVALID_JSON"
+    assert transport.calls == 1
+
+
+def test_http_client_invalid_json_retry_does_not_exceed_max_attempts() -> None:
+    transport = ResponseSequenceTransport(
+        [
+            TransportResponse(200, {"Content-Type": "application/json"}, b"{")
+            for _ in range(3)
+        ]
+    )
+    client = JsonHttpClient(
+        transport=transport,
+        timeout=7,
+        max_attempts=2,
+        retry_backoff_seconds=0,
+    )
+
+    with pytest.raises(ProviderPayloadError):
+        client.get_json(base_url="https://example.com")
+
     assert transport.calls == 2
 
 

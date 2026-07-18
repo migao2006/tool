@@ -131,6 +131,27 @@ def test_supabase_opaque_secret_key_is_not_sent_as_bearer_jwt() -> None:
 
 
 @pytest.mark.parametrize(
+    "pasted_secret",
+    [
+        "SUPABASE_SERVICE_ROLE_KEY=sb_secret_test-value",
+        '"SUPABASE_SECRET_KEY=sb_secret_test-value"',
+        "  sb_secret_test-value  ",
+    ],
+)
+def test_supabase_normalizes_common_secret_paste_forms(pasted_secret: str) -> None:
+    transport = FakeTransport([])
+    SupabaseDataClient(
+        url="https://example.supabase.co",
+        service_role_key=pasted_secret,
+        http=http_for(transport),
+    ).healthcheck()
+
+    headers = transport.calls[0]["headers"]
+    assert headers["apikey"] == "sb_secret_test-value"
+    assert "Authorization" not in headers
+
+
+@pytest.mark.parametrize(
     ("client", "dataset", "expected_path"),
     [
         (TwseClient, "daily_bars", "/exchangeReport/STOCK_DAY_ALL"),

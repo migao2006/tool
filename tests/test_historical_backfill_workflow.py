@@ -19,6 +19,9 @@ def test_backfill_workflow_is_resumable_scheduled_and_capacity_bounded() -> None
     assert "HISTORICAL_BACKFILL_STORAGE_TARGET: R2" in worker
     assert 'HISTORICAL_BACKFILL_MAX_ARCHIVE_OBJECTS_PER_RUN: "100"' in worker
     assert 'HISTORICAL_BACKFILL_MAX_ARCHIVE_OBJECT_BYTES: "50000000"' in worker
+    assert (
+        "HISTORICAL_BACKFILL_SEED_COMMON_TASKS: ${{ inputs.seed_common_tasks }}"
+    ) in worker
     assert 'HISTORICAL_BACKFILL_REFRESH_HOME_STATUS: "false"' in worker
     assert '--max-tasks "$MAX_TASKS"' in worker
     assert "FINMIND_TOKEN: ${{ secrets.finmind_token }}" in worker
@@ -54,6 +57,10 @@ def test_backfill_workflow_isolates_three_finmind_credentials() -> None:
     assert "fail-fast" not in workflow
     for slot in ("primary", "secondary", "tertiary"):
         assert f"credential_slot: {slot}" in workflow
+    assert workflow.count("seed_common_tasks: true") == 1
+    assert workflow.count("seed_common_tasks: false") == 2
+    assert "seed_common_tasks:" in worker
+    assert "type: boolean" in worker
     assert (
         "historical-backfill-${{ inputs.credential_slot }}-${{ github.run_id }}"
         in worker

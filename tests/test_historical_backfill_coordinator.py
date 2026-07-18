@@ -174,6 +174,27 @@ def test_worker_can_defer_home_status_refresh_to_single_finalizer() -> None:
     assert landing.refresh_calls == 0
 
 
+def test_secondary_worker_can_skip_shared_common_task_seeding() -> None:
+    repository = FakeRepository([task(1, "2330", "TWSE", "COMMON_STOCK")])
+    settings = HistoricalBackfillSettings(seed_common_tasks=False)
+
+    summary = make_coordinator(
+        FakeProvider(),
+        repository,
+        FakeLandingService(),
+        settings=settings,
+    ).run(
+        start_date=date(2021, 7, 19),
+        end_date=date(2026, 7, 17),
+        max_tasks=1,
+        worker_id="secondary",
+    )
+
+    assert summary.succeeded_tasks == 1
+    assert repository.ensure_calls == 1
+    assert repository.seed_common_calls == 0
+
+
 def test_pacing_uses_logical_request_start_with_four_second_landing_latency() -> None:
     clock = Clock()
     repository = FakeRepository(

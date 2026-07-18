@@ -14,6 +14,7 @@ def test_settings_default_to_supabase_storage_without_r2_environment() -> None:
     assert settings.storage_target == "SUPABASE"
     assert settings.max_archive_objects_per_run == 100
     assert settings.max_archive_object_bytes == 50_000_000
+    assert settings.seed_common_tasks is True
     assert settings.refresh_home_status is True
 
 
@@ -33,6 +34,7 @@ def test_env_example_lists_runtime_names_without_values() -> None:
         "HISTORICAL_BACKFILL_STORAGE_TARGET",
         "HISTORICAL_BACKFILL_MAX_ARCHIVE_OBJECTS_PER_RUN",
         "HISTORICAL_BACKFILL_MAX_ARCHIVE_OBJECT_BYTES",
+        "HISTORICAL_BACKFILL_SEED_COMMON_TASKS",
         "HISTORICAL_BACKFILL_REFRESH_HOME_STATUS",
     } <= declarations.keys()
     assert set(declarations.values()) == {""}
@@ -58,6 +60,25 @@ def test_settings_can_disable_worker_home_status_refresh() -> None:
     )
 
     assert settings.refresh_home_status is False
+
+
+def test_settings_can_disable_shared_common_task_seeding() -> None:
+    settings = HistoricalBackfillSettings.from_env(
+        {"HISTORICAL_BACKFILL_SEED_COMMON_TASKS": " false "}
+    )
+
+    assert settings.seed_common_tasks is False
+
+
+@pytest.mark.parametrize("value", ["enabled", "2", "sometimes"])
+def test_settings_reject_invalid_common_task_seed_flag(value: str) -> None:
+    with pytest.raises(
+        ValueError,
+        match="HISTORICAL_BACKFILL_SEED_COMMON_TASKS must be true or false",
+    ):
+        _ = HistoricalBackfillSettings.from_env(
+            {"HISTORICAL_BACKFILL_SEED_COMMON_TASKS": value}
+        )
 
 
 @pytest.mark.parametrize("value", ["enabled", "2", "sometimes"])

@@ -19,6 +19,10 @@ class ProviderConnectionError(ProviderError):
     """The remote provider could not be reached."""
 
 
+class ProviderCredentialError(ProviderError):
+    """A configured provider credential was rejected by the remote service."""
+
+
 class ProviderHttpError(ProviderError):
     """The provider returned a non-success HTTP status."""
 

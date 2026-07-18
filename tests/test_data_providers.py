@@ -11,6 +11,7 @@ from src.data.providers.alpha_vantage import AlphaVantageClient
 from src.data.providers.cbc import CbcClient
 from src.data.providers.errors import (
     ProviderConfigurationError,
+    ProviderCredentialError,
     ProviderHttpError,
     ProviderPayloadError,
 )
@@ -149,6 +150,33 @@ def test_supabase_normalizes_common_secret_paste_forms(pasted_secret: str) -> No
     headers = transport.calls[0]["headers"]
     assert headers["apikey"] == "sb_secret_test-value"
     assert "Authorization" not in headers
+
+
+@pytest.mark.parametrize(
+    ("rejected_key", "expected_reason"),
+    [
+        ("sb_secret_test-value", "SUPABASE_SECRET_KEY_REJECTED"),
+        ("sb_publishable_test-value", "SUPABASE_SERVER_KEY_REQUIRED"),
+        ("header.payload.signature", "SUPABASE_LEGACY_SERVICE_ROLE_KEY_REJECTED"),
+        ("not-a-server-key", "SUPABASE_SERVER_KEY_FORMAT_INVALID"),
+    ],
+)
+def test_supabase_401_reports_safe_key_category(
+    rejected_key: str,
+    expected_reason: str,
+) -> None:
+    transport = FakeTransport({"message": "unauthorized"}, status_code=401)
+    client = SupabaseDataClient(
+        url="https://example.supabase.co",
+        service_role_key=rejected_key,
+        http=http_for(transport),
+    )
+
+    with pytest.raises(ProviderCredentialError) as captured:
+        client.healthcheck()
+
+    assert captured.value.reason_code == expected_reason
+    assert rejected_key not in str(captured.value)
 
 
 @pytest.mark.parametrize(

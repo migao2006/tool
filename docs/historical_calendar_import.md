@@ -1,0 +1,34 @@
+# 歷史交易日曆匯入
+
+這個模組只匯入來源實際回傳的交易日，不推算週末、休市日、開收盤時間或資料截止時間。
+
+## 目前契約
+
+- 來源：FinMind `TaiwanStockTradingDate`
+- 已驗證市場：TWSE
+- TPEx：尚未驗證獨立來源契約，因此不匯入、不複製 TWSE 日期
+- `available_at`：使用實際抓取時間，不回填成歷史日期
+- 系統狀態：維持 `RESEARCH_ONLY`
+- 防重：以 `market,trading_date` 冪等寫入，保留第一次寫入的時間
+
+FinMind 只提供交易日期，因此 `opens_at`、`closes_at` 與
+`decision_data_cutoff_at` 會保持空值。這些欄位未來只能由可稽核的交易所來源補齊。
+目前資料表沒有逐列 `source_version`／payload hash，因此完整版本鏈仍待後續 migration；
+匯入摘要會先保留來源 URI、版本與 SHA-256，系統不會因此升級為正式預測。
+
+## 本機驗證
+
+本機需要 `FINMIND_TOKEN`。只有正式寫入時才需要 Supabase 的伺服器端金鑰。
+
+```powershell
+.venv\Scripts\python.exe -m scripts.import_trading_calendar `
+  --start-date 2018-01-01 `
+  --dry-run
+```
+
+## GitHub Actions
+
+工作流程 `Import historical trading calendar` 預設為 dry-run。確認輸出的日期範圍、
+筆數、來源網址、payload SHA-256 與 reason codes 後，才可將 dry-run 改為 false。
+
+每次執行會保存 90 天的 audit summary。摘要不包含 API 金鑰，也不代表模型已通過驗收。

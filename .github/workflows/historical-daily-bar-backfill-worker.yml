@@ -11,14 +11,6 @@ on:
         description: Maximum FinMind symbols processed by this credential
         required: true
         type: number
-      r2_account_id:
-        description: Cloudflare account identifier for the historical archive
-        required: true
-        type: string
-      r2_bucket_name:
-        description: R2 bucket that stores historical archive objects
-        required: true
-        type: string
     secrets:
       finmind_token:
         required: true
@@ -57,10 +49,10 @@ jobs:
       - name: Require backfill credentials
         env:
           FINMIND_TOKEN: ${{ secrets.finmind_token }}
-          R2_ACCOUNT_ID: ${{ inputs.r2_account_id }}
+          R2_ACCOUNT_ID: ${{ vars.R2_ACCOUNT_ID }}
           R2_ACCESS_KEY_ID: ${{ secrets.r2_access_key_id }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.r2_secret_access_key }}
-          R2_BUCKET_NAME: ${{ inputs.r2_bucket_name }}
+          R2_BUCKET_NAME: ${{ vars.R2_BUCKET_NAME }}
           SUPABASE_URL: ${{ secrets.supabase_url }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.supabase_service_role_key }}
         shell: bash
@@ -85,10 +77,10 @@ jobs:
       - name: Run quota-aware resumable backfill
         env:
           FINMIND_TOKEN: ${{ secrets.finmind_token }}
-          R2_ACCOUNT_ID: ${{ inputs.r2_account_id }}
+          R2_ACCOUNT_ID: ${{ vars.R2_ACCOUNT_ID }}
           R2_ACCESS_KEY_ID: ${{ secrets.r2_access_key_id }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.r2_secret_access_key }}
-          R2_BUCKET_NAME: ${{ inputs.r2_bucket_name }}
+          R2_BUCKET_NAME: ${{ vars.R2_BUCKET_NAME }}
           SUPABASE_URL: ${{ secrets.supabase_url }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.supabase_service_role_key }}
           API_HTTP_TIMEOUT_SECONDS: "30"

@@ -31,9 +31,14 @@ def test_backfill_workflow_isolates_three_finmind_credentials() -> None:
     worker = WORKER.read_text(encoding="utf-8")
 
     assert "default: 20" in workflow
-    assert workflow.count("max_tasks: ${{ inputs.max_tasks || 20 }}") == 3
-    assert workflow.count("r2_account_id: ${{ vars.R2_ACCOUNT_ID }}") == 3
-    assert workflow.count("r2_bucket_name: ${{ vars.R2_BUCKET_NAME }}") == 3
+    assert (
+        workflow.count(
+            "max_tasks: ${{ fromJSON(github.event.inputs.max_tasks || '20') }}"
+        )
+        == 3
+    )
+    assert "r2_account_id:" not in workflow
+    assert "r2_bucket_name:" not in workflow
     assert workflow.count("r2_access_key_id: ${{ secrets.R2_ACCESS_KEY_ID }}") == 3
     assert (
         workflow.count("r2_secret_access_key: ${{ secrets.R2_SECRET_ACCESS_KEY }}") == 3
@@ -60,8 +65,8 @@ def test_backfill_worker_requires_complete_r2_configuration() -> None:
         1
     ].split("- name: Run quota-aware resumable backfill", maxsplit=1)[0]
 
-    assert "r2_account_id:" in worker
-    assert "r2_bucket_name:" in worker
+    assert "r2_account_id:" not in worker
+    assert "r2_bucket_name:" not in worker
     assert "r2_access_key_id:" in worker
     assert "r2_secret_access_key:" in worker
     for name in (
@@ -73,10 +78,11 @@ def test_backfill_worker_requires_complete_r2_configuration() -> None:
         "SUPABASE_URL",
         "SUPABASE_SERVICE_ROLE_KEY",
     ):
-        assert credential_check.count(name) == 2
+        assert f"          {name}:" in credential_check
+        assert f"            {name}\n" in credential_check
 
-    assert "R2_ACCOUNT_ID: ${{ inputs.r2_account_id }}" in worker
-    assert "R2_BUCKET_NAME: ${{ inputs.r2_bucket_name }}" in worker
+    assert "R2_ACCOUNT_ID: ${{ vars.R2_ACCOUNT_ID }}" in worker
+    assert "R2_BUCKET_NAME: ${{ vars.R2_BUCKET_NAME }}" in worker
     assert "R2_ACCESS_KEY_ID: ${{ secrets.r2_access_key_id }}" in worker
     assert "R2_SECRET_ACCESS_KEY: ${{ secrets.r2_secret_access_key }}" in worker
 

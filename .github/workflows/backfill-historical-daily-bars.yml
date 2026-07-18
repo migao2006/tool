@@ -25,9 +25,7 @@ jobs:
     uses: ./.github/workflows/historical-daily-bar-backfill-worker.yml
     with:
       credential_slot: primary
-      max_tasks: ${{ inputs.max_tasks || 20 }}
-      r2_account_id: ${{ vars.R2_ACCOUNT_ID }}
-      r2_bucket_name: ${{ vars.R2_BUCKET_NAME }}
+      max_tasks: ${{ fromJSON(github.event.inputs.max_tasks || '20') }}
     secrets:
       finmind_token: ${{ secrets.FINMIND_TOKEN }}
       r2_access_key_id: ${{ secrets.R2_ACCESS_KEY_ID }}
@@ -39,9 +37,7 @@ jobs:
     uses: ./.github/workflows/historical-daily-bar-backfill-worker.yml
     with:
       credential_slot: secondary
-      max_tasks: ${{ inputs.max_tasks || 20 }}
-      r2_account_id: ${{ vars.R2_ACCOUNT_ID }}
-      r2_bucket_name: ${{ vars.R2_BUCKET_NAME }}
+      max_tasks: ${{ fromJSON(github.event.inputs.max_tasks || '20') }}
     secrets:
       finmind_token: ${{ secrets.FINMIND_TOKEN_SECONDARY }}
       r2_access_key_id: ${{ secrets.R2_ACCESS_KEY_ID }}
@@ -53,9 +49,7 @@ jobs:
     uses: ./.github/workflows/historical-daily-bar-backfill-worker.yml
     with:
       credential_slot: tertiary
-      max_tasks: ${{ inputs.max_tasks || 20 }}
-      r2_account_id: ${{ vars.R2_ACCOUNT_ID }}
-      r2_bucket_name: ${{ vars.R2_BUCKET_NAME }}
+      max_tasks: ${{ fromJSON(github.event.inputs.max_tasks || '20') }}
     secrets:
       finmind_token: ${{ secrets.FINMIND_TOKEN_TERTIARY }}
       r2_access_key_id: ${{ secrets.R2_ACCESS_KEY_ID }}

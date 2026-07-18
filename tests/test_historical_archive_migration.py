@@ -9,6 +9,12 @@ MIGRATION = (
     / "migrations"
     / "20260719023000_historical_r2_archive_manifest.sql"
 )
+COUNT_FIX_MIGRATION = (
+    ROOT
+    / "supabase"
+    / "migrations"
+    / "20260719033000_fix_historical_archive_home_counts.sql"
+)
 
 
 def _sql(path: Path) -> str:
@@ -40,8 +46,27 @@ def test_archive_migration_keeps_home_counts_without_double_counting() -> None:
     assert "sum(row_count)" in sql
     assert "sum(parsed_row_count)" in sql
     assert "sum(quarantined_row_count)" in sql
+    assert "with latest_archive_slice as" in sql
+    assert "select distinct on" in sql
+    assert "requested_end_date" in sql
+    assert "created_at desc" in sql
+    assert "archive_id desc" in sql
     assert "where not exists" in sql
     assert "archive.source_payload_hash = landing.source_payload_hash" in sql
     assert "historical_point_in_time_unverified" in sql
     assert "revoke all on function market_data.refresh_home_data_status()" in sql
     assert "grant execute on function market_data.refresh_home_data_status()" in sql
+
+
+def test_count_fix_replaces_wrapper_with_latest_logical_slice_counting() -> None:
+    sql = _sql(COUNT_FIX_MIGRATION)
+
+    assert "create or replace function market_data.refresh_home_data_status()" in sql
+    assert "with latest_archive_slice as" in sql
+    assert "select distinct on" in sql
+    assert "source_symbol" in sql
+    assert "requested_start_date" in sql
+    assert "requested_end_date" in sql
+    assert "created_at desc" in sql
+    assert "archive_id desc" in sql
+    assert "select market_data.refresh_home_data_status()" in sql

@@ -138,6 +138,32 @@ declare
 begin
   perform market_data.refresh_home_data_status_without_archive();
 
+  with latest_archive_slice as (
+    select distinct on (
+      provider_code,
+      source_dataset,
+      scheduled_market,
+      asset_type,
+      source_symbol,
+      requested_start_date,
+      requested_end_date
+    )
+      row_count,
+      parsed_row_count,
+      quarantined_row_count,
+      first_observed_at
+    from market_data.historical_archive_objects
+    order by
+      provider_code,
+      source_dataset,
+      scheduled_market,
+      asset_type,
+      source_symbol,
+      requested_start_date,
+      requested_end_date,
+      created_at desc,
+      archive_id desc
+  )
   select
     coalesce(sum(row_count), 0),
     coalesce(sum(parsed_row_count), 0),
@@ -148,7 +174,7 @@ begin
     archived_parsed,
     archived_quarantined,
     latest_archive_available_at
-  from market_data.historical_archive_objects;
+  from latest_archive_slice;
 
   select
     count(*),

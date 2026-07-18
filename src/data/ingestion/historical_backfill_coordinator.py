@@ -221,7 +221,11 @@ class HistoricalBackfillCoordinator:
                     error, (ProviderConfigurationError, ProviderCredentialError)
                 ):
                     raise
-            if attempted % 10 == 0:
+            # R2 capacity is bounded by object count, not Postgres relation size.
+            # Avoid synchronized, storage-heavy snapshot RPCs from all credential
+            # workers; they can exceed the database statement timeout even after
+            # every claimed task has already completed successfully.
+            if attempted % 10 == 0 and self.settings.storage_target != "R2":
                 checkpoint = self.repository.snapshot(
                     start_date=start_date, end_date=end_date
                 )

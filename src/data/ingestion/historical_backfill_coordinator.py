@@ -233,7 +233,7 @@ class HistoricalBackfillCoordinator:
                     stopped_for_capacity = True
                     break
 
-        if succeeded:
+        if succeeded and self.settings.refresh_home_status:
             self.landing_service.refresh_home_status()
         after = self.repository.snapshot(start_date=start_date, end_date=end_date)
         remaining = (

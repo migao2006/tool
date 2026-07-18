@@ -14,6 +14,7 @@ def test_settings_default_to_supabase_storage_without_r2_environment() -> None:
     assert settings.storage_target == "SUPABASE"
     assert settings.max_archive_objects_per_run == 100
     assert settings.max_archive_object_bytes == 50_000_000
+    assert settings.refresh_home_status is True
 
 
 def test_env_example_lists_runtime_names_without_values() -> None:
@@ -32,6 +33,7 @@ def test_env_example_lists_runtime_names_without_values() -> None:
         "HISTORICAL_BACKFILL_STORAGE_TARGET",
         "HISTORICAL_BACKFILL_MAX_ARCHIVE_OBJECTS_PER_RUN",
         "HISTORICAL_BACKFILL_MAX_ARCHIVE_OBJECT_BYTES",
+        "HISTORICAL_BACKFILL_REFRESH_HOME_STATUS",
     } <= declarations.keys()
     assert set(declarations.values()) == {""}
 
@@ -48,6 +50,25 @@ def test_settings_parse_and_normalize_r2_archive_limits() -> None:
     assert settings.storage_target == "R2"
     assert settings.max_archive_objects_per_run == 24
     assert settings.max_archive_object_bytes == 12_500_000
+
+
+def test_settings_can_disable_worker_home_status_refresh() -> None:
+    settings = HistoricalBackfillSettings.from_env(
+        {"HISTORICAL_BACKFILL_REFRESH_HOME_STATUS": " false "}
+    )
+
+    assert settings.refresh_home_status is False
+
+
+@pytest.mark.parametrize("value", ["enabled", "2", "sometimes"])
+def test_settings_reject_invalid_home_status_refresh_flag(value: str) -> None:
+    with pytest.raises(
+        ValueError,
+        match="HISTORICAL_BACKFILL_REFRESH_HOME_STATUS must be true or false",
+    ):
+        _ = HistoricalBackfillSettings.from_env(
+            {"HISTORICAL_BACKFILL_REFRESH_HOME_STATUS": value}
+        )
 
 
 @pytest.mark.parametrize("value", ["", "postgres", "r2-public"])

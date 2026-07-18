@@ -19,6 +19,7 @@ def test_backfill_workflow_is_resumable_scheduled_and_capacity_bounded() -> None
     assert "HISTORICAL_BACKFILL_STORAGE_TARGET: R2" in worker
     assert 'HISTORICAL_BACKFILL_MAX_ARCHIVE_OBJECTS_PER_RUN: "100"' in worker
     assert 'HISTORICAL_BACKFILL_MAX_ARCHIVE_OBJECT_BYTES: "50000000"' in worker
+    assert 'HISTORICAL_BACKFILL_REFRESH_HOME_STATUS: "false"' in worker
     assert '--max-tasks "$MAX_TASKS"' in worker
     assert "FINMIND_TOKEN: ${{ secrets.finmind_token }}" in worker
     assert (
@@ -57,6 +58,26 @@ def test_backfill_workflow_isolates_three_finmind_credentials() -> None:
         "historical-backfill-${{ inputs.credential_slot }}-${{ github.run_id }}"
         in worker
     )
+
+
+def test_backfill_workflow_refreshes_home_status_once_after_parallel_workers() -> None:
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    finalizer = workflow.split("  finalize-home-status:", maxsplit=1)[1]
+
+    assert "needs: [primary, secondary, tertiary]" in finalizer
+    assert finalizer.count("scripts.refresh_home_data_status") == 1
+    assert "if: ${{ !cancelled() }}" in finalizer
+    assert "SUPABASE_URL: ${{ secrets.SUPABASE_URL }}" in finalizer
+    assert (
+        "SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}"
+        in finalizer
+    )
+    for secret_name in (
+        "FINMIND_TOKEN",
+        "R2_ACCESS_KEY_ID",
+        "R2_SECRET_ACCESS_KEY",
+    ):
+        assert secret_name not in finalizer
 
 
 def test_backfill_worker_requires_complete_r2_configuration() -> None:

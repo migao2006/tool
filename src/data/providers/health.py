@@ -6,7 +6,7 @@ from dataclasses import asdict, dataclass
 from datetime import date, timedelta
 from typing import Any, Mapping
 
-from .errors import ProviderConfigurationError, ProviderError
+from .errors import ProviderConfigurationError, ProviderError, ProviderHttpError
 
 
 @dataclass(frozen=True)
@@ -16,6 +16,7 @@ class ProviderProbeResult:
     dataset: str | None = None
     record_count: int | None = None
     reason_code: str | None = None
+    http_status: int | None = None
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -78,6 +79,15 @@ def run_live_probes(
                     provider=provider,
                     status="NOT_CONFIGURED",
                     reason_code=error.reason_code,
+                )
+            )
+        except ProviderHttpError as error:
+            results.append(
+                ProviderProbeResult(
+                    provider=provider,
+                    status="FAIL",
+                    reason_code=error.reason_code,
+                    http_status=error.status_code,
                 )
             )
         except ProviderError as error:

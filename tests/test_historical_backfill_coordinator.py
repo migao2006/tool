@@ -153,6 +153,27 @@ def test_each_symbol_is_completed_independently_and_order_is_preserved() -> None
     assert landing.refresh_calls == 1
 
 
+def test_worker_can_defer_home_status_refresh_to_single_finalizer() -> None:
+    repository = FakeRepository([task(1, "2330", "TWSE", "COMMON_STOCK")])
+    landing = FakeLandingService()
+    settings = HistoricalBackfillSettings(refresh_home_status=False)
+
+    summary = make_coordinator(
+        FakeProvider(),
+        repository,
+        landing,
+        settings=settings,
+    ).run(
+        start_date=date(2021, 7, 19),
+        end_date=date(2026, 7, 17),
+        max_tasks=1,
+        worker_id="test",
+    )
+
+    assert summary.succeeded_tasks == 1
+    assert landing.refresh_calls == 0
+
+
 def test_pacing_uses_logical_request_start_with_four_second_landing_latency() -> None:
     clock = Clock()
     repository = FakeRepository(

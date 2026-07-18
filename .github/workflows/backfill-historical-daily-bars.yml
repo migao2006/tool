@@ -56,3 +56,30 @@ jobs:
       r2_secret_access_key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
       supabase_url: ${{ secrets.SUPABASE_URL }}
       supabase_service_role_key: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
+  finalize-home-status:
+    needs: [primary, secondary, tertiary]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install uv with dependency caching
+        uses: astral-sh/setup-uv@v8.3.2
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Synchronize locked environment
+        run: uv sync --frozen
+
+      - name: Refresh homepage data status once
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: uv run python -m scripts.refresh_home_data_status

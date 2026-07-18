@@ -28,6 +28,18 @@ def _storage_target(environment: Mapping[str, str]) -> str:
     return normalized
 
 
+def _boolean(environment: Mapping[str, str], name: str, default: bool) -> bool:
+    raw = environment.get(name)
+    if raw is None or not raw.strip():
+        return default
+    normalized = raw.strip().casefold()
+    if normalized in {"1", "true", "yes"}:
+        return True
+    if normalized in {"0", "false", "no"}:
+        return False
+    raise ValueError(f"{name} must be true or false")
+
+
 @dataclass(frozen=True)
 class HistoricalBackfillSettings:
     quota_reserve: int = 20
@@ -41,6 +53,7 @@ class HistoricalBackfillSettings:
     storage_target: str = "SUPABASE"
     max_archive_objects_per_run: int = 100
     max_archive_object_bytes: int = 50_000_000
+    refresh_home_status: bool = True
 
     @classmethod
     def from_env(
@@ -84,6 +97,11 @@ class HistoricalBackfillSettings:
                 50_000_000,
                 1_000_000,
                 500_000_000,
+            ),
+            refresh_home_status=_boolean(
+                values,
+                "HISTORICAL_BACKFILL_REFRESH_HOME_STATUS",
+                True,
             ),
         )
 

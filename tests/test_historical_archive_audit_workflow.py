@@ -23,7 +23,7 @@ def test_archive_audit_workflow_is_private_complete_and_auditable() -> None:
         "SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}"
         in workflow
     )
-    assert "actions/upload-artifact@v4" in workflow
+    assert "actions/upload-artifact@v7" in workflow
     assert "historical-r2-audit.json" in workflow
     assert "historical-dataset-readiness.json" in workflow
     assert workflow.count("if: always()") >= 2

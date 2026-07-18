@@ -15,3 +15,4 @@ grant usage, select on all sequences in schema market_data to service_role;
 commit;
 
 notify pgrst, 'reload config';
+notify pgrst, 'reload schema';

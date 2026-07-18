@@ -104,6 +104,47 @@ def test_supabase_sdk_loader_is_shared_bounded_and_fail_closed() -> None:
     assert "isSupabaseSdkLoadError(error)" in prediction
 
 
+def test_home_data_status_is_a_separate_read_only_frontend_contract() -> None:
+    app = read("app.js")
+    overview = read("src/pages/overview-page.js")
+    component = read("src/components/home-data-status.js")
+    contract = read("src/data/home-data-status-contract.js")
+    api = read("src/data/home-data-status-api.js")
+    ui_state = read("src/core/ui-state.js")
+
+    assert "createHomeDataStatusPanel" in overview
+    assert "refreshHomeDataStatus" in app
+    assert 'from("home_data_status")' in api
+    assert '.eq("status_key", "latest")' in api
+    assert ".maybeSingle()" in api
+    assert "createSupabaseClient" in api
+    assert 'HOME_DATA_STATUS_CONTRACT_VERSION = "home-data-status.v1"' in contract
+    assert "normalizeHomeDataStatus" in contract
+    assert "HOME_DATA_STATE" in ui_state
+    for state in ("LOADING", "EMPTY", "ERROR", "READY"):
+        assert state in ui_state
+    for field in (
+        "twse_securities_count",
+        "tpex_securities_count",
+        "daily_bars_latest_count",
+        "historical_landing_count",
+        "historical_parsed_count",
+        "historical_quarantined_count",
+        "historical_production_eligible_count",
+        "data_sources_count",
+        "prediction_runs_count",
+        "stock_predictions_count",
+        "market_predictions_count",
+        "updated_at",
+    ):
+        assert field in api
+    assert "RAW DATA" in component
+    assert "RESEARCH_ONLY" in component
+    assert "不是模型預測" in component
+    assert "market_p_up" not in component
+    assert "candidate-card" not in component
+
+
 def test_decision_gate_renderer_matches_backend_contract_and_formats_objects() -> None:
     gates = read("src/components/decision-gates.js")
     for key in (

@@ -5,10 +5,19 @@ import { initializeCandidateFilters } from "./src/features/candidate-filters.js"
 import { initializeWatchlistFilters } from "./src/features/watchlist-filters.js";
 import { CURRENT_HORIZON } from "./src/core/five-day-contract.js";
 import { createRouter } from "./src/core/router.js?v=debug-1";
-import { UI_STATE, applyUiState, resolveSnapshotUiState } from "./src/core/ui-state.js";
+import {
+  HOME_DATA_STATE,
+  UI_STATE,
+  applyUiState,
+  resolveHomeDataState,
+  resolveSnapshotUiState,
+} from "./src/core/ui-state.js?v=home-data-1";
+import { renderHomeDataStatus } from "./src/components/home-data-status.js?v=home-data-1";
+import { loadHomeDataStatus } from "./src/data/home-data-status-api.js?v=home-data-1";
 import { loadPredictionSnapshot } from "./src/data/prediction-api.js?v=api-6";
 import { createUnavailableSnapshot } from "./src/data/prediction-contract.js?v=api-4";
 import { setWatchlistMembership } from "./src/data/watchlist-api.js?v=api-5";
+import { isSupabaseSdkLoadError } from "./src/data/supabase-sdk-loader.js?v=auth-1";
 import { createCandidatesPage, renderCandidatesPage } from "./src/pages/candidates-page.js?v=ui-3";
 import { createOverviewPage, renderOverviewPage } from "./src/pages/overview-page.js?v=ui-4";
 import { createStockDetailPage, renderStockDetailPage } from "./src/pages/stock-detail-page.js?v=ui-3";
@@ -60,6 +69,19 @@ if (appRoot && navigationRoot) {
         selectedSymbol = null;
         if (router.current() === "stock") router.show("opportunities");
       }
+    }
+  }
+
+  async function refreshHomeDataStatus() {
+    renderHomeDataStatus(null, HOME_DATA_STATE.LOADING);
+    try {
+      const status = await loadHomeDataStatus();
+      renderHomeDataStatus(status, resolveHomeDataState({ status }));
+    } catch (error) {
+      renderHomeDataStatus(null, resolveHomeDataState({ error }), {
+        reasonCode: error?.code,
+      });
+      if (!isSupabaseSdkLoadError(error)) globalThis.Sentry?.captureException?.(error);
     }
   }
 
@@ -123,5 +145,6 @@ if (appRoot && navigationRoot) {
     }
   });
   globalThis.addEventListener("alpha-lens:auth-change", () => refreshSnapshot());
+  refreshHomeDataStatus();
   refreshSnapshot();
 }

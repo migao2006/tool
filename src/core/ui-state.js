@@ -11,6 +11,19 @@ export const UI_STATE = Object.freeze({
   READY: "ready",
 });
 
+export const HOME_DATA_STATE = Object.freeze({
+  LOADING: "loading",
+  EMPTY: "empty",
+  ERROR: "error",
+  READY: "ready",
+});
+
+export function resolveHomeDataState({ status = null, error = null } = {}) {
+  if (error) return HOME_DATA_STATE.ERROR;
+  if (!status) return HOME_DATA_STATE.EMPTY;
+  return HOME_DATA_STATE.READY;
+}
+
 const STATE_COPY = Object.freeze({
   [UI_STATE.LOADING]: ["RESEARCH_ONLY", "正在讀取", "正在取得 5 日模型與資料狀態。"],
   [UI_STATE.EMPTY]: ["RESEARCH_ONLY", "尚無資料", "尚未匯入可供判斷的正式資料。"],

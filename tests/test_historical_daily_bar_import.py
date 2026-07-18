@@ -81,6 +81,7 @@ class FakeProvider:
 class FakeWriter:
     def __init__(self) -> None:
         self.calls: list[tuple[str, list[dict[str, object]], str]] = []
+        self.refresh_calls = 0
 
     def upsert(
         self,
@@ -104,6 +105,9 @@ class FakeWriter:
             "historical_daily_bar_landing": 2,
             "historical_daily_bar_quarantine": 0,
         }[table]
+
+    def refresh_home_data_status(self) -> None:
+        self.refresh_calls += 1
 
 
 def _settings() -> ApiProviderSettings:
@@ -163,6 +167,7 @@ def test_formal_import_only_writes_source_and_isolated_landing_tables() -> None:
     assert all(
         "source_code" not in row and "security_id" not in row for row in landing_rows
     )
+    assert writer.refresh_calls == 1
 
 
 def test_invalid_source_row_lands_before_quarantine_issue() -> None:

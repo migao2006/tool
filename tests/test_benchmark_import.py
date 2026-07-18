@@ -34,6 +34,7 @@ def test_importer_dry_run_fetches_both_market_indexes_without_writes() -> None:
     ).run(snapshot_date=SNAPSHOT_DATE, dry_run=True)
 
     assert writer.calls == []
+    assert writer.refresh_calls == 0
     assert providers["TWSE"].calls == ["return_index"]
     assert providers["TPEX"].calls == ["return_index"]
     assert summary.normalized_records == {
@@ -93,6 +94,7 @@ def test_importer_writes_sources_definitions_then_market_observations() -> None:
         "series_code,observation_at,source_id,source_revision_hash"
     )
     assert observations_call["preserve_existing"] is True
+    assert writer.refresh_calls == 1
     source_ids = {
         row["source_code"]: index * 10
         for index, row in enumerate(upserts[0]["rows"], start=1)

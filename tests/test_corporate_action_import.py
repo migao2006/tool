@@ -34,6 +34,7 @@ def test_importer_dry_run_fetches_all_sources_and_never_writes() -> None:
     ).run(snapshot_date=SNAPSHOT_DATE, dry_run=True)
 
     assert writer.calls == []
+    assert writer.refresh_calls == 0
     assert providers["MOPS"].calls == [
         "listed_company_profile",
         "otc_company_profile",
@@ -79,6 +80,7 @@ def test_importer_writes_sources_securities_then_actions_with_returned_ids() -> 
         "securities": 123,
         "corporate_actions": 123,
     }
+    assert writer.refresh_calls == 1
 
 
 def test_incomplete_source_return_fails_before_security_write() -> None:

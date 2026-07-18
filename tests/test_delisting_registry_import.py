@@ -38,6 +38,7 @@ def test_dry_run_fetches_both_official_registries_without_writes() -> None:
     ).run(snapshot_date=SNAPSHOT_DATE, dry_run=True)
 
     assert writer.calls == []
+    assert writer.refresh_calls == 0
     assert providers["TWSE"].calls == ["delisting_registry"]
     assert providers["TPEX"].calls == ["delisting_registry"]
     assert summary.normalized_records == {"TWSE": 200, "TPEX": 500}
@@ -79,6 +80,7 @@ def test_formal_import_writes_only_sources_then_unresolved_registry() -> None:
         "data_sources": 123,
         "delisting_registry_observations": 123,
     }
+    assert writer.refresh_calls == 1
 
 
 def test_missing_source_id_blocks_registry_write() -> None:

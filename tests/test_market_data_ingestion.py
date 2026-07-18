@@ -201,6 +201,25 @@ def test_supabase_writer_selects_private_rows_with_explicit_filters() -> None:
     assert query["limit"] == ["2"]
 
 
+def test_supabase_writer_refreshes_home_status_with_private_rpc() -> None:
+    transport = FakeRestTransport([RestResponse(204, {}, b"")])
+    writer = SupabaseWriter(
+        url="https://example.supabase.co",
+        server_key="sb_secret_test-value",
+        transport=transport,
+    )
+
+    writer.refresh_home_data_status()
+
+    call = transport.calls[0]
+    assert call["method"] == "POST"
+    assert call["url"] == (
+        "https://example.supabase.co/rest/v1/rpc/refresh_home_data_status"
+    )
+    assert call["body"] == b"{}"
+    assert call["headers"]["Content-Profile"] == "market_data"
+
+
 def test_preserve_existing_uses_ignore_duplicates_for_earliest_available_at() -> None:
     transport = FakeRestTransport([RestResponse(201, {}, b"")])
     writer = SupabaseWriter(

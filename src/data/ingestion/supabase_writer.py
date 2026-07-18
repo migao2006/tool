@@ -251,3 +251,23 @@ class SupabaseWriter:
                 f"Supabase returned an invalid count for {table}",
             )
         return int(total)
+
+    def refresh_home_data_status(self) -> None:
+        """Refresh the public homepage aggregate after a complete import."""
+
+        function_name = "refresh_home_data_status"
+        response = self.transport.request(
+            "POST",
+            f"{self.base_url}/rpc/{function_name}",
+            headers=self._headers(),
+            body=b"{}",
+            timeout=self.timeout,
+        )
+        if not 200 <= response.status_code < 300:
+            raise IngestionError(
+                "SUPABASE_WRITE_REJECTED",
+                (
+                    "Supabase rejected POST for "
+                    f"rpc/{function_name} with HTTP {response.status_code}"
+                ),
+            )

@@ -15,7 +15,7 @@ data/processed/
 *.lgb
 *.egg-info/
 supabase/.temp/
+.vercel/
 .env
 .env.*
 !.env.example
-*.egg-info/

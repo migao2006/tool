@@ -130,6 +130,7 @@ class FakeWriter:
     def __init__(self, *, omit_source: str | None = None) -> None:
         self.omit_source = omit_source
         self.calls: list[dict[str, object]] = []
+        self.refresh_calls = 0
 
     def upsert(
         self,
@@ -164,3 +165,6 @@ class FakeWriter:
     def count_rows(self, table: str) -> int:
         self.calls.append({"table": table, "operation": "count"})
         return 123
+
+    def refresh_home_data_status(self) -> None:
+        self.refresh_calls += 1

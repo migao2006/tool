@@ -29,6 +29,7 @@ class FakeWriter:
     def __init__(self, *, omit_source: str | None = None) -> None:
         self.omit_source = omit_source
         self.calls: list[dict[str, object]] = []
+        self.refresh_calls = 0
 
     def upsert(
         self,
@@ -73,6 +74,9 @@ class FakeWriter:
         self.calls.append({"operation": "count", "table": table})
         return 123
 
+    def refresh_home_data_status(self) -> None:
+        self.refresh_calls += 1
+
 
 def registry() -> dict[str, FakeProvider]:
     payloads = import_payloads()
@@ -90,6 +94,7 @@ def test_snapshot_importer_dry_run_fetches_all_sources_without_writing() -> None
     ).run(snapshot_date=SNAPSHOT_DATE, dry_run=True)
 
     assert writer.calls == []
+    assert writer.refresh_calls == 0
     assert providers["MOPS"].calls == [
         "listed_company_profile",
         "otc_company_profile",
@@ -143,6 +148,7 @@ def test_snapshot_importer_writes_sources_securities_then_history() -> None:
         "securities": 123,
         "security_history": 123,
     }
+    assert writer.refresh_calls == 1
 
 
 def test_incomplete_source_upsert_fails_before_security_write() -> None:

@@ -51,6 +51,7 @@ class FakeFinMind:
 class FakeWriter:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
+        self.refresh_calls = 0
 
     def upsert(
         self,
@@ -79,6 +80,9 @@ class FakeWriter:
     def count_rows(self, table: str) -> int:
         self.calls.append({"table": table, "operation": "count"})
         return 1_234
+
+    def refresh_home_data_status(self) -> None:
+        self.refresh_calls += 1
 
 
 def test_calendar_normalizer_sorts_actual_sessions_without_inventing_times() -> None:
@@ -188,6 +192,7 @@ def test_calendar_importer_dry_run_does_not_touch_supabase() -> None:
     )
 
     assert writer.calls == []
+    assert writer.refresh_calls == 0
     assert provider.calls == [
         {
             "dataset": "trading_calendar",
@@ -227,3 +232,4 @@ def test_calendar_importer_writes_source_then_idempotent_calendar_rows() -> None
     assert summary.database_count == 1_234
     assert summary.normalized_records == 3
     assert summary.to_dict()["retrieved_at"] == RETRIEVED_AT.isoformat()
+    assert writer.refresh_calls == 1

@@ -165,6 +165,7 @@ class DailyMarketImporter:
                 on_conflict="security_id,trade_date,source_id,source_version",
                 preserve_existing=True,
             )
+            self._writer().refresh_home_data_status()
             database_counts = {
                 table: self._writer().count_rows(table)
                 for table in ("data_sources", "securities", "daily_bars")

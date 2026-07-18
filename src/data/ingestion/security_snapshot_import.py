@@ -50,6 +50,8 @@ class SnapshotWriter(Protocol):
 
     def count_rows(self, table: str) -> int: ...
 
+    def refresh_home_data_status(self) -> None: ...
+
 
 @final
 class SecuritySnapshotImporter:
@@ -235,6 +237,7 @@ class SecuritySnapshotImporter:
                 on_conflict="security_id,effective_from,source_id,source_version",
                 preserve_existing=True,
             )
+            self._writer().refresh_home_data_status()
 
         database_counts = (
             {}

@@ -35,6 +35,8 @@ class CalendarWriter(Protocol):
 
     def count_rows(self, table: str) -> int: ...
 
+    def refresh_home_data_status(self) -> None: ...
+
 
 class CalendarProvider(Protocol):
     def fetch(
@@ -142,6 +144,7 @@ class TradingCalendarImporter:
                 on_conflict="market,trading_date",
                 preserve_existing=True,
             )
+            self._writer().refresh_home_data_status()
 
         session_dates = sorted(
             {date.fromisoformat(str(row["trading_date"])) for row in normalized}

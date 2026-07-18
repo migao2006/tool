@@ -50,6 +50,8 @@ class CorporateActionWriter(Protocol):
 
     def count_rows(self, table: str) -> int: ...
 
+    def refresh_home_data_status(self) -> None: ...
+
 
 @final
 class CorporateActionImporter:
@@ -213,6 +215,7 @@ class CorporateActionImporter:
                     on_conflict="source_id,source_event_id,source_revision_hash",
                     preserve_existing=True,
                 )
+            self._writer().refresh_home_data_status()
 
         action_rows = sum(len(item.rows) for item in actions.values())
         database_counts = (

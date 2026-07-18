@@ -2,6 +2,7 @@ import { createEmptyState } from "../components/empty-state.js";
 import { createCandidateCard } from "../components/candidate-card.js";
 import { createResearchSettingsDrawer } from "../components/research-settings-drawer.js?v=debug-1";
 import { createStatusBanner } from "../components/status-banner.js";
+import { createHomeDataStatusPanel } from "../components/home-data-status.js?v=home-data-1";
 import { createValidationReportDrawer, renderValidationReport } from "../components/validation-report-drawer.js";
 import { formatDateTime, formatPercent } from "../core/formatters.js";
 import { setText } from "../core/html.js";
@@ -15,6 +16,7 @@ export function createOverviewPage({ horizon }) {
         <button class="icon-text-button" type="button" data-open-drawer="research-settings">研究設定</button>
       </div>
       ${createStatusBanner()}
+      ${createHomeDataStatusPanel()}
 
       <section class="contract-meta" aria-label="預測時間契約">
         <div><span>資料日期</span><small>as_of_date</small><strong data-overview-field="as_of_date">—</strong></div>

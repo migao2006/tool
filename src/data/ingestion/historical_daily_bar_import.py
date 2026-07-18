@@ -56,6 +56,8 @@ class HistoricalBarWriter(Protocol):
 
     def count_rows(self, table: str) -> int: ...
 
+    def refresh_home_data_status(self) -> None: ...
+
 
 def _quota_remaining(payload: ProviderPayload) -> int:
     raw = cast(object, payload.payload)
@@ -241,6 +243,7 @@ class HistoricalDailyBarImporter:
                         on_conflict="landing_key,reason_code,field_name",
                         preserve_existing=True,
                     )
+            self._writer().refresh_home_data_status()
 
         database_counts = (
             {}

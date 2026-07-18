@@ -1,4 +1,4 @@
-架構一定要分開，不可以把大量程式擠在同一個檔案裡。
+本專案必須依責任、依賴方向及可獨立測試性拆分模組。不得將頁面、元件、狀態、API、資料庫、模型、決策、驗證或樣式集中於巨型檔案；也不得為符合目錄形式而建立互相高度耦合、僅轉傳呼叫或責任不明的假分層。共用契約與共用邏輯只保留一份，各模型與功能模組透過明確介面組合。
 
 # 專案開發規範
 
@@ -19,7 +19,7 @@
 ### 1.1 高度自主執行授權
 
 - 使用者持續授權代理在本專案及其已連結的 GitHub、Vercel、Supabase 資源內，為完成明確任務使用目前可取得的最高專案權限並自行決定安全、合理的實作與執行順序，不必逐項請示。
-- 代理可自行讀寫專案、安裝或更新必要依賴、執行命令與測試、建立或套用 migration、匯入資料、管理 RLS／Auth／Edge Functions、設定必要環境變數、檢查 logs、建立提交與 PR、推送、合併、部署、重新部署及修復失敗流程。
+- 代理可自行讀寫專案、安裝或更新必要依賴、執行命令與測試、建立或套用 migration、匯入資料、管理 RLS／Auth／Edge Functions、設定必要環境變數、檢查 logs、建立提交與 PR、推送、合併、部署、重新部署及修復失敗流程；合併正式分支、Production 部署與正式資料庫變更仍必須通過第 9.1 節發布閘門及第 9.2 節 migration 風險分級。
 - 對範圍內且可回復的操作，應直接執行、驗證並留下 Git、migration、deployment 或稽核紀錄；不得因已有工具或權限而跳過資料安全、時間正確性、測試與機密保護。
 - 只有遇到登入、雙因素驗證或缺少必要憑證、會新增付費或訂閱、刪除專案／網域／正式資料、不可回復或大規模破壞性操作、跨出本專案資源，或產品方向存在會實質改變結果的選擇時，才需要使用者介入。
 - 本授權不允許顯示、提交或傳送 secret、密碼、私鑰與 access token，也不允許捏造資料、繞過平台安全限制或覆蓋使用者的無關修改。
@@ -31,6 +31,9 @@
 - 第一版固定使用 `horizon=5`。
 - API、型別及元件必須接受 `horizon` 參數，以便日後擴充 3、10、2 日獨立模型。
 - 2、3、10 日模型完成前，不得提供可操作切換、假結果或暗示已可使用。
+- 後端收到 2、3、10 或其他尚未支援的 horizon 時，必須回傳明確的 `UNSUPPORTED_HORIZON`，不得忽略參數、靜默改成 5 或借用 5 日結果。
+- 模型 artifact、標籤、特徵 schema、校準器、決策門檻、成本與驗證結果都必須綁定 horizon；5 日 artifact 不得回應其他期間的請求。
+- 前端正式版本不得顯示尚未支援 horizon 的操作控制項；保留參數只為契約擴充，不代表該期間已可使用。
 - ETF 暫不混入普通股票候選清單或模型；上市與上櫃以篩選器區分。
 - 不新增管理員、自動下單、持倉損益或複雜投資組合功能。
 
@@ -49,7 +52,7 @@
 
 - 使用繁體中文、精簡文案及清楚資訊層級。
 - 優先支援 iPhone 單手操作；觸控區至少 44×44 px，正確處理 safe area。
-- 所有頁面必須處理 loading、empty、stale、API error、hard fail、`RESEARCH_ONLY` 及 `FAIL`。
+- 所有頁面必須處理 loading、empty、stale、API error、`HARD_FAIL`、`RESEARCH_ONLY` 及 `FAIL`。
 - 沒有資料時只顯示「—」、「尚無資料」或「尚未更新」。禁止用假股票、假機率、假績效或 placeholder 冒充正式結果。
 - 個股技術稽核資料可預設折疊，但不得刪除。
 
@@ -62,11 +65,11 @@
 - P10／P50／P90 是條件報酬分位數，不是最低、平均、最高報酬，也不是獲利保證。
 - 沒有獨立 expected return 模型或 OOS 校準映射時，不得顯示「預期報酬」或「EV」。
 - 不得顯示精確未來股價、虛構 AI 信心或未經 OOS 驗證的結果。
-- `data_quality` hard fail 股票不得進入正式推薦清單。
+- `data_quality_status=HARD_FAIL` 的股票不得進入正式推薦清單。
 
 ### 3.2 今日總覽
 
-只顯示決策摘要：資料日期、決策時間、5 日市場方向機率、市場狀態、預測波動、曝險上限、決策數量、hard fail 數量、通過門檻的前 3～5 檔股票、模型與成本版本，以及 `PASS`／`RESEARCH_ONLY`／`FAIL`。
+只顯示決策摘要：資料日期、決策時間、5 日市場方向機率、市場狀態、預測波動、曝險上限、決策數量、`HARD_FAIL` 數量、通過門檻的前 3～5 檔股票、模型與成本版本，以及 `PASS`／`RESEARCH_ONLY`／`FAIL`。
 
 模型驗證報告與研究設定使用彈窗或抽屜，不另建頁面。一般使用者不得修改模型超參數、校準參數、標籤門檻或 locked holdout。
 
@@ -75,7 +78,7 @@
 - 正式順序只使用 Rank Score 或 `global_rank`。
 - 至少顯示股票識別、市場、產業、全市場與產業排名、校準後三分類機率、`net_q10/q50/q90`、交易成本、資料品質、決策及主要 `reason_codes`。
 - 可篩選市場、產業、決策、資料品質、流動性、Rank Score、`calibrated_p_up` 與 cost profile。
-- 被 hard fail 排除的股票只能在獨立抽屜顯示原因，不得混入推薦。
+- 被 `HARD_FAIL` 排除的股票只能在獨立抽屜顯示原因，不得混入推薦。
 
 ### 3.4 個股決策詳情
 
@@ -98,6 +101,16 @@
 - 顯示 Rank Score、全市場排名、決策、三分類機率、`net_q10/q50/q90`、資料品質、原因，以及與前一交易日相比的排名與決策變化。
 - 可篩選全部、`CANDIDATE`、`WATCH`、`NO_TRADE`。
 
+### 3.6 統一狀態契約
+
+- `system_status` 只能是 `PASS`、`RESEARCH_ONLY` 或 `FAIL`。
+- `stock_decision` 只能是 `CANDIDATE`、`WATCH`、`NO_TRADE` 或 `EXCLUDED`。
+- `data_quality_status` 只能是 `PASS`、`WARN` 或 `HARD_FAIL`。
+- `HARD_FAIL` 必定對應 `EXCLUDED`，不得進入正式排名或推薦；其他不可交易 hard gate 也可以產生 `EXCLUDED`。系統為 `FAIL` 時不得產生正式 `CANDIDATE`。
+- `RESEARCH_ONLY` 可以顯示研究輸出，但必須醒目標示且不得描述為正式推薦；`NO_TRADE` 表示資料可用但不符合交易門檻，不代表資料錯誤，`WATCH` 也不等於候選推薦。
+- 狀態與 `reason_code` enum 必須由單一版本化契約定義；各頁面、API 或模型不得自行發明同義狀態。
+- 若既有 schema 使用 `data_quality_status=FAIL`，必須透過版本化 schema 或 adapter 明確轉換為 `HARD_FAIL`；不得讓未標版本的兩套語意長期並存。
+
 ## 四、程式架構
 
 ### 4.1 模組責任
@@ -106,6 +119,7 @@
 - 頁面只組合元件；元件不得直接包含模型或資料庫邏輯；資料層不得依賴 UI。
 - 共用邏輯只能保留一份，禁止複製貼上相同計算、格式化、篩選或標籤程式。
 - 檔案超過約 300 行、元件超過約 150 行，或同時負責兩種以上工作時，應優先拆分。
+- 行數是警示門檻，不是唯一拆分依據。應同時判斷是否有多種責任、不同修改原因、無法獨立測試、大量共享狀態、過高複雜度或巢狀深度；不得為符合行數而建立只有轉傳功能、名稱含糊或彼此高度耦合的碎片檔案。
 - 不得將所有頁面、樣式或互動集中在單一 HTML、CSS、JavaScript 或 Python 檔案。
 - 不得無故重寫專案；修改必須小範圍、可測試、可回復。
 
@@ -130,6 +144,35 @@ tests/            # 對應模組測試
 
 目錄名稱可依技術棧調整，但不得建立內容仍互相耦合的假分層。
 
+### 4.3 模組依賴方向
+
+原則上的呼叫方向如下：
+
+```text
+pages
+  ↓
+components / core controllers
+  ↓
+application services / decision
+  ↓
+models / calibration / features / labels / validation / backtest
+  ↓
+domain contracts / schemas / types
+```
+
+- `pages` 可依賴元件及 application service，但不得直接呼叫模型、SQL、Supabase SDK 或外部資料提供者。
+- `components` 不得依賴 `pages`；models、features、labels、calibration、validation 與 backtest 不得依賴 UI、router、瀏覽器狀態或資料庫 SDK。
+- `decision` 可依賴版本化模型輸出契約，但不得依賴特定頁面或 UI 元件。
+- 外部資料庫、檔案、HTTP API 與 Supabase 必須透過 adapter 或 repository interface 接入，並在 composition root 組裝；基礎量化與 domain 模組不得反向依賴具體基礎設施實作。
+- `core` 不得成為任意共用程式的堆放區；router 與 browser state 屬外層，只有純型別、無副作用工具與穩定契約可作為底層依賴。
+- 禁止循環依賴、跨層捷徑引用及僅為繞過依賴規則而建立的轉傳模組。
+
+### 4.4 模型共用基礎層
+
+- 各模型的業務邏輯、訓練與推論必須維持獨立，但模型生命週期、artifact metadata、輸入驗證、seed、horizon 驗證、版本記錄及共用輸出契約應集中於 `models/common` 或等價基礎模組。
+- 不得在排名、方向、分位數、市場與波動模型中複製資料切割、artifact 儲存、模型載入、feature schema 驗證或 metadata 產生邏輯。
+- 共用基礎層只放真正穩定且被多個模型使用的能力；不得建立含糊的 `utils`、萬用 base class 或迫使模型共享不相容流程。
+
 ## 五、資料、模型與決策
 
 ### 5.1 Point-in-time 資料
@@ -140,7 +183,11 @@ tests/            # 對應模組測試
 - 隔夜與盤中報酬分開；外資、投信與自營商資料分開。
 - 上市、上櫃與 ETF 使用適當基準並分開評估；ETF 不與普通股混合訓練。
 - 歷史股票池應納入下市、停牌及失敗公司，避免生存者偏誤。
-- 關鍵行情、公司行動或交易狀態缺漏時必須 hard fail。
+- 關鍵行情、公司行動或交易狀態缺漏時必須標記為 `HARD_FAIL`。
+- 所有儲存與運算時間必須使用 timezone-aware timestamp；資料庫時間欄位優先使用 `timestamptz`，系統內部標準時間使用 UTC，台股決策與畫面顯示使用 `Asia/Taipei`。
+- `decision_date` 是台灣交易所交易日日期，必須由台灣交易日曆與 `Asia/Taipei` 時間推導，不得直接截取 UTC 日期。
+- API 時間欄位必須使用含時區或 `Z` 的 ISO 8601 格式並標明語意；禁止使用無時區 datetime 進行資料對齊、排序或 fold 切割。
+- 每個外部來源的原始時區、轉換規則與夏令時間處理必須版本化並可稽核。
 
 ### 5.2 模型責任
 
@@ -149,7 +196,19 @@ tests/            # 對應模組測試
 - `decision_policy` 只負責 gate、Top-K、容量及部位限制，不建立另一套加權排名。
 - 不得以精確股價為主要輸出、不得保證獲利、不得以訓練集結果冒充正式績效。
 
-### 5.3 驗證與回測
+### 5.3 模型與資料追溯 manifest
+
+每個正式模型 artifact 必須附帶版本化 manifest，至少包含：
+
+- `model_name`、`model_version`、`horizon` 與 artifact URI／SHA-256。
+- `training_start_date`、`training_end_date`、`dataset_snapshot_id` 與來源快照雜湊。
+- `feature_schema_hash`、`label_version`、benchmark version、`cost_profile_version` 與 calibration version。
+- `git_commit`、`random_seed`、訓練程式版本、lockfile hash 與主要 library versions。
+- 產生時間、驗證狀態、適用市場及必要的已知限制。
+
+任何正式推論結果都必須能追溯至資料快照、標籤、特徵 schema、模型 artifact、成本設定、Git commit 與訓練期間。缺少任一必要欄位時最高只能是 `RESEARCH_ONLY`；artifact 不相容、hash 不符、無法驗證或 horizon 不一致時必須是 `FAIL`。manifest 不得包含 secret、access token 或具權限的暫時下載網址。
+
+### 5.4 驗證與回測
 
 - 使用 purged walk-forward、rolling 或 expanding window，禁止 random split 及 random K-fold。
 - 同一 `decision_date` 不得拆到不同 fold；preprocessing 只能在每個 fold 的訓練資料 fit。
@@ -159,7 +218,7 @@ tests/            # 對應模組測試
 
 ## 六、登入與資料庫安全
 
-- 登入只使用 Email＋密碼；支援登入、建立帳號及登出，不提供忘記密碼或密碼重設。
+- 第一版登入只使用 Email＋密碼，支援登入、建立帳號及登出；UI 暫不主動提供忘記密碼或密碼重設。產品進入公開使用或保存重要個人資料前，必須重新評估並記錄安全的帳號復原策略；未經當次明確需求不得自行重新加入流程，也不得用假流程或不安全方式替代。
 - Supabase 負責 Auth、Email 確認與 Session；不接入其他寄信或驗證碼服務。
 - Auth UI、controller、service 與樣式必須分離，不得堆入主 `app.js`。
 - Supabase 瀏覽器 SDK 必須透過單一、可共用的初始化 Promise 載入；資源失敗只能做有限次重試，之後 fail closed 並停用登入，不得無限重試或讓多個 caller 重複上報同一故障。
@@ -208,14 +267,14 @@ tests/            # 對應模組測試
 - 工具清單代表已偵測到的開發能力；實際使用前只需確認目前環境是否可執行，不必再次取得一般專案操作授權。Docker 目前不列為已安裝工具。
 - 部署與遠端資料庫變更仍須遵守第六章、第 1.1 節及第九章，使用可稽核、可回復且不暴露機密的方式執行。
 
-### 7.4.1 Windows 憑證與 CLI 驗證狀態
+### 7.5 Windows 憑證與 CLI 驗證狀態
 
 - 2026-07-18 已以唯讀方式確認 Windows `CurrentUser` 與 `LocalMachine` 根憑證庫可存取，GitHub CLI、Vercel CLI、Supabase CLI、pnpm registry HTTPS 與 uv／PyPI 系統憑證連線均通過。
 - 上述結果是時間點狀態；遇到 token 到期、登入失效、憑證更新或網路環境變更時，應重新執行最小範圍的狀態檢查，不得直接假設永久有效。
 - pnpm 目前可直接使用系統憑證完成 HTTPS 連線；uv 需要網路時仍優先明確傳入 `--system-certs`，不需要為此永久關閉 TLS 驗證。
 - 只允許檢查憑證庫是否可存取及 CLI 是否已登入；不得列舉、匯出、記錄、提交或回傳憑證、token、密碼、私鑰與其他機密內容。
 
-### 7.5 測試加速與快取
+### 7.6 測試加速與快取
 
 - `pytest-xdist` 已納入測試依賴；大型或較慢的測試套件使用 `uv run pytest -n auto`，worker 上限與分派策略由 `pyproject.toml` 管理。
 - 不得為了形式上平行而讓測試變慢。當完整套件仍很短時，預設使用循序 `uv run pytest`；只有實測平行較快或需要 CI 分散負載時才啟用 xdist。
@@ -226,6 +285,8 @@ tests/            # 對應模組測試
 
 ## 八、工作流程與驗證尺度
 
+### 8.1 執行與驗證流程
+
 1. 修改前先讀取相關程式、schema、測試及 Git 差異。
 2. 先確認輸入、輸出與模組邊界，再做最小必要修改。
 3. 保留既有正常功能及使用者修改，不覆蓋無關變更。
@@ -234,21 +295,56 @@ tests/            # 對應模組測試
 6. 只能回報實際執行過的測試；缺少真實資料時列出缺口，不以合成結果冒充正式績效。
 7. 溝通只保留開始、重要階段、阻塞與交付；不必每句附完成度或等待時間。
 
+### 8.2 跨模組資料契約測試
+
+- 所有跨模組、跨程序與前後端輸出必須使用版本化 schema，明確定義欄位名稱、型別、enum、nullability、單位、時區及向前／向後相容規則。
+- 測試至少涵蓋 API schema、Supabase schema、reason code enum、時間欄位 timezone、前後端欄位一致性及模型 artifact compatibility。
+- contract test 必須在 producer 與 consumer 邊界執行；不得只依賴 UI 測試、整合測試或執行期例外才發現契約錯誤。
+- Supabase contract test 應針對 migration、shadow 或隔離 schema 執行，不得讓一般測試修改正式資料。
+- schema 或 enum 的 breaking change 必須提升契約版本、提供 migration／adapter，並在相依端完成更新後才能移除舊版本；收到不相容版本時必須 fail closed，不得猜測欄位或靜默轉換。
+
 ## 九、Git 與發布規則
 
-- 所有程式與設定修改必須使用 Git 留下紀錄並推送至 GitHub；不得只修改遠端而不保留可追溯來源。
+- 完成且經適當驗證的可交付程式與設定修改必須使用 Git 留下紀錄並推送至 GitHub；不得為符合規則而強行提交、推送或合併尚未完成的探索性變更，也不得只修改遠端而不保留可追溯來源。
 - 代理可自行建立分支、提交、推送、建立或更新 PR，並在必要測試通過且不存在已知阻塞時合併；不必為每次 Git 操作再次詢問。
 - 代理可透過既有 GitHub／Vercel 整合或 Vercel CLI、API、MCP 自行建立 Preview、部署 Production、重新部署、檢查 logs、提升已驗證部署，以及管理本專案必要的環境變數與設定。
+- Vercel 因分支或 PR 自動建立 Preview 屬正常驗證行為，不等同 Production 發布；Preview 可在 Production 閘門完成前建立。
 - 代理可對本專案 Supabase 執行非破壞性 schema migration、RLS、Auth、Edge Functions、資料匯入與必要設定；正式資料刪除、破壞性 migration 或專案刪除仍須符合第 1.1 節的介入條件。
 - 發布或資料庫操作前後必須依風險完成適當驗證，保留版本與回復路徑；失敗時可自行診斷、修復及重試，不得以關閉安全機制或捏造成功結果處理。
 - 每次提交只包含本次任務相關檔案；提交前檢查差異、測試、未追蹤檔案及機密。
 - GitHub 推送若受登入、權限、憑證或網路阻擋，直接回報，不得改用其他平台繞過。
 
+### 9.1 Production 發布閘門
+
+合併至正式分支、部署 Production 或套用正式資料庫變更前，至少必須確認：
+
+- 工作樹、未追蹤檔案及提交範圍已檢查，沒有夾帶無關修改。
+- 依變更風險所需的 formatter、lint、型別檢查、單元測試、contract test、整合測試與瀏覽器測試均通過。
+- Gitleaks 與相關安全掃描沒有未處理的機密或高風險問題。
+- 涉及 schema 時，migration 已優先在 local、shadow、Preview 或其他隔離環境驗證，並有可執行的回復或前進修復方案；若沒有隔離環境，只能自動套用經審查的低風險 additive 變更。
+- 不存在由本次變更造成或尚未被明確接受的 release-blocking `HARD_FAIL`、資料時間錯置、明顯資料洩漏、已知回歸或契約不相容。系統因真實資料不足而正確維持 `RESEARCH_ONLY` 不會阻擋 UI 或基礎設施發布，但不得因此宣告模型為 `PASS`。
+- 涉及前端或完整服務時，Preview 已驗證主要路徑、錯誤狀態及 iPhone viewport。
+- GitHub required checks 全部通過且不得仍在執行；若 repository 尚未設定 required checks，必須如實記錄已執行的替代檢查。發布版本、commit、migration 與 deployment 必須可追溯。
+
+任一適用閘門無法驗證時，只能建立分支、提交、PR 或 Preview；不得合併正式分支、套用 Production 變更或宣告正式發布完成。純文件變更可依風險縮小測試範圍，但仍須檢查差異、機密與提交內容。
+
+### 9.2 Migration 風險分級
+
+下列操作即使不直接刪除資料，也視為高風險 migration：
+
+- 可能長時間鎖定正式大表或影響線上讀寫的 DDL／索引操作。
+- 新增或修改 `NOT NULL`、unique constraint、foreign key 或欄位型別。
+- 移除、放寬或大幅收緊 RLS policy，或改變 Auth schema、使用者識別、Session 行為或權限模型。
+- 大量 backfill、資料重算、跨表搬移或可能超出單次交易安全範圍的操作。
+- 無法在單一 migration 中安全回復，或需要應用程式、Edge Function 與 schema 同步切換的變更。
+
+高風險 migration 必須先估算資料量、鎖定與停機影響，優先採用 expand-and-contract、分階段發布、可恢復 backfill 或明確 rollback／forward-fix 方案。涉及不可回復、正式資料風險或大規模破壞性操作時，仍須依第 1.1 節請使用者介入。
+
 ## 十、完成條件
 
 - 模組責任清楚，沒有新增巨型檔案、假分層或循環依賴。
 - UI、資料、模型、決策、驗證與回測沒有互相混寫。
-- 輸出可追溯至資料日期、來源、模型版本與成本版本。
-- 缺漏資料明確顯示，hard fail 不會進入正式推薦。
+- 輸出可追溯至資料快照、來源、標籤版本、特徵 schema、模型 artifact、Git commit、訓練期間與成本版本。
+- 缺漏資料明確顯示，`HARD_FAIL` 不會進入正式推薦。
 - 不存在已知的 look-ahead bias、survivorship bias、時間錯置或明顯資料洩漏。
-- 必要測試通過，Git 差異已檢查，且只宣告實際完成的工作。
+- 必要測試與契約檢查通過，Git 差異已檢查，Production 發布閘門已滿足，且只宣告實際完成的工作。

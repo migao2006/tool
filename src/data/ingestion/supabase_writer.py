@@ -186,20 +186,47 @@ class SupabaseWriter:
                 },
             )
             if return_rows:
-                try:
-                    payload = json.loads(response.body.decode("utf-8-sig"))
-                except (UnicodeDecodeError, json.JSONDecodeError) as error:
-                    raise IngestionError(
-                        "SUPABASE_RESPONSE_INVALID",
-                        f"Supabase returned invalid JSON for {table}",
-                    ) from error
-                if not isinstance(payload, list):
-                    raise IngestionError(
-                        "SUPABASE_RESPONSE_INVALID",
-                        f"Supabase returned an invalid row collection for {table}",
-                    )
-                returned.extend(dict(item) for item in payload if isinstance(item, Mapping))
+                returned.extend(self._decode_rows(response, table=table))
         return returned
+
+    @staticmethod
+    def _decode_rows(
+        response: RestResponse,
+        *,
+        table: str,
+    ) -> list[dict[str, object]]:
+        try:
+            payload = json.loads(response.body.decode("utf-8-sig"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise IngestionError(
+                "SUPABASE_RESPONSE_INVALID",
+                f"Supabase returned invalid JSON for {table}",
+            ) from error
+        if not isinstance(payload, list):
+            raise IngestionError(
+                "SUPABASE_RESPONSE_INVALID",
+                f"Supabase returned an invalid row collection for {table}",
+            )
+        return [dict(item) for item in payload if isinstance(item, Mapping)]
+
+    def select_rows(
+        self,
+        table: str,
+        *,
+        select: str,
+        filters: Mapping[str, str] | None = None,
+        limit: int = 1_000,
+    ) -> list[dict[str, object]]:
+        if not select.strip():
+            raise ValueError("select must not be empty")
+        if limit <= 0:
+            raise ValueError("limit must be positive")
+        response = self._request(
+            "GET",
+            table,
+            query={"select": select, "limit": str(limit), **dict(filters or {})},
+        )
+        return self._decode_rows(response, table=table)
 
     def count_rows(self, table: str) -> int:
         response = self._request(

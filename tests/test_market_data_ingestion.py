@@ -175,6 +175,32 @@ def test_supabase_writer_reads_exact_count_header() -> None:
     assert writer.count_rows("daily_bars") == 27
 
 
+def test_supabase_writer_selects_private_rows_with_explicit_filters() -> None:
+    returned = json.dumps(
+        [{"benchmark_id": 1, "benchmark_code": "TWSE_TOTAL_RETURN_INDEX"}]
+    ).encode()
+    transport = FakeRestTransport([RestResponse(200, {}, returned)])
+    writer = SupabaseWriter(
+        url="https://example.supabase.co",
+        server_key="sb_secret_test-value",
+        transport=transport,
+    )
+
+    rows = writer.select_rows(
+        "benchmark_definitions",
+        select="benchmark_id,benchmark_code",
+        filters={"benchmark_code": "eq.TWSE_TOTAL_RETURN_INDEX"},
+        limit=2,
+    )
+
+    assert rows == [
+        {"benchmark_id": 1, "benchmark_code": "TWSE_TOTAL_RETURN_INDEX"}
+    ]
+    query = parse_qs(urlsplit(str(transport.calls[0]["url"])).query)
+    assert query["benchmark_code"] == ["eq.TWSE_TOTAL_RETURN_INDEX"]
+    assert query["limit"] == ["2"]
+
+
 def test_preserve_existing_uses_ignore_duplicates_for_earliest_available_at() -> None:
     transport = FakeRestTransport([RestResponse(201, {}, b"")])
     writer = SupabaseWriter(

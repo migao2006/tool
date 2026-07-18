@@ -3,8 +3,8 @@ horizon = 5
 status = "RESEARCH_ONLY"
 
 [benchmarks]
-listed = "TWSE_TAIEX_V1"
-otc = "TPEx_OTC_INDEX_V1"
+listed = "TWSE_TOTAL_RETURN_INDEX@official-total-return-close-v1"
+otc = "TPEX_TOTAL_RETURN_INDEX@official-total-return-close-v1"
 
 [data]
 available_at_policy = "feature.available_at <= decision_at"

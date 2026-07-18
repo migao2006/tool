@@ -89,7 +89,10 @@ class PointInTimeDatasetBuilder:
         _require_aware(decision_at, "decision_at")
         require_production_horizon(horizon)
         universe = self.security_master.common_stock_universe(
-            decision_at.date(), horizon=horizon, include_non_active=True
+            decision_at.date(),
+            decision_at=decision_at,
+            horizon=horizon,
+            include_non_active=True,
         )
         eligible = [observation for observation in self.observations if observation.available_at <= decision_at]
         future_count = len(self.observations) - len(eligible)

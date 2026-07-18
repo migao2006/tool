@@ -12,6 +12,7 @@
 5. `005_data_api_service_role.sql`
 6. `006_security_snapshot_contract.sql`
 7. `007_corporate_action_provenance.sql`
+8. `008_benchmark_contract.sql`
 
 全新專案依序執行七個檔案。既有專案需依序補上尚未執行的檔案；這些 migration
 均可安全重跑，且

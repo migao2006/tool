@@ -208,6 +208,13 @@ tests/            # 對應模組測試
 - 工具清單代表已偵測到的開發能力；實際使用前只需確認目前環境是否可執行，不必再次取得一般專案操作授權。Docker 目前不列為已安裝工具。
 - 部署與遠端資料庫變更仍須遵守第六章、第 1.1 節及第九章，使用可稽核、可回復且不暴露機密的方式執行。
 
+### 7.4.1 Windows 憑證與 CLI 驗證狀態
+
+- 2026-07-18 已以唯讀方式確認 Windows `CurrentUser` 與 `LocalMachine` 根憑證庫可存取，GitHub CLI、Vercel CLI、Supabase CLI、pnpm registry HTTPS 與 uv／PyPI 系統憑證連線均通過。
+- 上述結果是時間點狀態；遇到 token 到期、登入失效、憑證更新或網路環境變更時，應重新執行最小範圍的狀態檢查，不得直接假設永久有效。
+- pnpm 目前可直接使用系統憑證完成 HTTPS 連線；uv 需要網路時仍優先明確傳入 `--system-certs`，不需要為此永久關閉 TLS 驗證。
+- 只允許檢查憑證庫是否可存取及 CLI 是否已登入；不得列舉、匯出、記錄、提交或回傳憑證、token、密碼、私鑰與其他機密內容。
+
 ### 7.5 測試加速與快取
 
 - `pytest-xdist` 已納入測試依賴；大型或較慢的測試套件使用 `uv run pytest -n auto`，worker 上限與分派策略由 `pyproject.toml` 管理。

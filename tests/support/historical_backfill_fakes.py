@@ -217,9 +217,22 @@ class FakeLandingService:
         self.refresh_calls: int = 0
 
     def land_symbol(
-        self, *, symbol: str, start_date: date, end_date: date
+        self,
+        *,
+        symbol: str,
+        start_date: date,
+        end_date: date,
+        scheduled_market: str | None = None,
+        asset_type: str | None = None,
+        backfill_task_id: int | None = None,
     ) -> HistoricalSymbolLandingResult:
-        _ = (start_date, end_date)
+        _ = (
+            start_date,
+            end_date,
+            scheduled_market,
+            asset_type,
+            backfill_task_id,
+        )
         self.symbols.append(symbol)
         if self.latency_fn is not None:
             self.latency_fn(symbol)

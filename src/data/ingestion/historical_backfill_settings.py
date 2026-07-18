@@ -20,6 +20,14 @@ def _integer(
     return value
 
 
+def _storage_target(environment: Mapping[str, str]) -> str:
+    value = environment.get("HISTORICAL_BACKFILL_STORAGE_TARGET", "SUPABASE")
+    normalized = value.strip().upper()
+    if normalized not in {"SUPABASE", "R2"}:
+        raise ValueError("HISTORICAL_BACKFILL_STORAGE_TARGET must be SUPABASE or R2")
+    return normalized
+
+
 @dataclass(frozen=True)
 class HistoricalBackfillSettings:
     quota_reserve: int = 20
@@ -30,6 +38,9 @@ class HistoricalBackfillSettings:
     retry_after_seconds: int = 900
     pacing_floor_seconds: float = 6.5
     storage_safety_factor: float = 1.25
+    storage_target: str = "SUPABASE"
+    max_archive_objects_per_run: int = 100
+    max_archive_object_bytes: int = 50_000_000
 
     @classmethod
     def from_env(
@@ -37,9 +48,7 @@ class HistoricalBackfillSettings:
     ) -> "HistoricalBackfillSettings":
         values = os.environ if environment is None else environment
         return cls(
-            quota_reserve=_integer(
-                values, "FINMIND_QUOTA_RESERVE", 20, 0, 500
-            ),
+            quota_reserve=_integer(values, "FINMIND_QUOTA_RESERVE", 20, 0, 500),
             max_runtime_seconds=_integer(
                 values,
                 "HISTORICAL_BACKFILL_MAX_RUNTIME_SECONDS",
@@ -61,6 +70,21 @@ class HistoricalBackfillSettings:
                 100_000,
                 20_000_000,
             ),
+            storage_target=_storage_target(values),
+            max_archive_objects_per_run=_integer(
+                values,
+                "HISTORICAL_BACKFILL_MAX_ARCHIVE_OBJECTS_PER_RUN",
+                100,
+                1,
+                100,
+            ),
+            max_archive_object_bytes=_integer(
+                values,
+                "HISTORICAL_BACKFILL_MAX_ARCHIVE_OBJECT_BYTES",
+                50_000_000,
+                1_000_000,
+                500_000_000,
+            ),
         )
 
     def __post_init__(self) -> None:
@@ -68,3 +92,5 @@ class HistoricalBackfillSettings:
             raise ValueError("pacing_floor_seconds must not be negative")
         if not 1 <= self.storage_safety_factor <= 5:
             raise ValueError("storage_safety_factor must be between 1 and 5")
+        if self.storage_target not in {"SUPABASE", "R2"}:
+            raise ValueError("storage_target must be SUPABASE or R2")

@@ -20,6 +20,9 @@ except ModuleNotFoundError:
 add_project_root()
 
 from src.data.ingestion.contracts import IngestionError  # noqa: E402
+from src.data.ingestion.historical_archive_repository import (  # noqa: E402
+    HistoricalArchiveRepository,
+)
 from src.data.ingestion.historical_backfill_coordinator import (  # noqa: E402
     HistoricalBackfillCoordinator,
 )
@@ -29,10 +32,14 @@ from src.data.ingestion.historical_backfill_repository import (  # noqa: E402
 from src.data.ingestion.historical_backfill_settings import (  # noqa: E402
     HistoricalBackfillSettings,
 )
+from src.data.ingestion.historical_daily_bar_archive_service import (  # noqa: E402
+    HistoricalDailyBarArchiveService,
+)
 from src.data.ingestion.historical_daily_bar_landing_service import (  # noqa: E402
     HistoricalDailyBarLandingService,
 )
 from src.data.ingestion.supabase_writer import SupabaseWriter  # noqa: E402
+from src.data.object_storage.r2_client import R2Client  # noqa: E402
 from src.data.providers.errors import ProviderError  # noqa: E402
 from src.data.providers.finmind import FinMindClient  # noqa: E402
 from src.data.providers.settings import ApiProviderSettings  # noqa: E402
@@ -63,6 +70,20 @@ def _worker_id() -> str:
     return f"github-{run_id}-{attempt}-{uuid4().hex[:12]}"
 
 
+def build_archive_service(
+    *,
+    settings: HistoricalBackfillSettings,
+    writer: SupabaseWriter,
+) -> HistoricalDailyBarArchiveService | None:
+    if settings.storage_target != "R2":
+        return None
+    return HistoricalDailyBarArchiveService(
+        store=R2Client.from_env(),
+        repository=HistoricalArchiveRepository(writer),
+        max_object_bytes=settings.max_archive_object_bytes,
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     output = cast(Path, args.output)
@@ -75,12 +96,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             server_key=provider_settings.supabase_service_role_key,
             timeout=max(provider_settings.timeout_seconds, 30.0),
         )
+        archive_service = build_archive_service(
+            settings=runtime_settings,
+            writer=writer,
+        )
         summary = HistoricalBackfillCoordinator(
             provider=provider,
             repository=HistoricalBackfillRepository(writer),
             landing_service=HistoricalDailyBarLandingService(
                 provider=provider,
                 writer=writer,
+                archive_service=archive_service,
             ),
             settings=runtime_settings,
         ).run(

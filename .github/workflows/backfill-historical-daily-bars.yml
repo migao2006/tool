@@ -4,12 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       max_tasks:
-        description: Maximum FinMind symbols processed in this run
+        description: Maximum FinMind symbols processed by each credential
         required: true
-        default: 60
+        default: 20
         type: number
   schedule:
-    # One resumable worker every hour. FinMind quota and storage guards may stop a run early.
+    # Three isolated credential workers share one resumable queue every hour.
+    # Quota, runtime, and storage guards may stop any worker early.
     - cron: "17 * * * *"
 
 permissions:
@@ -20,64 +21,44 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  backfill:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v7
+  primary:
+    uses: ./.github/workflows/historical-daily-bar-backfill-worker.yml
+    with:
+      credential_slot: primary
+      max_tasks: ${{ inputs.max_tasks || 20 }}
+      r2_account_id: ${{ vars.R2_ACCOUNT_ID }}
+      r2_bucket_name: ${{ vars.R2_BUCKET_NAME }}
+    secrets:
+      finmind_token: ${{ secrets.FINMIND_TOKEN }}
+      r2_access_key_id: ${{ secrets.R2_ACCESS_KEY_ID }}
+      r2_secret_access_key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      supabase_url: ${{ secrets.SUPABASE_URL }}
+      supabase_service_role_key: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
 
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
+  secondary:
+    uses: ./.github/workflows/historical-daily-bar-backfill-worker.yml
+    with:
+      credential_slot: secondary
+      max_tasks: ${{ inputs.max_tasks || 20 }}
+      r2_account_id: ${{ vars.R2_ACCOUNT_ID }}
+      r2_bucket_name: ${{ vars.R2_BUCKET_NAME }}
+    secrets:
+      finmind_token: ${{ secrets.FINMIND_TOKEN_SECONDARY }}
+      r2_access_key_id: ${{ secrets.R2_ACCESS_KEY_ID }}
+      r2_secret_access_key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      supabase_url: ${{ secrets.SUPABASE_URL }}
+      supabase_service_role_key: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
 
-      - name: Install uv with dependency caching
-        uses: astral-sh/setup-uv@v8.3.2
-        with:
-          enable-cache: true
-          cache-dependency-glob: uv.lock
-
-      - name: Synchronize locked environment
-        run: uv sync --frozen
-
-      - name: Require backfill credentials
-        env:
-          FINMIND_TOKEN: ${{ secrets.FINMIND_TOKEN }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          for name in FINMIND_TOKEN SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY; do
-            if [[ -z "${!name:-}" ]]; then
-              echo "Required repository secret is not configured: $name"
-              exit 1
-            fi
-          done
-
-      - name: Run quota-aware resumable backfill
-        env:
-          FINMIND_TOKEN: ${{ secrets.FINMIND_TOKEN }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          API_HTTP_TIMEOUT_SECONDS: "30"
-          MAX_TASKS: ${{ inputs.max_tasks || 60 }}
-          FINMIND_QUOTA_RESERVE: "20"
-          HISTORICAL_BACKFILL_MAX_RUNTIME_SECONDS: "1200"
-          HISTORICAL_BACKFILL_MAX_DATABASE_BYTES: "420000000"
-        shell: bash
-        run: |
-          set -euo pipefail
-          uv run python -m scripts.backfill_historical_daily_bars \
-            --start-date 2021-07-19 \
-            --end-date 2026-07-17 \
-            --max-tasks "$MAX_TASKS" \
-            --output historical-backfill-summary.json
-
-      - name: Preserve backfill audit summary
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: historical-backfill-${{ github.run_id }}
-          path: historical-backfill-summary.json
-          if-no-files-found: warn
-          retention-days: 90
+  tertiary:
+    uses: ./.github/workflows/historical-daily-bar-backfill-worker.yml
+    with:
+      credential_slot: tertiary
+      max_tasks: ${{ inputs.max_tasks || 20 }}
+      r2_account_id: ${{ vars.R2_ACCOUNT_ID }}
+      r2_bucket_name: ${{ vars.R2_BUCKET_NAME }}
+    secrets:
+      finmind_token: ${{ secrets.FINMIND_TOKEN_TERTIARY }}
+      r2_access_key_id: ${{ secrets.R2_ACCESS_KEY_ID }}
+      r2_secret_access_key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      supabase_url: ${{ secrets.SUPABASE_URL }}
+      supabase_service_role_key: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}

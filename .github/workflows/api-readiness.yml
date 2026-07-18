@@ -27,7 +27,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          # requirements.lock includes the complete model stack and NumPy 2.5,
+          # which requires Python 3.12 or newer.
+          python-version: "3.12"
           cache: pip
           cache-dependency-path: requirements.lock
       - name: Install pinned dependencies

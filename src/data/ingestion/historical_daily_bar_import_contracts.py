@@ -6,6 +6,19 @@ from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
+class HistoricalSymbolLandingResult:
+    """Persisted result for one leased symbol and one immutable date range."""
+
+    symbol: str
+    fetched_rows: int
+    landed_rows: int
+    quarantined_rows: int
+    quarantine_issues: int
+    latest_trade_date: str
+    source_payload_hash: str
+
+
+@dataclass(frozen=True)
 class HistoricalDailyBarImportSummary:
     """Result of a bounded staging import; never a training-readiness claim."""
 

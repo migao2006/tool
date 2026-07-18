@@ -23,6 +23,7 @@ from .normalizers import (
     normalize_company_profiles,
     revision_version,
 )
+from .parallel_fetch import PayloadFetchRequest, fetch_provider_payloads
 from .quality import MIN_SECURITIES_PER_MARKET
 from .returned_ids import returned_id_map, returned_security_id_map
 from .supabase_writer import SupabaseWriter
@@ -85,12 +86,22 @@ class CorporateActionImporter:
         mops = self.registry["MOPS"]
         twse = self.registry["TWSE"]
         tpex = self.registry["TPEX"]
-        return {
-            "mops_listed_profiles": mops.fetch("listed_company_profile"),
-            "mops_otc_profiles": mops.fetch("otc_company_profile"),
-            "twse_ex_rights_forecast": twse.fetch("ex_rights"),
-            "tpex_ex_rights_forecast": tpex.fetch("ex_rights_forecast"),
-        }
+        return fetch_provider_payloads(
+            {
+                "mops_listed_profiles": PayloadFetchRequest(
+                    "MOPS", mops, "listed_company_profile"
+                ),
+                "mops_otc_profiles": PayloadFetchRequest(
+                    "MOPS", mops, "otc_company_profile"
+                ),
+                "twse_ex_rights_forecast": PayloadFetchRequest(
+                    "TWSE", twse, "ex_rights"
+                ),
+                "tpex_ex_rights_forecast": PayloadFetchRequest(
+                    "TPEX", tpex, "ex_rights_forecast"
+                ),
+            }
+        )
 
     @staticmethod
     def _securities(

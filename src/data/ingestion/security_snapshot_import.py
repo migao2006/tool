@@ -16,6 +16,7 @@ from .normalizers import (
     normalize_company_profiles,
     revision_version,
 )
+from .parallel_fetch import PayloadFetchRequest, fetch_provider_payloads
 from .quality import MIN_SECURITIES_PER_MARKET
 from .security_snapshot import (
     normalize_current_security_snapshot,
@@ -87,18 +88,40 @@ class SecuritySnapshotImporter:
             self.registry["TWSE"],
             self.registry["TPEX"],
         )
-        return {
-            "mops_listed_profiles": mops.fetch("listed_company_profile"),
-            "mops_otc_profiles": mops.fetch("otc_company_profile"),
-            "twse_restrictions": twse.fetch("changed_trading"),
-            "twse_suspended": twse.fetch("suspended"),
-            "twse_attention": twse.fetch("attention"),
-            "twse_disposals": twse.fetch("disposals"),
-            "tpex_restrictions": tpex.fetch("trading_restrictions"),
-            "tpex_suspended": tpex.fetch("suspended_history"),
-            "tpex_attention": tpex.fetch("attention"),
-            "tpex_disposals": tpex.fetch("disposals"),
-        }
+        return fetch_provider_payloads(
+            {
+                "mops_listed_profiles": PayloadFetchRequest(
+                    "MOPS", mops, "listed_company_profile"
+                ),
+                "mops_otc_profiles": PayloadFetchRequest(
+                    "MOPS", mops, "otc_company_profile"
+                ),
+                "twse_restrictions": PayloadFetchRequest(
+                    "TWSE", twse, "changed_trading"
+                ),
+                "twse_suspended": PayloadFetchRequest(
+                    "TWSE", twse, "suspended"
+                ),
+                "twse_attention": PayloadFetchRequest(
+                    "TWSE", twse, "attention"
+                ),
+                "twse_disposals": PayloadFetchRequest(
+                    "TWSE", twse, "disposals"
+                ),
+                "tpex_restrictions": PayloadFetchRequest(
+                    "TPEX", tpex, "trading_restrictions"
+                ),
+                "tpex_suspended": PayloadFetchRequest(
+                    "TPEX", tpex, "suspended_history"
+                ),
+                "tpex_attention": PayloadFetchRequest(
+                    "TPEX", tpex, "attention"
+                ),
+                "tpex_disposals": PayloadFetchRequest(
+                    "TPEX", tpex, "disposals"
+                ),
+            }
+        )
 
     @staticmethod
     def _bundles(

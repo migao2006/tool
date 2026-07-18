@@ -220,6 +220,37 @@ def test_supabase_writer_refreshes_home_status_with_private_rpc() -> None:
     assert call["headers"]["Content-Profile"] == "market_data"
 
 
+def test_supabase_writer_calls_private_rpc_with_json_parameters() -> None:
+    transport = FakeRestTransport(
+        [RestResponse(200, {}, json.dumps([{"task_id": 7}]).encode())]
+    )
+    writer = SupabaseWriter(
+        url="https://example.supabase.co",
+        server_key="sb_secret_test-value",
+        transport=transport,
+    )
+
+    result = writer.rpc("claim_historical_backfill_tasks", {"p_limit": 1})
+
+    assert result == [{"task_id": 7}]
+    call = transport.calls[0]
+    assert call["url"] == (
+        "https://example.supabase.co/rest/v1/rpc/claim_historical_backfill_tasks"
+    )
+    assert json.loads(call["body"]) == {"p_limit": 1}
+    assert call["headers"]["Content-Profile"] == "market_data"
+
+
+def test_supabase_writer_rejects_untrusted_rpc_identifiers() -> None:
+    writer = SupabaseWriter(
+        url="https://example.supabase.co",
+        server_key="sb_secret_test-value",
+        transport=FakeRestTransport([]),
+    )
+    with pytest.raises(ValueError, match="lowercase SQL identifier"):
+        writer.rpc("claim;drop table", {})
+
+
 def test_preserve_existing_uses_ignore_duplicates_for_earliest_available_at() -> None:
     transport = FakeRestTransport([RestResponse(201, {}, b"")])
     writer = SupabaseWriter(

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from datetime import date
-from typing import Any, Mapping
+from typing import Protocol, cast, final
 
+from src.data.providers.contracts import ProviderPayload
 from src.data.providers.registry import build_provider_registry
 from src.data.providers.settings import ApiProviderSettings
 
@@ -15,10 +17,34 @@ from .normalizers import (
     normalize_daily_bars,
     revision_version,
 )
+from .parallel_fetch import PayloadFetchRequest, fetch_provider_payloads
 from .quality import validate_first_stage_batch
+from .returned_ids import returned_id_map, returned_security_id_map
 from .supabase_writer import SupabaseWriter
 
 
+class DailyProvider(Protocol):
+    def fetch(self, dataset: str) -> ProviderPayload: ...
+
+
+class DailyWriter(Protocol):
+    def upsert(
+        self,
+        table: str,
+        rows: Sequence[Mapping[str, object]],
+        *,
+        on_conflict: str,
+        select: str | None = None,
+        return_rows: bool = False,
+        preserve_existing: bool = False,
+    ) -> list[dict[str, object]]: ...
+
+    def count_rows(self, table: str) -> int: ...
+
+    def refresh_home_data_status(self) -> None: ...
+
+
+@final
 class DailyMarketImporter:
     """Imports current source snapshots without pretending they are historical vintages."""
 
@@ -26,14 +52,18 @@ class DailyMarketImporter:
         self,
         *,
         settings: ApiProviderSettings,
-        registry: Mapping[str, Any] | None = None,
-        writer: SupabaseWriter | None = None,
+        registry: Mapping[str, DailyProvider] | None = None,
+        writer: DailyWriter | None = None,
     ) -> None:
         self.settings = settings
-        self.registry = dict(registry or build_provider_registry(settings))
+        providers = registry or cast(
+            Mapping[str, DailyProvider],
+            build_provider_registry(settings),
+        )
+        self.registry = dict(providers)
         self.writer = writer
 
-    def _writer(self) -> SupabaseWriter:
+    def _writer(self) -> DailyWriter:
         if self.writer is None:
             self.writer = SupabaseWriter(
                 url=self.settings.supabase_url,
@@ -49,12 +79,22 @@ class DailyMarketImporter:
 
         # Fetch every required payload before the first write. A provider failure
         # therefore cannot leave a falsely complete daily batch.
-        payloads = {
-            "mops_listed_profiles": mops.fetch("listed_company_profile"),
-            "mops_otc_profiles": mops.fetch("otc_company_profile"),
-            "twse_daily_bars": twse.fetch("daily_bars"),
-            "tpex_daily_bars": tpex.fetch("daily_bars"),
-        }
+        payloads = fetch_provider_payloads(
+            {
+                "mops_listed_profiles": PayloadFetchRequest(
+                    "MOPS", mops, "listed_company_profile"
+                ),
+                "mops_otc_profiles": PayloadFetchRequest(
+                    "MOPS", mops, "otc_company_profile"
+                ),
+                "twse_daily_bars": PayloadFetchRequest(
+                    "TWSE", twse, "daily_bars"
+                ),
+                "tpex_daily_bars": PayloadFetchRequest(
+                    "TPEX", tpex, "daily_bars"
+                ),
+            }
+        )
         fetched = {
             name: int(payload.record_count or 0)
             for name, payload in payloads.items()
@@ -112,10 +152,11 @@ class DailyMarketImporter:
                 select="source_id,source_code",
                 return_rows=True,
             )
-            source_ids = {
-                str(row["source_code"]): int(row["source_id"])
-                for row in written_sources
-            }
+            source_ids = returned_id_map(
+                written_sources,
+                code_key="source_code",
+                id_key="source_id",
+            )
             if set(source_ids) != {"MOPS", "TWSE", "TPEX"}:
                 raise IngestionError(
                     "DATA_SOURCE_UPSERT_INCOMPLETE",
@@ -133,10 +174,7 @@ class DailyMarketImporter:
                 select="security_id,market,symbol",
                 return_rows=True,
             )
-            security_ids = {
-                (str(row["market"]), str(row["symbol"])): int(row["security_id"])
-                for row in written_securities
-            }
+            security_ids = returned_security_id_map(written_securities)
             if len(security_ids) != len(securities):
                 raise IngestionError(
                     "SECURITY_MASTER_UPSERT_INCOMPLETE",
@@ -159,7 +197,7 @@ class DailyMarketImporter:
 
         database_counts: dict[str, int] = {}
         if not dry_run:
-            self._writer().upsert(
+            _ = self._writer().upsert(
                 "daily_bars",
                 bars,
                 on_conflict="security_id,trade_date,source_id,source_version",

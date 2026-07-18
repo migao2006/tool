@@ -95,21 +95,21 @@ def test_snapshot_importer_dry_run_fetches_all_sources_without_writing() -> None
 
     assert writer.calls == []
     assert writer.refresh_calls == 0
-    assert providers["MOPS"].calls == [
+    assert sorted(providers["MOPS"].calls) == [
         "listed_company_profile",
         "otc_company_profile",
     ]
-    assert providers["TWSE"].calls == [
+    assert sorted(providers["TWSE"].calls) == [
+        "attention",
         "changed_trading",
+        "disposals",
         "suspended",
-        "attention",
-        "disposals",
     ]
-    assert providers["TPEX"].calls == [
-        "trading_restrictions",
-        "suspended_history",
+    assert sorted(providers["TPEX"].calls) == [
         "attention",
         "disposals",
+        "suspended_history",
+        "trading_restrictions",
     ]
     assert summary.normalized_records["securities"] == 1_000
     assert summary.normalized_records["security_history"] == 1_000
@@ -180,6 +180,21 @@ def test_low_market_coverage_fails_before_first_write() -> None:
 
     assert captured.value.reason_code == "SECURITY_MASTER_COVERAGE_TOO_LOW"
     assert writer.calls == []
+
+
+def test_provider_failure_during_parallel_fetch_happens_before_first_write() -> None:
+    providers = registry()
+    del providers["TWSE"].payloads["attention"]
+    writer = FakeWriter()
+    importer = SecuritySnapshotImporter(
+        settings=ApiProviderSettings(), registry=providers, writer=writer
+    )
+
+    with pytest.raises(KeyError, match="attention"):
+        importer.run(snapshot_date=SNAPSHOT_DATE)
+
+    assert writer.calls == []
+    assert writer.refresh_calls == 0
 
 
 def test_non_session_snapshot_can_be_diagnosed_but_not_written() -> None:

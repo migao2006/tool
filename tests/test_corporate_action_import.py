@@ -35,7 +35,7 @@ def test_importer_dry_run_fetches_all_sources_and_never_writes() -> None:
 
     assert writer.calls == []
     assert writer.refresh_calls == 0
-    assert providers["MOPS"].calls == [
+    assert sorted(providers["MOPS"].calls) == [
         "listed_company_profile",
         "otc_company_profile",
     ]

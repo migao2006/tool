@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from http.client import HTTPResponse
 import json
+import re
 import ssl
-from typing import Mapping, Protocol, Sequence
+from typing import Protocol, cast, final
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -19,6 +22,9 @@ from src.data.providers.supabase_credentials import (
 )
 
 from .contracts import IngestionError
+
+
+RPC_IDENTIFIER = re.compile(r"^[a-z][a-z0-9_]*$")
 
 
 @dataclass(frozen=True)
@@ -40,6 +46,7 @@ class RestTransport(Protocol):
     ) -> RestResponse: ...
 
 
+@final
 class UrlLibRestTransport:
     def __init__(self) -> None:
         self.ssl_context = truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
@@ -55,7 +62,10 @@ class UrlLibRestTransport:
     ) -> RestResponse:
         request = Request(url, data=body, headers=dict(headers), method=method)
         try:
-            with urlopen(request, timeout=timeout, context=self.ssl_context) as response:  # noqa: S310
+            with cast(
+                HTTPResponse,
+                urlopen(request, timeout=timeout, context=self.ssl_context),  # noqa: S310
+            ) as response:
                 return RestResponse(response.status, dict(response.headers.items()), response.read())
         except HTTPError as error:
             return RestResponse(
@@ -70,6 +80,7 @@ class UrlLibRestTransport:
             ) from error
 
 
+@final
 class SupabaseWriter:
     def __init__(
         self,
@@ -82,12 +93,12 @@ class SupabaseWriter:
         transport: RestTransport | None = None,
     ) -> None:
         normalized_key = normalize_server_key(server_key)
-        key_kind = classify_server_key(normalized_key)
         if not url or not normalized_key:
             raise IngestionError(
                 "SUPABASE_WRITE_CREDENTIALS_MISSING",
                 "Supabase server-side write credentials are required",
             )
+        key_kind = classify_server_key(normalized_key)
         if key_kind is SupabaseKeyKind.PUBLISHABLE:
             raise IngestionError(
                 "SUPABASE_SERVER_KEY_REQUIRED",
@@ -110,7 +121,7 @@ class SupabaseWriter:
         self.batch_size = batch_size
         self.transport = transport or UrlLibRestTransport()
 
-    def __repr__(self) -> str:
+    def __repr__(self) -> str:  # pyright: ignore[reportImplicitOverride]
         return f"SupabaseWriter(base_url={self.base_url!r}, schema={self.schema!r})"
 
     def _headers(self) -> dict[str, str]:
@@ -196,7 +207,7 @@ class SupabaseWriter:
         table: str,
     ) -> list[dict[str, object]]:
         try:
-            payload = json.loads(response.body.decode("utf-8-sig"))
+            payload = cast(object, json.loads(response.body.decode("utf-8-sig")))
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
             raise IngestionError(
                 "SUPABASE_RESPONSE_INVALID",
@@ -207,7 +218,11 @@ class SupabaseWriter:
                 "SUPABASE_RESPONSE_INVALID",
                 f"Supabase returned an invalid row collection for {table}",
             )
-        return [dict(item) for item in payload if isinstance(item, Mapping)]
+        return [
+            dict(cast(Mapping[str, object], item))
+            for item in cast(list[object], payload)
+            if isinstance(item, Mapping)
+        ]
 
     def select_rows(
         self,
@@ -227,6 +242,43 @@ class SupabaseWriter:
             query={"select": select, "limit": str(limit), **dict(filters or {})},
         )
         return self._decode_rows(response, table=table)
+
+    def rpc(
+        self,
+        function_name: str,
+        parameters: Mapping[str, object],
+    ) -> object:
+        """Call one private-schema RPC without weakening its database grants."""
+
+        if not RPC_IDENTIFIER.fullmatch(function_name):
+            raise ValueError("function_name must be a lowercase SQL identifier")
+        body = json.dumps(
+            dict(parameters),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        response = self.transport.request(
+            "POST",
+            f"{self.base_url}/rpc/{function_name}",
+            headers=self._headers(),
+            body=body,
+            timeout=self.timeout,
+        )
+        if not 200 <= response.status_code < 300:
+            raise IngestionError(
+                "SUPABASE_RPC_REJECTED",
+                (
+                    "Supabase rejected POST for "
+                    f"rpc/{function_name} with HTTP {response.status_code}"
+                ),
+            )
+        try:
+            return cast(object, json.loads(response.body.decode("utf-8-sig")))
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise IngestionError(
+                "SUPABASE_RESPONSE_INVALID",
+                f"Supabase returned invalid JSON for rpc/{function_name}",
+            ) from error
 
     def count_rows(self, table: str) -> int:
         response = self._request(

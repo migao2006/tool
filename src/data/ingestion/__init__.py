@@ -2,5 +2,10 @@
 
 from .calendar_import import TradingCalendarImporter
 from .daily_import import DailyMarketImporter
+from .security_snapshot_import import SecuritySnapshotImporter
 
-__all__ = ["DailyMarketImporter", "TradingCalendarImporter"]
+__all__ = [
+    "DailyMarketImporter",
+    "SecuritySnapshotImporter",
+    "TradingCalendarImporter",
+]

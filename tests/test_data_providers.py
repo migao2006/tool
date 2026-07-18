@@ -185,7 +185,8 @@ def test_private_providers_fail_closed_without_credentials(factory, reason_code:
 
 def test_fred_requires_vintage_and_redacts_api_key() -> None:
     transport = FakeTransport({"observations": []})
-    payload = FredClient(api_key="fred-secret", http=http_for(transport)).observations(
+    api_key = "a" * 32
+    payload = FredClient(api_key=api_key, http=http_for(transport)).observations(
         "DGS10",
         as_of_date="2026-07-17",
         observation_start="2026-07-01",
@@ -193,8 +194,35 @@ def test_fred_requires_vintage_and_redacts_api_key() -> None:
     query = parse_qs(urlsplit(str(transport.calls[0]["url"])).query)
     assert query["realtime_start"] == ["2026-07-17"]
     assert query["realtime_end"] == ["2026-07-17"]
-    assert "fred-secret" not in payload.source_url
+    assert api_key not in payload.source_url
     assert "%5BREDACTED%5D" in payload.source_url or "REDACTED" in payload.source_url
+
+
+@pytest.mark.parametrize(
+    "pasted_secret",
+    [
+        "FRED_API_KEY=" + ("a" * 32),
+        '"FRED_API_KEY=' + ("b" * 32) + '"',
+        "  " + ("c" * 32) + "  ",
+    ],
+)
+def test_fred_normalizes_common_github_secret_paste_forms(pasted_secret: str) -> None:
+    transport = FakeTransport({"observations": []})
+    FredClient(api_key=pasted_secret, http=http_for(transport)).observations(
+        "DGS10", as_of_date="2026-07-17"
+    )
+    assert len(parse_qs(urlsplit(str(transport.calls[0]["url"])).query)["api_key"][0]) == 32
+
+
+def test_fred_rejects_invalid_key_shape_before_request() -> None:
+    transport = FakeTransport({"observations": []})
+    client = FredClient(api_key="not-a-registered-key", http=http_for(transport))
+
+    with pytest.raises(ProviderConfigurationError) as captured:
+        client.observations("DGS10", as_of_date="2026-07-17")
+
+    assert captured.value.reason_code == "FRED_API_KEY_FORMAT_INVALID"
+    assert transport.calls == []
 
 
 def test_twelve_data_uses_daily_utc_series_and_redacts_key() -> None:

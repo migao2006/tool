@@ -1,6 +1,7 @@
 # Supabase 5 日 MVP 資料骨架
 
-`market_data` 是未對前端 Data API 公開的研究資料 schema。資料匯入、訓練、推論與回測應由受控的伺服器工作使用 `service_role` 執行；`service_role` 絕不可放入瀏覽器或 Git。
+`market_data` 是只允許伺服器端 `service_role` 存取的研究資料 schema。它會註冊於 Data API，
+但 `anon`／`authenticated` 沒有 schema 或資料表權限；`service_role` 絕不可放入瀏覽器或 Git。
 
 執行順序：
 
@@ -8,9 +9,11 @@
 2. `002_research_outputs.sql`
 3. `003_validation_and_security.sql`
 4. `004_contract_alignment.sql`
+5. `005_data_api_service_role.sql`
 
-全新專案依序執行四個檔案。已建立前三個檔案的既有專案只需執行
-`004_contract_alignment.sql`；該檔案以單一 transaction 套用，失敗時不會留下
+全新專案依序執行五個檔案。已建立前三個檔案的既有專案需依序執行
+`004_contract_alignment.sql` 與 `005_data_api_service_role.sql`；兩者均可安全重跑，且
+`004_contract_alignment.sql` 以單一 transaction 套用，失敗時不會留下
 部分變更，且可安全重跑。執行角色必須是 `market_data` 物件擁有者，才能讓
 `ALTER DEFAULT PRIVILEGES` 同時套用到日後由同一角色建立的物件。
 

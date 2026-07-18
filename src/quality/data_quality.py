@@ -123,20 +123,34 @@ def evaluate_data_quality(
 
     if security.asset_type != AssetType.COMMON_STOCK:
         reasons.append("ETF_EXCLUDED_FROM_STOCK_MODEL")
-    if security.trading_status == TradingStatus.SUSPENDED:
+    if security.trading_status == TradingStatus.UNKNOWN:
+        reasons.append("TRADING_STATUS_UNKNOWN")
+    elif security.trading_status == TradingStatus.SUSPENDED:
         reasons.append("TRADING_SUSPENDED")
     elif security.trading_status == TradingStatus.STOPPED:
         reasons.append("TRADING_STOPPED")
     elif security.trading_status == TradingStatus.DELISTED:
         reasons.append("SECURITY_DELISTED")
-    if security.disposition_flag:
+    if security.attention_flag is None:
+        reasons.append("ATTENTION_STATUS_UNKNOWN")
+    if security.disposition_flag is None:
+        reasons.append("DISPOSITION_STATUS_UNKNOWN")
+    elif security.disposition_flag:
         reasons.append("DISPOSITION_SECURITY")
-    if security.altered_trading_method_flag:
+    if security.altered_trading_method_flag is None:
+        reasons.append("ALTERED_TRADING_METHOD_STATUS_UNKNOWN")
+    elif security.altered_trading_method_flag:
         reasons.append("ALTERED_TRADING_METHOD")
-    if security.full_delivery_flag:
+    if security.full_delivery_flag is None:
+        reasons.append("FULL_DELIVERY_STATUS_UNKNOWN")
+    elif security.full_delivery_flag:
         reasons.append("FULL_DELIVERY_SECURITY")
-    if security.periodic_auction_flag:
+    if security.periodic_auction_flag is None:
+        reasons.append("PERIODIC_AUCTION_STATUS_UNKNOWN")
+    elif security.periodic_auction_flag:
         reasons.append("PERIODIC_AUCTION_SECURITY")
+    if security.suspended_flag is None:
+        reasons.append("SUSPENSION_STATUS_UNKNOWN")
     if security.attention_flag and config.exclude_attention:
         reasons.append("ATTENTION_SECURITY_EXCLUDED")
 

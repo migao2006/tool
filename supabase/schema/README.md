@@ -10,9 +10,10 @@
 3. `003_validation_and_security.sql`
 4. `004_contract_alignment.sql`
 5. `005_data_api_service_role.sql`
+6. `006_security_snapshot_contract.sql`
 
-全新專案依序執行五個檔案。已建立前三個檔案的既有專案需依序執行
-`004_contract_alignment.sql` 與 `005_data_api_service_role.sql`；兩者均可安全重跑，且
+全新專案依序執行六個檔案。既有專案需依序補上尚未執行的檔案；這些 migration
+均可安全重跑，且
 `004_contract_alignment.sql` 以單一 transaction 套用，失敗時不會留下
 部分變更，且可安全重跑。執行角色必須是 `market_data` 物件擁有者，才能讓
 `ALTER DEFAULT PRIVILEGES` 同時套用到日後由同一角色建立的物件。

@@ -13,3 +13,18 @@ def finmind_data_source_row() -> dict[str, object]:
         "revision_policy": "PAYLOAD_HASH_VERSIONED_RETRIEVED_AT_LOWER_BOUND",
         "is_active": True,
     }
+
+
+def security_snapshot_source_rows() -> list[dict[str, object]]:
+    """Derived rows bind MOPS identity data to exchange trading-state data."""
+
+    return [
+        {
+            "source_code": f"{market}_MOPS_SNAPSHOT",
+            "display_name": f"{market} + MOPS point-in-time security snapshot",
+            "source_timezone": "Asia/Taipei",
+            "revision_policy": "DAILY_COMPOSITE_HASH_FIRST_OBSERVATION",
+            "is_active": True,
+        }
+        for market in ("TWSE", "TPEX")
+    ]

@@ -23,6 +23,13 @@ def _security(**overrides: object) -> SecurityRecord:
         "industry": "半導體",
         "asset_type": AssetType.COMMON_STOCK,
         "valid_from": date(1994, 9, 5),
+        "trading_status": TradingStatus.ACTIVE,
+        "attention_flag": False,
+        "disposition_flag": False,
+        "altered_trading_method_flag": False,
+        "full_delivery_flag": False,
+        "periodic_auction_flag": False,
+        "suspended_flag": False,
     }
     values.update(overrides)
     return SecurityRecord(**values)
@@ -100,6 +107,23 @@ def test_attention_is_not_excluded_without_explicit_configuration() -> None:
     assert "ATTENTION_SECURITY_EXCLUDED" in excluded.reason_codes
 
 
+def test_unknown_security_state_is_always_a_hard_fail() -> None:
+    result = evaluate_data_quality(
+        _input(
+            _security(
+                trading_status=TradingStatus.UNKNOWN,
+                full_delivery_flag=None,
+                suspended_flag=None,
+            )
+        )
+    )
+
+    assert result.hard_fail is True
+    assert "TRADING_STATUS_UNKNOWN" in result.reason_codes
+    assert "FULL_DELIVERY_STATUS_UNKNOWN" in result.reason_codes
+    assert "SUSPENSION_STATUS_UNKNOWN" in result.reason_codes
+
+
 def test_live_decision_does_not_require_future_execution_prices() -> None:
     decision_result = evaluate_data_quality(
         _input(
@@ -124,7 +148,6 @@ def test_live_decision_does_not_require_future_execution_prices() -> None:
 
 
 def test_fresh_source_cannot_hide_another_stale_source() -> None:
-    decision_at = datetime(2026, 7, 17, 17, tzinfo=TAIPEI)
     result = evaluate_data_quality(
         _input(
             _security(),

@@ -25,6 +25,7 @@ class AssetType(str, Enum):
 
 
 class TradingStatus(str, Enum):
+    UNKNOWN = "UNKNOWN"
     ACTIVE = "ACTIVE"
     SUSPENDED = "SUSPENDED"
     STOPPED = "STOPPED"
@@ -44,12 +45,13 @@ class SecurityRecord:
     valid_to: date | None = None
     listing_date: date | None = None
     delisting_date: date | None = None
-    trading_status: TradingStatus = TradingStatus.ACTIVE
-    attention_flag: bool = False
-    disposition_flag: bool = False
-    altered_trading_method_flag: bool = False
-    full_delivery_flag: bool = False
-    periodic_auction_flag: bool = False
+    trading_status: TradingStatus = TradingStatus.UNKNOWN
+    attention_flag: bool | None = None
+    disposition_flag: bool | None = None
+    altered_trading_method_flag: bool | None = None
+    full_delivery_flag: bool | None = None
+    periodic_auction_flag: bool | None = None
+    suspended_flag: bool | None = None
 
     def __post_init__(self) -> None:
         if not self.symbol or not self.name:

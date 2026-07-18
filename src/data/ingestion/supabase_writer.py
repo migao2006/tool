@@ -1,0 +1,226 @@
+"""Private-schema Supabase REST writer with batched idempotent upserts."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+import json
+import ssl
+from typing import Mapping, Protocol, Sequence
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
+
+import truststore
+
+from src.data.providers.supabase_credentials import (
+    SupabaseKeyKind,
+    classify_server_key,
+    normalize_server_key,
+)
+
+from .contracts import IngestionError
+
+
+@dataclass(frozen=True)
+class RestResponse:
+    status_code: int
+    headers: Mapping[str, str]
+    body: bytes
+
+
+class RestTransport(Protocol):
+    def request(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: Mapping[str, str],
+        body: bytes | None,
+        timeout: float,
+    ) -> RestResponse: ...
+
+
+class UrlLibRestTransport:
+    def __init__(self) -> None:
+        self.ssl_context = truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+
+    def request(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: Mapping[str, str],
+        body: bytes | None,
+        timeout: float,
+    ) -> RestResponse:
+        request = Request(url, data=body, headers=dict(headers), method=method)
+        try:
+            with urlopen(request, timeout=timeout, context=self.ssl_context) as response:  # noqa: S310
+                return RestResponse(response.status, dict(response.headers.items()), response.read())
+        except HTTPError as error:
+            return RestResponse(
+                error.code,
+                dict(error.headers.items()) if error.headers else {},
+                error.read(),
+            )
+        except (OSError, TimeoutError, URLError) as error:
+            raise IngestionError(
+                "SUPABASE_CONNECTION_ERROR",
+                "Supabase write request could not be completed",
+            ) from error
+
+
+class SupabaseWriter:
+    def __init__(
+        self,
+        *,
+        url: str | None,
+        server_key: str | None,
+        schema: str = "market_data",
+        timeout: float = 30.0,
+        batch_size: int = 500,
+        transport: RestTransport | None = None,
+    ) -> None:
+        normalized_key = normalize_server_key(server_key)
+        key_kind = classify_server_key(normalized_key)
+        if not url or not normalized_key:
+            raise IngestionError(
+                "SUPABASE_WRITE_CREDENTIALS_MISSING",
+                "Supabase server-side write credentials are required",
+            )
+        if key_kind is SupabaseKeyKind.PUBLISHABLE:
+            raise IngestionError(
+                "SUPABASE_SERVER_KEY_REQUIRED",
+                "A publishable key cannot write private market data",
+            )
+        if key_kind not in {SupabaseKeyKind.OPAQUE_SECRET, SupabaseKeyKind.LEGACY_JWT}:
+            raise IngestionError(
+                "SUPABASE_SERVER_KEY_FORMAT_INVALID",
+                "The configured Supabase server key format is invalid",
+            )
+        if not url.startswith("https://"):
+            raise IngestionError("SUPABASE_URL_INVALID", "Supabase URL must use HTTPS")
+        if timeout <= 0 or batch_size <= 0:
+            raise ValueError("timeout and batch_size must be positive")
+        self.base_url = f"{url.rstrip('/')}/rest/v1"
+        self._server_key = normalized_key
+        self._legacy_jwt = key_kind is SupabaseKeyKind.LEGACY_JWT
+        self.schema = schema
+        self.timeout = timeout
+        self.batch_size = batch_size
+        self.transport = transport or UrlLibRestTransport()
+
+    def __repr__(self) -> str:
+        return f"SupabaseWriter(base_url={self.base_url!r}, schema={self.schema!r})"
+
+    def _headers(self) -> dict[str, str]:
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "Accept-Profile": self.schema,
+            "Content-Profile": self.schema,
+            "User-Agent": "AlphaLens-Ingestion/0.1",
+            "apikey": self._server_key,
+        }
+        if self._legacy_jwt:
+            headers["Authorization"] = f"Bearer {self._server_key}"
+        return headers
+
+    def _request(
+        self,
+        method: str,
+        table: str,
+        *,
+        query: Mapping[str, str] | None = None,
+        rows: Sequence[Mapping[str, object]] | None = None,
+        extra_headers: Mapping[str, str] | None = None,
+    ) -> RestResponse:
+        url = f"{self.base_url}/{table}"
+        if query:
+            url = f"{url}?{urlencode(query)}"
+        body = None if rows is None else json.dumps(rows, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        response = self.transport.request(
+            method,
+            url,
+            headers={**self._headers(), **dict(extra_headers or {})},
+            body=body,
+            timeout=self.timeout,
+        )
+        if not 200 <= response.status_code < 300:
+            raise IngestionError(
+                "SUPABASE_WRITE_REJECTED",
+                f"Supabase rejected {method} for {table} with HTTP {response.status_code}",
+            )
+        return response
+
+    def upsert(
+        self,
+        table: str,
+        rows: Sequence[Mapping[str, object]],
+        *,
+        on_conflict: str,
+        select: str | None = None,
+        return_rows: bool = False,
+        preserve_existing: bool = False,
+    ) -> list[dict[str, object]]:
+        if not rows:
+            return []
+        returned: list[dict[str, object]] = []
+        for offset in range(0, len(rows), self.batch_size):
+            batch = rows[offset : offset + self.batch_size]
+            query = {"on_conflict": on_conflict}
+            if select:
+                query["select"] = select
+            response = self._request(
+                "POST",
+                table,
+                query=query,
+                rows=batch,
+                extra_headers={
+                    "Prefer": (
+                        "resolution=ignore-duplicates" if preserve_existing
+                        else "resolution=merge-duplicates"
+                    )
+                    + ",missing=default,"
+                    + ("return=representation" if return_rows else "return=minimal")
+                },
+            )
+            if return_rows:
+                try:
+                    payload = json.loads(response.body.decode("utf-8-sig"))
+                except (UnicodeDecodeError, json.JSONDecodeError) as error:
+                    raise IngestionError(
+                        "SUPABASE_RESPONSE_INVALID",
+                        f"Supabase returned invalid JSON for {table}",
+                    ) from error
+                if not isinstance(payload, list):
+                    raise IngestionError(
+                        "SUPABASE_RESPONSE_INVALID",
+                        f"Supabase returned an invalid row collection for {table}",
+                    )
+                returned.extend(dict(item) for item in payload if isinstance(item, Mapping))
+        return returned
+
+    def count_rows(self, table: str) -> int:
+        response = self._request(
+            "GET",
+            table,
+            query={"select": "*", "limit": "1"},
+            extra_headers={"Prefer": "count=exact", "Range": "0-0"},
+        )
+        content_range = next(
+            (value for key, value in response.headers.items() if key.casefold() == "content-range"),
+            None,
+        )
+        if not content_range or "/" not in content_range:
+            raise IngestionError(
+                "SUPABASE_COUNT_UNAVAILABLE",
+                f"Supabase did not return an exact count for {table}",
+            )
+        total = content_range.rsplit("/", 1)[-1]
+        if not total.isdigit():
+            raise IngestionError(
+                "SUPABASE_COUNT_UNAVAILABLE",
+                f"Supabase returned an invalid count for {table}",
+            )
+        return int(total)

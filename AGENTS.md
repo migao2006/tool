@@ -158,7 +158,34 @@ tests/            # 對應模組測試
 - 個人資料表必須啟用 RLS，並以 `auth.uid()` 限制資料擁有者。
 - 登入或資料庫未連接時，顯示真實原因並停用不可能成功的操作，不得模擬完成。
 
-## 七、工作流程與驗證尺度
+## 七、工具鏈與自動檢查
+
+目前可用工具鏈包含 Git、GitHub CLI、Node.js、npm、pnpm、Python、uv、pytest、Ruff、basedpyright、pre-commit、Playwright、Biome、SQLFluff、actionlint、Gitleaks、pip-audit、Supabase CLI 與 Vercel CLI。工具已安裝不代表自動授權部署、修改遠端資料、變更資料庫或改寫專案設定。
+
+### 7.1 Python
+
+- Python 環境與套件優先使用 `uv`；專案依賴寫入 `pyproject.toml` 並以 `uv.lock` 鎖定，不得依賴本機全域套件才能執行。
+- 使用 Ruff 做格式化與 lint、basedpyright 做型別檢查、pytest 做測試、pip-audit 做相依套件漏洞檢查。
+- 未有明確必要時，不再加入 Black、Flake8、isort、mypy、Poetry 或 pip-tools 等重疊工具。
+- 格式化、型別與安全掃描不能取代標籤、交易成本、時間切割及資料洩漏測試。
+
+### 7.2 前端與瀏覽器
+
+- 前端套件管理統一使用 `pnpm`，不得同時提交 npm 或 Yarn lockfile。
+- 使用 Biome 檢查及格式化 JavaScript、CSS、JSON；使用 Playwright 執行真實瀏覽器互動測試。
+- 全域 Biome 只供本機操作。正式接入專案時，必須在 `package.json` 鎖定版本、提交 `pnpm-lock.yaml` 與 `biome.json`，並排除 `src/vendor`、壓縮檔及其他第三方產物。
+- 已使用 Playwright 時，不新增 Selenium、Cypress 或 Puppeteer，除非有已記錄且 Playwright 無法滿足的需求。
+- 瀏覽器測試至少覆蓋主要導覽、登入狀態、空資料、API 錯誤及 iPhone viewport；不得使用假預測資料讓測試通過。
+
+### 7.3 SQL、工作流程與機密
+
+- Supabase SQL 使用 SQLFluff 的 PostgreSQL dialect 做針對性檢查；不得讓 formatter 未經審查大量改寫 migration 或 schema。
+- GitHub Actions workflow 使用 actionlint 檢查；CI 執行指令應與本機一致，不得假設 runner 已安裝任何全域工具。
+- Gitleaks 用於提交前與 CI 機密掃描；pip-audit 用於 Python 相依安全檢查。掃描結果不得在公開輸出中完整顯示 secret。
+- 任何已曝光的 API key、token 或密碼都必須輪替；加入 ignore 或刪除目前檔案不能消除 Git 歷史中的洩漏。
+- pre-commit hook 必須由版本化的 `.pre-commit-config.yaml` 管理；自動修正後要重新檢查差異，不得覆蓋使用者的無關修改。
+
+## 八、工作流程與驗證尺度
 
 1. 修改前先讀取相關程式、schema、測試及 Git 差異。
 2. 先確認輸入、輸出與模組邊界，再做最小必要修改。
@@ -168,7 +195,7 @@ tests/            # 對應模組測試
 6. 只能回報實際執行過的測試；缺少真實資料時列出缺口，不以合成結果冒充正式績效。
 7. 溝通只保留開始、重要階段、阻塞與交付；不必每句附完成度或等待時間。
 
-## 八、Git 與發布限制
+## 九、Git 與發布限制
 
 - 本專案只允許使用 Git 提交並推送至 GitHub。
 - 未經使用者在當次任務明確授權，禁止操作 Vercel 或任何其他部署平台，包括 CLI、API、MCP、建立、提升、回復及刪除部署。
@@ -176,7 +203,7 @@ tests/            # 對應模組測試
 - 每次提交只包含本次任務相關檔案；提交前檢查差異、測試、未追蹤檔案及機密。
 - GitHub 推送若受登入、權限、憑證或網路阻擋，直接回報，不得改用其他平台繞過。
 
-## 九、完成條件
+## 十、完成條件
 
 - 模組責任清楚，沒有新增巨型檔案、假分層或循環依賴。
 - UI、資料、模型、決策、驗證與回測沒有互相混寫。

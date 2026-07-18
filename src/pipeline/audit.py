@@ -14,6 +14,7 @@ class BatchAudit:
     passed: bool
     record_count: int
     reason_codes: tuple[str, ...]
+    latest_decision_date: date | None = None
 
 
 def _frame_columns(records: Any) -> set[str]:
@@ -42,7 +43,9 @@ def audit_batch(
     required = {"symbol", "horizon", "decision_at", "available_at"}
     missing = sorted(required.difference(columns))
     if missing:
-        return BatchAudit(False, count, tuple(f"MISSING_COLUMN:{name}" for name in missing))
+        return BatchAudit(
+            False, count, tuple(f"MISSING_COLUMN:{name}" for name in missing)
+        )
 
     try:
         import pandas as pd
@@ -50,7 +53,7 @@ def audit_batch(
         return BatchAudit(False, count, ("PANDAS_NOT_INSTALLED",))
 
     reasons: list[str] = []
-    horizon_values = pd.to_numeric(records["horizon"], errors="coerce")
+    horizon_values: Any = pd.to_numeric(records["horizon"], errors="coerce")
     if horizon_values.isna().any() or not (horizon_values == horizon).all():
         reasons.append("HORIZON_MISMATCH")
 
@@ -60,12 +63,31 @@ def audit_batch(
         reasons.append("INVALID_DECISION_AT")
     if available.isna().any():
         reasons.append("INVALID_AVAILABLE_AT")
-    if not decisions.isna().any() and not available.isna().any() and (available > decisions).any():
+    if (
+        not decisions.isna().any()
+        and not available.isna().any()
+        and (available > decisions).any()
+    ):
         reasons.append("POINT_IN_TIME_VIOLATION")
 
-    if records["symbol"].isna().any() or (records["symbol"].astype(str).str.strip() == "").any():
+    if (
+        records["symbol"].isna().any()
+        or (records["symbol"].astype(str).str.strip() == "").any()
+    ):
         reasons.append("INVALID_SYMBOL")
-    if mode is PipelineMode.INFER and as_of_date is not None and not decisions.isna().any():
+    if (
+        mode is PipelineMode.INFER
+        and as_of_date is not None
+        and not decisions.isna().any()
+    ):
         if (decisions.dt.date > as_of_date).any():
             reasons.append("INFERENCE_USES_FUTURE_DECISION")
-    return BatchAudit(not reasons, count, tuple(dict.fromkeys(reasons)))
+    latest_decision_date = None
+    if not decisions.isna().any():
+        latest_decision_date = max(decisions.dt.date)
+    return BatchAudit(
+        not reasons,
+        count,
+        tuple(dict.fromkeys(reasons)),
+        latest_decision_date,
+    )

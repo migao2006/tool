@@ -11,6 +11,8 @@ from typing import Any, Mapping, Protocol, runtime_checkable
 from src.config.types import MvpConfig
 from src.core.horizon import require_production_horizon
 
+from .promotion import REQUIRED_MODEL_ARTIFACTS
+
 
 class PipelineMode(str, Enum):
     TRAIN = "train"
@@ -69,6 +71,11 @@ class PipelineResult:
     metrics: Mapping[str, Any] = field(default_factory=dict)
     source_uri: str | None = None
     source_hash: str | None = None
+    run_id: str | None = None
+    model_version: str | None = None
+    feature_schema_hash: str | None = None
+    cost_profile_version: str | None = None
+    training_end_date: date | None = None
     generated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     def __post_init__(self) -> None:
@@ -77,14 +84,54 @@ class PipelineResult:
             raise ValueError("records_read cannot be negative")
         if self.generated_at.tzinfo is None or self.generated_at.utcoffset() is None:
             raise ValueError("generated_at must be timezone-aware")
-        if self.status is PipelineStatus.PASS and self.reason_codes:
-            raise ValueError("PASS result cannot contain failure reason codes")
+        if self.status is PipelineStatus.PASS:
+            if self.reason_codes:
+                raise ValueError("PASS result cannot contain failure reason codes")
+            if self.records_read == 0:
+                raise ValueError("PASS result requires audited records")
+            if not self.source_uri or not self.source_uri.strip():
+                raise ValueError("PASS result requires source_uri")
+            if not self.source_hash or not self.source_hash.strip():
+                raise ValueError("PASS result requires source_hash")
+            for field_name in (
+                "run_id",
+                "model_version",
+                "feature_schema_hash",
+                "cost_profile_version",
+            ):
+                value = getattr(self, field_name)
+                if not isinstance(value, str) or not value.strip():
+                    raise ValueError(f"PASS result requires {field_name}")
+            if self.training_end_date is None:
+                raise ValueError("PASS result requires training_end_date")
+            if not self.artifacts:
+                raise ValueError("PASS result requires model artifacts")
+            missing_artifacts = set(REQUIRED_MODEL_ARTIFACTS).difference(self.artifacts)
+            if missing_artifacts:
+                raise ValueError(
+                    "PASS result is missing required artifacts: "
+                    + ", ".join(sorted(missing_artifacts))
+                )
+            if any(
+                not isinstance(name, str)
+                or not name.strip()
+                or not isinstance(uri, str)
+                or not uri.strip()
+                for name, uri in self.artifacts.items()
+            ):
+                raise ValueError("PASS result requires named artifact locations")
+            if not self.metrics:
+                raise ValueError("PASS result requires validation metrics")
+        elif not self.reason_codes:
+            raise ValueError("non-PASS result requires reason codes")
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
         payload["mode"] = self.mode.value
         payload["status"] = self.status.value
         payload["generated_at"] = self.generated_at.isoformat()
+        if self.training_end_date is not None:
+            payload["training_end_date"] = self.training_end_date.isoformat()
         return payload
 
     @property
@@ -113,8 +160,14 @@ class DatasetRepository(Protocol):
 class PipelineRunner(Protocol):
     """Loose adapter around model and backtest implementations."""
 
-    def train(self, batch: PipelineBatch, context: PipelineContext) -> PipelineResult: ...
+    def train(
+        self, batch: PipelineBatch, context: PipelineContext
+    ) -> PipelineResult: ...
 
-    def backtest(self, batch: PipelineBatch, context: PipelineContext) -> PipelineResult: ...
+    def backtest(
+        self, batch: PipelineBatch, context: PipelineContext
+    ) -> PipelineResult: ...
 
-    def infer(self, batch: PipelineBatch, context: PipelineContext) -> PipelineResult: ...
+    def infer(
+        self, batch: PipelineBatch, context: PipelineContext
+    ) -> PipelineResult: ...

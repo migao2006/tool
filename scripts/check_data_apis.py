@@ -57,7 +57,14 @@ def build_report(*, live: bool, as_of_date: date) -> tuple[dict[str, object], in
     report["probes"] = [probe.to_dict() for probe in probes]
     failures = [probe for probe in probes if probe.status == "FAIL"]
     missing = [probe for probe in probes if probe.status == "NOT_CONFIGURED"]
-    report["status"] = "FAIL" if failures else "RESEARCH_ONLY" if missing else "PASS"
+    degraded = [probe for probe in probes if probe.status == "DEGRADED"]
+    report["status"] = (
+        "FAIL"
+        if failures
+        else "RESEARCH_ONLY"
+        if missing or degraded
+        else "PASS"
+    )
     return report, 1 if failures else 0
 
 

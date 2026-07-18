@@ -9,6 +9,9 @@ from typing import Any, Mapping
 from .errors import ProviderConfigurationError, ProviderError, ProviderHttpError
 
 
+DEGRADED_REASON_CODES = {"ALPHA_VANTAGE_RATE_LIMITED"}
+
+
 @dataclass(frozen=True)
 class ProviderProbeResult:
     provider: str
@@ -89,7 +92,11 @@ def run_live_probes(
             results.append(
                 ProviderProbeResult(
                     provider=provider,
-                    status="FAIL",
+                    status=(
+                        "DEGRADED"
+                        if error.reason_code in DEGRADED_REASON_CODES
+                        else "FAIL"
+                    ),
                     reason_code=error.reason_code,
                 )
             )

@@ -5,10 +5,14 @@
 - 系統狀態：`RESEARCH_ONLY`
 - 正式 horizon：`5`
 - 模型版本：尚未訓練
-- training_end_date：尚無資料
+- training_end_date：N/A（尚未訓練）
 - locked holdout：尚未執行
 
-目前專案沒有可供可靠訓練的真實歷史台股 point-in-time 資料，因此本次交付只建立可訓練、可回測、可每日推論的契約與程式架構。不得將任何單元測試資料解讀為正式績效。
+目前已由三組隔離的 FinMind credential 持續將真實歷史日線封存至 private Cloudflare R2，
+Supabase 保存 queue、manifest 與稽核摘要；但資料仍是目前股票池排程產生的
+`UNVERIFIED / RAW_LANDING_ONLY / RESEARCH_ONLY` 原始資料，尚不可視為可靠的 point-in-time
+訓練集。因此目前仍只完成可訓練、可回測、可每日推論的契約與程式架構，不得將原始封存、
+單元測試或研究輸出解讀為正式績效。
 
 ## 決策架構
 
@@ -43,8 +47,8 @@
 
 ## 已知限制
 
-- 尚無真實未還原 OHLC、公司行動、歷史交易狀態及下市股票資料。
+- 已有真實 FinMind 歷史 OHLC 原始封存，但尚未完成歷史身分、未還原交易價格、公司行動、交易狀態及下市股票的 point-in-time 驗證。
+- 上市、上櫃與 ETF 回補仍採優先佇列漸進累積；尚未形成完整歷史股票池快照。
 - 尚無真實 bid／ask，無法驗證漲跌停成交或滑價模型。
 - 尚無 5 年以上 expanding-window 訓練樣本與 12 個月 locked holdout。
 - 尚未產生任何可發布的候選股、績效或預期報酬。
-

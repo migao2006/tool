@@ -26,7 +26,7 @@
 
 ## 二、自主執行授權
 
-代理可在本專案及已連結的 GitHub、Vercel、Supabase 資源內，自行決定安全且合理的執行順序，不必逐項請示。
+代理可在本專案及已連結的 GitHub、Vercel、Supabase、Cloudflare R2 資源內，自行決定安全且合理的執行順序，不必逐項請示。
 
 代理可自行：
 
@@ -38,6 +38,7 @@
 - 建立 Preview、部署及重新部署。
 - 建立並套用非破壞性 migration。
 - 管理 RLS、Auth、Edge Functions。
+- 管理本專案 private R2 bucket 內的 object 與必要非破壞性設定。
 - 設定必要環境變數。
 - 檢查 GitHub Actions、Vercel 及 Supabase logs。
 - 修復失敗流程並重新驗證。
@@ -63,6 +64,7 @@
 - GitHub Actions logs、checks 及 artifacts。
 - Vercel Preview、Production、build logs 及 runtime logs。
 - Supabase schema、migration、RLS、Auth、Functions 及 logs。
+- Cloudflare R2 bucket 設定狀態、object metadata、容量與操作結果。
 - 環境變數名稱、適用環境及是否已設定。
 
 代理可建立或更新本專案的：
@@ -70,6 +72,7 @@
 - 分支、提交、PR、Issue 及 workflow。
 - Preview 與 Production deployment。
 - Migration、RLS、Edge Functions。
+- 本專案 private R2 bucket 內的 object 與專案級設定。
 - Development、Preview、Production 環境變數。
 
 代理可以設定、更新及輪替 secret，但不得：
@@ -77,7 +80,7 @@
 - 顯示或回傳 secret 明文。
 - 列出 token、密碼或私鑰。
 - 將機密寫入程式、log、Commit、PR、Issue 或聊天。
-- 取得帳務、組織擁有者或跨專案權限。
+- 取得帳務、組織／Cloudflare Account 擁有者或跨專案權限。
 
 ## 四、產品核心限制
 
@@ -88,6 +91,9 @@
 - ETF 不得混入普通股票候選清單或訓練資料。
 - 不新增管理員、自動下單、持倉損益或複雜投資組合功能。
 - 不得顯示精確未來股價、虛構 AI 信心或保證獲利。
+- 自動回補的多年歷史行情以壓縮 Parquet 保存於 private Cloudflare R2；Supabase 只保存任務控制、object manifest、稽核 metadata 與前端摘要。
+- 未完成 point-in-time 身分、公司行動及可交易性驗證的歷史資料必須維持 `RAW_LANDING_ONLY / RESEARCH_ONLY`，不得直接用於正式模型或推薦。
+- 前端不得直接存取 R2、`service_role` 或任何資料供應商憑證；資料必須經後端 service／repository 讀取。
 
 ## 五、核心架構規則
 
@@ -120,6 +126,8 @@
 - 產品與 UI：[`docs/product-ui.md`](docs/product-ui.md)
 - 程式架構：[`docs/architecture.md`](docs/architecture.md)
 - 資料與模型：[`docs/data-model.md`](docs/data-model.md)
+- 資料匯入：[`docs/data_import.md`](docs/data_import.md)
+- R2 歷史封存：[`docs/r2-historical-archive.md`](docs/r2-historical-archive.md)
 - Auth 與安全：[`docs/security.md`](docs/security.md)
 - 工具、Git 與發布：[`docs/tooling-release.md`](docs/tooling-release.md)
 

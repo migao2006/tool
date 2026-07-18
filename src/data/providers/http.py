@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from http.client import HTTPException
 import json
 import ssl
+from time import sleep
 from typing import Any, Mapping, Protocol
-from urllib.error import HTTPError, URLError
+from urllib.error import HTTPError
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 from urllib.request import Request, urlopen
 
@@ -58,7 +60,7 @@ class UrlLibTransport:
                 headers=dict(error.headers.items()) if error.headers else {},
                 body=error.read(),
             )
-        except (OSError, TimeoutError, URLError) as error:
+        except (HTTPException, OSError) as error:
             raise ProviderConnectionError(
                 "PROVIDER_CONNECTION_ERROR",
                 "provider request could not be completed",
@@ -86,11 +88,41 @@ def redact_url(url: str, sensitive_query_keys: tuple[str, ...] = ()) -> str:
 
 
 class JsonHttpClient:
-    def __init__(self, *, transport: HttpTransport | None = None, timeout: float = 20.0) -> None:
+    def __init__(
+        self,
+        *,
+        transport: HttpTransport | None = None,
+        timeout: float = 20.0,
+        max_attempts: int = 3,
+        retry_backoff_seconds: float = 0.5,
+    ) -> None:
         if timeout <= 0:
             raise ValueError("timeout must be positive")
+        if max_attempts <= 0:
+            raise ValueError("max_attempts must be positive")
+        if retry_backoff_seconds < 0:
+            raise ValueError("retry_backoff_seconds cannot be negative")
         self.transport = transport or UrlLibTransport()
         self.timeout = timeout
+        self.max_attempts = max_attempts
+        self.retry_backoff_seconds = retry_backoff_seconds
+
+    def _get_with_retries(
+        self,
+        url: str,
+        *,
+        headers: Mapping[str, str],
+    ) -> TransportResponse:
+        for attempt in range(1, self.max_attempts + 1):
+            try:
+                return self.transport.get(url, headers=headers, timeout=self.timeout)
+            except ProviderConnectionError:
+                if attempt == self.max_attempts:
+                    raise
+                delay = self.retry_backoff_seconds * (2 ** (attempt - 1))
+                if delay:
+                    sleep(delay)
+        raise AssertionError("retry loop exhausted without returning or raising")
 
     def get_json(
         self,
@@ -110,10 +142,9 @@ class JsonHttpClient:
         if filtered_params:
             url = f"{url}?{urlencode(filtered_params, doseq=True)}"
         safe_url = redact_url(url, sensitive_query_keys)
-        response = self.transport.get(
+        response = self._get_with_retries(
             url,
             headers={"Accept": "application/json", "User-Agent": "AlphaLens/0.1", **(headers or {})},
-            timeout=self.timeout,
         )
         if not 200 <= response.status_code < 300:
             raise ProviderHttpError(response.status_code, safe_url)

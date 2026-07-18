@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
+from http.client import IncompleteRead
 import json
 from urllib.parse import parse_qs, urlsplit
 
@@ -11,6 +12,7 @@ from src.data.providers.alpha_vantage import AlphaVantageClient
 from src.data.providers.cbc import CbcClient
 from src.data.providers.errors import (
     ProviderConfigurationError,
+    ProviderConnectionError,
     ProviderCredentialError,
     ProviderHttpError,
     ProviderPayloadError,
@@ -18,7 +20,7 @@ from src.data.providers.errors import (
 from src.data.providers.finmind import FinMindClient
 from src.data.providers.fetcher import ProviderFetchRequest, fetch_provider_payload
 from src.data.providers.fugle import FugleClient
-from src.data.providers.http import JsonHttpClient, TransportResponse
+from src.data.providers.http import JsonHttpClient, TransportResponse, UrlLibTransport
 from src.data.providers.mops import MopsClient
 from src.data.providers.registry import build_provider_registry, provider_readiness
 from src.data.providers.settings import ApiProviderSettings
@@ -42,8 +44,94 @@ class FakeTransport:
         return TransportResponse(self.status_code, {"Content-Type": "application/json"}, body)
 
 
+class FlakyTransport:
+    def __init__(self, *, failures: int) -> None:
+        self.failures = failures
+        self.calls = 0
+
+    def get(self, url: str, *, headers, timeout: float) -> TransportResponse:
+        self.calls += 1
+        if self.calls <= self.failures:
+            raise ProviderConnectionError(
+                "PROVIDER_CONNECTION_ERROR",
+                "transient provider read failure",
+            )
+        return TransportResponse(200, {"Content-Type": "application/json"}, b'{"ok": true}')
+
+
+class FakeUrlOpenResponse:
+    status = 200
+    headers = {"Content-Type": "application/json"}
+
+    def __init__(self, body: bytes | BaseException) -> None:
+        self.body = body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> bool:
+        return False
+
+    def read(self) -> bytes:
+        if isinstance(self.body, BaseException):
+            raise self.body
+        return self.body
+
+
 def http_for(transport: FakeTransport) -> JsonHttpClient:
     return JsonHttpClient(transport=transport, timeout=7)
+
+
+def test_http_client_retries_transient_connection_failures() -> None:
+    transport = FlakyTransport(failures=2)
+    response = JsonHttpClient(
+        transport=transport,
+        timeout=7,
+        max_attempts=3,
+        retry_backoff_seconds=0,
+    ).get_json(base_url="https://example.com")
+
+    assert response.payload == {"ok": True}
+    assert transport.calls == 3
+
+
+def test_http_client_stops_after_configured_retry_attempts() -> None:
+    transport = FlakyTransport(failures=3)
+    client = JsonHttpClient(
+        transport=transport,
+        timeout=7,
+        max_attempts=2,
+        retry_backoff_seconds=0,
+    )
+
+    with pytest.raises(ProviderConnectionError):
+        client.get_json(base_url="https://example.com")
+
+    assert transport.calls == 2
+
+
+def test_url_lib_transport_retries_incomplete_response_reads(monkeypatch) -> None:
+    bodies: list[bytes | BaseException] = [
+        IncompleteRead(b"partial", 10),
+        b'{"ok": true}',
+    ]
+    calls = 0
+
+    def fake_urlopen(request, *, timeout, context):
+        nonlocal calls
+        calls += 1
+        return FakeUrlOpenResponse(bodies.pop(0))
+
+    monkeypatch.setattr("src.data.providers.http.urlopen", fake_urlopen)
+    response = JsonHttpClient(
+        transport=UrlLibTransport(),
+        timeout=7,
+        max_attempts=2,
+        retry_backoff_seconds=0,
+    ).get_json(base_url="https://example.com")
+
+    assert response.payload == {"ok": True}
+    assert calls == 2
 
 
 def test_registry_contains_all_market_data_providers_and_supabase_sink() -> None:

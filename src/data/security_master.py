@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from enum import Enum
 from typing import Iterable
 
@@ -75,11 +75,14 @@ class BenchmarkAssignment:
     benchmark_id: str
     version: str
     valid_from: date
+    available_at: datetime
     valid_to: date | None = None
 
     def __post_init__(self) -> None:
         if not self.benchmark_id or not self.version:
             raise ValueError("benchmark id and version are required")
+        if self.available_at.tzinfo is None or self.available_at.utcoffset() is None:
+            raise ValueError("benchmark available_at must be timezone-aware")
         if self.valid_to is not None and self.valid_to <= self.valid_from:
             raise ValueError("benchmark valid_to must be later than valid_from")
 
@@ -87,6 +90,9 @@ class BenchmarkAssignment:
         return self.valid_from <= as_of_date and (
             self.valid_to is None or as_of_date < self.valid_to
         )
+
+    def available_for(self, as_of_date: date, decision_at: datetime) -> bool:
+        return self.effective_on(as_of_date) and self.available_at <= decision_at
 
 
 @dataclass(frozen=True)
@@ -120,11 +126,20 @@ class SecurityMaster:
             raise ValueError(f"overlapping security-master versions for {symbol}")
         return matches[0] if matches else None
 
-    def benchmark_for(self, market: Market, as_of_date: date) -> BenchmarkAssignment:
+    def benchmark_for(
+        self,
+        market: Market,
+        as_of_date: date,
+        *,
+        decision_at: datetime,
+    ) -> BenchmarkAssignment:
+        if decision_at.tzinfo is None or decision_at.utcoffset() is None:
+            raise ValueError("decision_at must be timezone-aware")
         matches = [
             assignment
             for assignment in self._benchmarks
-            if assignment.market == market and assignment.effective_on(as_of_date)
+            if assignment.market == market
+            and assignment.available_for(as_of_date, decision_at)
         ]
         if len(matches) != 1:
             raise ValueError(
@@ -136,6 +151,7 @@ class SecurityMaster:
         self,
         as_of_date: date,
         *,
+        decision_at: datetime,
         horizon: int = PRODUCTION_HORIZON,
         include_non_active: bool = True,
     ) -> UniverseSnapshot:
@@ -153,7 +169,11 @@ class SecurityMaster:
         candidates.sort(key=lambda record: (record.market.value, record.symbol))
         versions: dict[Market, tuple[str, str]] = {}
         for market in {record.market for record in candidates}:
-            assignment = self.benchmark_for(market, as_of_date)
+            assignment = self.benchmark_for(
+                market,
+                as_of_date,
+                decision_at=decision_at,
+            )
             versions[market] = (assignment.benchmark_id, assignment.version)
         return UniverseSnapshot(
             as_of_date=as_of_date,

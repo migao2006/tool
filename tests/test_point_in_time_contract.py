@@ -53,9 +53,27 @@ def _master() -> SecurityMaster:
             ),
         ),
         benchmarks=(
-            BenchmarkAssignment(Market.LISTED, "TAIEX", "2026-v1", date(2020, 1, 1)),
-            BenchmarkAssignment(Market.OTC, "TPEX", "2026-v1", date(2020, 1, 1)),
-            BenchmarkAssignment(Market.ETF, "ETF-SEPARATE", "2026-v1", date(2020, 1, 1)),
+            BenchmarkAssignment(
+                Market.LISTED,
+                "TAIEX",
+                "2026-v1",
+                date(2020, 1, 1),
+                datetime(2020, 1, 1, tzinfo=TAIPEI),
+            ),
+            BenchmarkAssignment(
+                Market.OTC,
+                "TPEX",
+                "2026-v1",
+                date(2020, 1, 1),
+                datetime(2020, 1, 1, tzinfo=TAIPEI),
+            ),
+            BenchmarkAssignment(
+                Market.ETF,
+                "ETF-SEPARATE",
+                "2026-v1",
+                date(2020, 1, 1),
+                datetime(2020, 1, 1, tzinfo=TAIPEI),
+            ),
         ),
     )
 
@@ -93,11 +111,30 @@ def test_snapshot_uses_latest_revision_available_at_decision_and_excludes_etf() 
 def test_historical_security_remains_in_universe_before_delisting() -> None:
     master = _master()
 
-    historical = master.common_stock_universe(date(2026, 7, 17), horizon=5)
-    after_validity = master.common_stock_universe(date(2026, 8, 2), horizon=5)
+    historical = master.common_stock_universe(
+        date(2026, 7, 17),
+        decision_at=datetime(2026, 7, 17, 17, tzinfo=TAIPEI),
+        horizon=5,
+    )
+    after_validity = master.common_stock_universe(
+        date(2026, 8, 2),
+        decision_at=datetime(2026, 8, 2, 17, tzinfo=TAIPEI),
+        horizon=5,
+    )
 
     assert [record.symbol for record in historical.securities] == ["1111"]
     assert after_validity.securities == ()
+
+
+def test_benchmark_assignment_is_unavailable_before_first_observation() -> None:
+    master = _master()
+
+    with pytest.raises(ValueError, match="expected one benchmark"):
+        master.benchmark_for(
+            Market.LISTED,
+            date(2020, 1, 1),
+            decision_at=datetime(2019, 12, 31, 23, 59, tzinfo=TAIPEI),
+        )
 
 
 def test_fold_imputer_rejects_data_released_after_training_end() -> None:

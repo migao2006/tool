@@ -11,6 +11,7 @@ TPEX_DATASETS = {
     "securities": "/tpex_securities",
     "daily_bars": "/tpex_mainboard_daily_close_quotes",
     "market_index": "/tpex_index",
+    "return_index": "/tpex_reward_index",
     "margin_balance": "/tpex_mainboard_margin_balance",
     "institutional_flows": "/tpex_3insti_daily_trading",
     "margin_and_lending": "/tpex_margin_sbl",

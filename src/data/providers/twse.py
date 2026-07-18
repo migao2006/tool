@@ -20,6 +20,7 @@ TWSE_DATASETS = {
     "attention": "/announcement/notice",
     "disposals": "/announcement/punish",
     "ex_rights": "/exchangeReport/TWT48U_ALL",
+    "delisting_registry": "/company/suspendListingCsvAndHtml",
 }
 
 

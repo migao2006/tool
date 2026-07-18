@@ -23,7 +23,10 @@ TPEX_DATASETS = {
     "disposals": "/tpex_disposal_information",
     "ex_rights": "/tpex_exright_daily",
     "ex_rights_forecast": "/tpex_exright_prepost",
+    "delisting_registry": "/www/zh-tw/company/deListed",
 }
+
+TPEX_WEBSITE_BASE_URL = "https://www.tpex.org.tw"
 
 
 class TpexClient(JsonProviderClient):
@@ -33,6 +36,25 @@ class TpexClient(JsonProviderClient):
 
     def fetch(self, dataset: str) -> ProviderPayload:
         name = require_dataset(dataset, TPEX_DATASETS)
+        if name == "delisting_registry":
+            return self._get(
+                dataset=name,
+                base_url=TPEX_WEBSITE_BASE_URL,
+                path=TPEX_DATASETS[name],
+                params={
+                    "code": "",
+                    "date": "ALL",
+                    "reason": "-1",
+                    "response": "json",
+                    "paging-size": 1_000,
+                    "paging-offset": 0,
+                },
+                request_metadata={
+                    "available_at_policy": "assign_during_ingestion",
+                    "distribution": "OFFICIAL_TPEX_WEBSITE_JSON",
+                },
+                source_version="website-json.v1",
+            )
         return self._get(
             dataset=name,
             path=TPEX_DATASETS[name],

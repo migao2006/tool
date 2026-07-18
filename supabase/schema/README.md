@@ -13,8 +13,9 @@
 6. `006_security_snapshot_contract.sql`
 7. `007_corporate_action_provenance.sql`
 8. `008_benchmark_contract.sql`
+9. `009_delisting_registry.sql`
 
-全新專案依序執行七個檔案。既有專案需依序補上尚未執行的檔案；這些 migration
+全新專案依序執行九個檔案。既有專案需依序補上尚未執行的檔案；這些 migration
 均可安全重跑，且
 `004_contract_alignment.sql` 以單一 transaction 套用，失敗時不會留下
 部分變更，且可安全重跑。執行角色必須是 `market_data` 物件擁有者，才能讓

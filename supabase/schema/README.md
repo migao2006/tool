@@ -14,8 +14,9 @@
 7. `007_corporate_action_provenance.sql`
 8. `008_benchmark_contract.sql`
 9. `009_delisting_registry.sql`
+10. `010_historical_daily_bar_landing.sql`
 
-全新專案依序執行九個檔案。既有專案需依序補上尚未執行的檔案；這些 migration
+全新專案依序執行十個檔案。既有專案需依序補上尚未執行的檔案；這些 migration
 均可安全重跑，且
 `004_contract_alignment.sql` 以單一 transaction 套用，失敗時不會留下
 部分變更，且可安全重跑。執行角色必須是 `market_data` 物件擁有者，才能讓
@@ -27,3 +28,7 @@
 prediction run，阻擋晚於 `decision_at` 的稽核資料。
 
 本 schema 只建立空表與約束，不含股票、行情、預測或回測假資料。未來若要讓前端讀取正式輸出，應另外建立小型、唯讀且具 RLS 的 API view，不應直接公開原始訓練資料。
+
+`historical_daily_bar_landing` 與 `historical_daily_bar_quarantine` 只保存尚未完成身分及
+point-in-time 驗證的來源列與問題。它們不含 `security_id`，也不會外鍵連到正式
+`securities` 或 `daily_bars`；資料只能標示為 `RAW_LANDING_ONLY / RESEARCH_ONLY`。

@@ -59,6 +59,17 @@ class FlakyTransport:
         return TransportResponse(200, {"Content-Type": "application/json"}, b'{"ok": true}')
 
 
+class StatusSequenceTransport:
+    def __init__(self, statuses: list[int]) -> None:
+        self.statuses = statuses
+        self.calls = 0
+
+    def get(self, url: str, *, headers, timeout: float) -> TransportResponse:
+        status = self.statuses[self.calls]
+        self.calls += 1
+        return TransportResponse(status, {"Content-Type": "application/json"}, b'{"ok": true}')
+
+
 class FakeUrlOpenResponse:
     status = 200
     headers = {"Content-Type": "application/json"}
@@ -79,7 +90,7 @@ class FakeUrlOpenResponse:
 
 
 def http_for(transport: FakeTransport) -> JsonHttpClient:
-    return JsonHttpClient(transport=transport, timeout=7)
+    return JsonHttpClient(transport=transport, timeout=7, retry_backoff_seconds=0)
 
 
 def test_http_client_retries_transient_connection_failures() -> None:
@@ -107,6 +118,19 @@ def test_http_client_stops_after_configured_retry_attempts() -> None:
     with pytest.raises(ProviderConnectionError):
         client.get_json(base_url="https://example.com")
 
+    assert transport.calls == 2
+
+
+def test_http_client_retries_transient_gateway_status() -> None:
+    transport = StatusSequenceTransport([522, 200])
+    response = JsonHttpClient(
+        transport=transport,
+        timeout=7,
+        max_attempts=2,
+        retry_backoff_seconds=0,
+    ).get_json(base_url="https://example.com")
+
+    assert response.payload == {"ok": True}
     assert transport.calls == 2
 
 

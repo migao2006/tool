@@ -22,6 +22,7 @@ from .errors import (
 
 
 REDACTED = "[REDACTED]"
+TRANSIENT_HTTP_STATUSES = {408, 425, 429}
 
 
 @dataclass(frozen=True)
@@ -115,13 +116,20 @@ class JsonHttpClient:
     ) -> TransportResponse:
         for attempt in range(1, self.max_attempts + 1):
             try:
-                return self.transport.get(url, headers=headers, timeout=self.timeout)
+                response = self.transport.get(url, headers=headers, timeout=self.timeout)
             except ProviderConnectionError:
                 if attempt == self.max_attempts:
                     raise
-                delay = self.retry_backoff_seconds * (2 ** (attempt - 1))
-                if delay:
-                    sleep(delay)
+            else:
+                is_transient = (
+                    response.status_code in TRANSIENT_HTTP_STATUSES
+                    or 500 <= response.status_code < 600
+                )
+                if not is_transient or attempt == self.max_attempts:
+                    return response
+            delay = self.retry_backoff_seconds * (2 ** (attempt - 1))
+            if delay:
+                sleep(delay)
         raise AssertionError("retry loop exhausted without returning or raising")
 
     def get_json(

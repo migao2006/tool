@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from .alpha_vantage import AlphaVantageClient
 from .cbc import CbcClient
 from .contracts import ProviderReadiness
 from .finmind import FinMindClient
-from .fred import FredClient
 from .fugle import FugleClient
 from .http import HttpTransport, JsonHttpClient
 from .mops import MopsClient
@@ -38,7 +38,10 @@ def build_provider_registry(
         "TDCC": TdccClient(http=http),
         "FUGLE": FugleClient(api_key=settings.fugle_api_key, http=http),
         "CBC": CbcClient(http=http),
-        "FRED": FredClient(api_key=settings.fred_api_key, http=http),
+        "ALPHA_VANTAGE": AlphaVantageClient(
+            api_key=settings.alpha_vantage_api_key,
+            http=http,
+        ),
         "TWELVE_DATA": TwelveDataClient(api_key=settings.twelve_data_api_key, http=http),
         "SUPABASE_WRITE": SupabaseDataClient(
             url=settings.supabase_url,
@@ -55,7 +58,11 @@ def provider_readiness(settings: ApiProviderSettings) -> tuple[ProviderReadiness
     protected = (
         ("FINMIND", settings.finmind_token, ("FINMIND_TOKEN",)),
         ("FUGLE", settings.fugle_api_key, ("FUGLE_API_KEY",)),
-        ("FRED", settings.fred_api_key, ("FRED_API_KEY",)),
+        (
+            "ALPHA_VANTAGE",
+            settings.alpha_vantage_api_key,
+            ("ALPHA_VANTAGE_API_KEY",),
+        ),
         ("TWELVE_DATA", settings.twelve_data_api_key, ("TWELVE_DATA_API_KEY",)),
         (
             "SUPABASE_WRITE",

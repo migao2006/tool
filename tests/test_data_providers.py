@@ -7,6 +7,7 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 
 from scripts.check_data_apis import build_report
+from src.data.providers.alpha_vantage import AlphaVantageClient
 from src.data.providers.cbc import CbcClient
 from src.data.providers.errors import (
     ProviderConfigurationError,
@@ -15,7 +16,6 @@ from src.data.providers.errors import (
 )
 from src.data.providers.finmind import FinMindClient
 from src.data.providers.fetcher import ProviderFetchRequest, fetch_provider_payload
-from src.data.providers.fred import FredClient
 from src.data.providers.fugle import FugleClient
 from src.data.providers.http import JsonHttpClient, TransportResponse
 from src.data.providers.mops import MopsClient
@@ -57,7 +57,7 @@ def test_registry_contains_all_market_data_providers_and_supabase_sink() -> None
         "TDCC",
         "FUGLE",
         "CBC",
-        "FRED",
+        "ALPHA_VANTAGE",
         "TWELVE_DATA",
         "SUPABASE_WRITE",
     }
@@ -75,20 +75,26 @@ def test_readiness_lists_public_private_and_supabase_write_settings() -> None:
     assert readiness["TWSE"].configured
     assert readiness["FINMIND"].configured
     assert readiness["SUPABASE_WRITE"].configured
-    assert not readiness["FRED"].configured
-    assert readiness["FRED"].reason_code == "CREDENTIAL_NOT_CONFIGURED"
+    assert not readiness["ALPHA_VANTAGE"].configured
+    assert readiness["ALPHA_VANTAGE"].reason_code == "CREDENTIAL_NOT_CONFIGURED"
 
 
 def test_settings_repr_never_contains_secrets() -> None:
     settings = ApiProviderSettings(
         finmind_token="finmind-secret",
         fugle_api_key="fugle-secret",
-        fred_api_key="fred-secret",
+        alpha_vantage_api_key="alpha-secret",
         twelve_data_api_key="twelve-secret",
         supabase_service_role_key="supabase-secret",
     )
     rendered = repr(settings)
-    for secret in ("finmind-secret", "fugle-secret", "fred-secret", "twelve-secret", "supabase-secret"):
+    for secret in (
+        "finmind-secret",
+        "fugle-secret",
+        "alpha-secret",
+        "twelve-secret",
+        "supabase-secret",
+    ):
         assert secret not in rendered
 
 
@@ -146,6 +152,27 @@ def test_fetcher_dispatches_provider_without_combining_source_logic() -> None:
     assert payload.dataset == "daily_bars"
 
 
+def test_fetcher_dispatches_alpha_vantage_macro_dataset() -> None:
+    transport = FakeTransport({"data": []})
+    registry = {
+        "ALPHA_VANTAGE": AlphaVantageClient(
+            api_key="alpha-secret",
+            http=http_for(transport),
+        )
+    }
+
+    payload = fetch_provider_payload(
+        registry,
+        ProviderFetchRequest(
+            provider="alpha_vantage",
+            dataset="treasury_yield_10y_daily",
+        ),
+    )
+
+    assert payload.provider == "ALPHA_VANTAGE"
+    assert payload.dataset == "treasury_yield_10y_daily"
+
+
 def test_finmind_uses_bearer_header_without_leaking_token() -> None:
     transport = FakeTransport({"status": 200, "data": []})
     payload = FinMindClient(token="finmind-secret", http=http_for(transport)).fetch(
@@ -165,7 +192,10 @@ def test_finmind_uses_bearer_header_without_leaking_token() -> None:
     [
         (lambda: FinMindClient(token=None), "FINMIND_TOKEN_MISSING"),
         (lambda: FugleClient(api_key=None), "FUGLE_API_KEY_MISSING"),
-        (lambda: FredClient(api_key=None), "FRED_API_KEY_MISSING"),
+        (
+            lambda: AlphaVantageClient(api_key=None),
+            "ALPHA_VANTAGE_API_KEY_MISSING",
+        ),
         (lambda: TwelveDataClient(api_key=None), "TWELVE_DATA_API_KEY_MISSING"),
     ],
 )
@@ -176,53 +206,61 @@ def test_private_providers_fail_closed_without_credentials(factory, reason_code:
             client.fetch("securities")
         elif isinstance(client, FugleClient):
             client.historical_candles("2330", start_date="2026-07-01", end_date="2026-07-18")
-        elif isinstance(client, FredClient):
-            client.observations("DGS10", as_of_date="2026-07-18")
+        elif isinstance(client, AlphaVantageClient):
+            client.fetch_macro("treasury_yield_10y_daily")
         else:
             client.time_series("SPY", start_date="2026-07-01", end_date="2026-07-18")
     assert captured.value.reason_code == reason_code
 
 
-def test_fred_requires_vintage_and_redacts_api_key() -> None:
-    transport = FakeTransport({"observations": []})
-    api_key = "a" * 32
-    payload = FredClient(api_key=api_key, http=http_for(transport)).observations(
-        "DGS10",
-        as_of_date="2026-07-17",
-        observation_start="2026-07-01",
+def test_alpha_vantage_fetches_ten_year_yield_and_redacts_api_key() -> None:
+    transport = FakeTransport({"name": "10-Year Treasury Yield", "data": []})
+    api_key = "alpha-secret"
+    payload = AlphaVantageClient(api_key=api_key, http=http_for(transport)).fetch_macro(
+        "treasury_yield_10y_daily"
     )
     query = parse_qs(urlsplit(str(transport.calls[0]["url"])).query)
-    assert query["realtime_start"] == ["2026-07-17"]
-    assert query["realtime_end"] == ["2026-07-17"]
+    assert query["function"] == ["TREASURY_YIELD"]
+    assert query["interval"] == ["daily"]
+    assert query["maturity"] == ["10year"]
     assert api_key not in payload.source_url
     assert "%5BREDACTED%5D" in payload.source_url or "REDACTED" in payload.source_url
+    assert payload.request_metadata["historical_vintage"] == "unavailable"
 
 
 @pytest.mark.parametrize(
     "pasted_secret",
     [
-        "FRED_API_KEY=" + ("a" * 32),
-        '"FRED_API_KEY=' + ("b" * 32) + '"',
-        "  " + ("c" * 32) + "  ",
+        "ALPHA_VANTAGE_API_KEY=alpha123",
+        '"ALPHA_VANTAGE_API_KEY=beta456"',
+        "  gamma789  ",
     ],
 )
-def test_fred_normalizes_common_github_secret_paste_forms(pasted_secret: str) -> None:
-    transport = FakeTransport({"observations": []})
-    FredClient(api_key=pasted_secret, http=http_for(transport)).observations(
-        "DGS10", as_of_date="2026-07-17"
+def test_alpha_vantage_normalizes_common_secret_paste_forms(pasted_secret: str) -> None:
+    transport = FakeTransport({"data": []})
+    AlphaVantageClient(api_key=pasted_secret, http=http_for(transport)).fetch_macro(
+        "treasury_yield_10y_daily"
     )
-    assert len(parse_qs(urlsplit(str(transport.calls[0]["url"])).query)["api_key"][0]) == 32
+    api_key = parse_qs(urlsplit(str(transport.calls[0]["url"])).query)["apikey"][0]
+    assert api_key in {"alpha123", "beta456", "gamma789"}
 
 
-def test_fred_rejects_invalid_key_shape_before_request() -> None:
-    transport = FakeTransport({"observations": []})
-    client = FredClient(api_key="not-a-registered-key", http=http_for(transport))
+@pytest.mark.parametrize(
+    ("response", "reason_code"),
+    [
+        ({"Information": "API rate limit reached"}, "ALPHA_VANTAGE_RATE_LIMITED"),
+        ({"Error Message": "Invalid API call"}, "ALPHA_VANTAGE_REQUEST_REJECTED"),
+        ({"unexpected": []}, "ALPHA_VANTAGE_PAYLOAD_INVALID"),
+    ],
+)
+def test_alpha_vantage_rejects_error_payloads(response: object, reason_code: str) -> None:
+    transport = FakeTransport(response)
+    client = AlphaVantageClient(api_key="alpha-secret", http=http_for(transport))
 
-    with pytest.raises(ProviderConfigurationError) as captured:
-        client.observations("DGS10", as_of_date="2026-07-17")
+    with pytest.raises(ProviderPayloadError) as captured:
+        client.fetch_macro("treasury_yield_10y_daily")
 
-    assert captured.value.reason_code == "FRED_API_KEY_FORMAT_INVALID"
-    assert transport.calls == []
+    assert captured.value.reason_code == reason_code
 
 
 def test_twelve_data_uses_daily_utc_series_and_redacts_key() -> None:
@@ -273,7 +311,7 @@ def test_configuration_report_is_research_only_until_keys_exist(monkeypatch) -> 
     for name in (
         "FINMIND_TOKEN",
         "FUGLE_API_KEY",
-        "FRED_API_KEY",
+        "ALPHA_VANTAGE_API_KEY",
         "TWELVE_DATA_API_KEY",
         "SUPABASE_URL",
         "SUPABASE_SERVICE_ROLE_KEY",

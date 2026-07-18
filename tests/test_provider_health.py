@@ -4,14 +4,14 @@ from src.data.providers.errors import ProviderHttpError
 from src.data.providers.health import run_live_probes
 
 
-class _FailingFredClient:
-    def observations(self, *_args, **_kwargs):
+class _FailingAlphaVantageClient:
+    def fetch_macro(self, *_args, **_kwargs):
         raise ProviderHttpError(403, "https://api.example.test?api_key=REDACTED")
 
 
 def test_live_probe_reports_only_safe_http_status() -> None:
     results = run_live_probes(
-        {"FRED": _FailingFredClient()},
+        {"ALPHA_VANTAGE": _FailingAlphaVantageClient()},
         as_of_date=date(2026, 7, 18),
     )
 

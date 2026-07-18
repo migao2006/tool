@@ -42,13 +42,8 @@ def _probe(client: Any, provider: str, as_of_date: date) -> Any:
         )
     if provider == "CBC":
         return client.fetch_series("BP01D01")
-    if provider == "FRED":
-        return client.observations(
-            "DGS10",
-            as_of_date=as_of_date,
-            observation_start=start,
-            observation_end=as_of_date,
-        )
+    if provider == "ALPHA_VANTAGE":
+        return client.fetch_macro("treasury_yield_10y_daily")
     if provider == "TWELVE_DATA":
         return client.time_series("SPY", start_date=start, end_date=as_of_date, outputsize=20)
     if provider == "SUPABASE_WRITE":

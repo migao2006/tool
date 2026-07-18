@@ -14,11 +14,9 @@ class ProviderFetchRequest:
     provider: str
     dataset: str | None = None
     symbol: str | None = None
-    series_id: str | None = None
     file_name: str | None = None
     start_date: date | None = None
     end_date: date | None = None
-    as_of_date: date | None = None
     adjusted: bool = False
 
 
@@ -53,13 +51,8 @@ def fetch_provider_payload(
         )
     if provider == "CBC":
         return client.fetch_series(_required(request.file_name, "file_name"))
-    if provider == "FRED":
-        return client.observations(
-            _required(request.series_id, "series_id"),
-            as_of_date=_required(request.as_of_date, "as_of_date"),
-            observation_start=request.start_date,
-            observation_end=request.end_date,
-        )
+    if provider == "ALPHA_VANTAGE":
+        return client.fetch_macro(_required(request.dataset, "dataset"))
     if provider == "TWELVE_DATA":
         return client.time_series(
             _required(request.symbol, "symbol"),

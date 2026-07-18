@@ -37,11 +37,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("provider")
     parser.add_argument("--dataset")
     parser.add_argument("--symbol")
-    parser.add_argument("--series-id")
     parser.add_argument("--file-name")
     parser.add_argument("--start-date", type=_date)
     parser.add_argument("--end-date", type=_date)
-    parser.add_argument("--as-of-date", type=_date)
     parser.add_argument("--adjusted", action="store_true")
     parser.add_argument("--output", type=Path, required=True)
     return parser
@@ -56,11 +54,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 provider=args.provider,
                 dataset=args.dataset,
                 symbol=args.symbol,
-                series_id=args.series_id,
                 file_name=args.file_name,
                 start_date=args.start_date,
                 end_date=args.end_date,
-                as_of_date=args.as_of_date,
                 adjusted=args.adjusted,
             ),
         )

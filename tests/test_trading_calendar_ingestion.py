@@ -113,15 +113,20 @@ def test_calendar_normalizer_refuses_unverified_tpex_mapping() -> None:
     assert captured.value.reason_code == "TRADING_CALENDAR_MARKET_NOT_VERIFIED"
 
 
+def test_calendar_normalizer_accepts_exchange_confirmed_saturday_sessions() -> None:
+    rows = normalize_finmind_trading_calendar(
+        calendar_payload(["2018-03-30", "2018-03-31"]),
+        start_date=date(2018, 3, 30),
+        end_date=date(2018, 4, 1),
+        source_id=7,
+    )
+
+    assert [row["trading_date"] for row in rows] == ["2018-03-30", "2018-03-31"]
+
+
 @pytest.mark.parametrize(
     ("dates", "start_date", "end_date", "reason_code"),
     [
-        (
-            ["2026-01-03"],
-            date(2026, 1, 1),
-            date(2026, 1, 10),
-            "TRADING_CALENDAR_WEEKEND_SESSION",
-        ),
         (
             ["2026-01-05", "2026-01-05"],
             date(2026, 1, 1),

@@ -51,11 +51,6 @@ def _parse_session_date(value: object) -> date:
             "TRADING_CALENDAR_DATE_INVALID",
             "Trading-calendar rows must contain ISO dates",
         ) from error
-    if session_date.weekday() >= 5:
-        raise IngestionError(
-            "TRADING_CALENDAR_WEEKEND_SESSION",
-            "A provider trading session cannot fall on a weekend",
-        )
     return session_date
 
 

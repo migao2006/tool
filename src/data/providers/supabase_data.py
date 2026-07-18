@@ -23,15 +23,19 @@ class SupabaseDataClient(JsonProviderClient):
                 "SUPABASE_WRITE_CREDENTIALS_MISSING",
                 "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required for server-side writes",
             )
+        headers = {
+            "apikey": self._service_role_key,
+            "Accept-Profile": "market_data",
+        }
+        # Opaque sb_* keys are API keys, not JWTs. The hosted gateway derives
+        # the service role from `apikey`; only legacy JWT keys belong in Bearer.
+        if not self._service_role_key.startswith("sb_"):
+            headers["Authorization"] = f"Bearer {self._service_role_key}"
         result = self._get(
             dataset="data_sources_health",
             path="data_sources",
             params={"select": "source_id", "limit": 1},
-            headers={
-                "apikey": self._service_role_key,
-                "Authorization": f"Bearer {self._service_role_key}",
-                "Accept-Profile": "market_data",
-            },
+            headers=headers,
             request_metadata={"schema": "market_data", "access": "server_side_only"},
         )
         if not isinstance(result.payload, list):

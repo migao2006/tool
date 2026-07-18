@@ -116,6 +116,20 @@ def test_supabase_healthcheck_uses_private_headers_without_leaking_key() -> None
     assert "service-secret" not in payload.source_url
 
 
+def test_supabase_opaque_secret_key_is_not_sent_as_bearer_jwt() -> None:
+    transport = FakeTransport([])
+    secret_key = "sb_secret_test-value"
+    SupabaseDataClient(
+        url="https://example.supabase.co",
+        service_role_key=secret_key,
+        http=http_for(transport),
+    ).healthcheck()
+
+    headers = transport.calls[0]["headers"]
+    assert headers["apikey"] == secret_key
+    assert "Authorization" not in headers
+
+
 @pytest.mark.parametrize(
     ("client", "dataset", "expected_path"),
     [

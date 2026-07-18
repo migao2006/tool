@@ -35,6 +35,8 @@ SUPABASE_SERVICE_ROLE_KEY
 
 `SUPABASE_SERVICE_ROLE_KEY` 只能由 GitHub Actions／後端寫入程序使用，不得出現在前端、日誌、
 錯誤訊息或 Git 紀錄。公開前端繼續使用 Supabase publishable key。
+此環境變數同時支援新版 `sb_secret_...` 與舊版 JWT `service_role`。新版 secret key 只放在
+`apikey` header；只有舊版 JWT 才會放入 `Authorization: Bearer`。
 
 Supabase Data API 設定必須將 `market_data` 加入 **Exposed schemas**，否則 PostgREST 無法選取該
 schema。資料庫 migration 已撤銷 `anon`／`authenticated` 對內部研究表的權限，只授權

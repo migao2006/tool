@@ -7,249 +7,154 @@ held exchange session. The production model currently permits only ``h=5``.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import date, datetime
+from collections.abc import Iterable, Mapping
+from datetime import datetime
 from decimal import Decimal
-from itertools import groupby
-from typing import Iterable, Mapping, Sequence
+from typing import TYPE_CHECKING, cast
+from zoneinfo import ZoneInfo
 
-from src.core.horizon import (
-    PRODUCTION_HORIZON,
-    require_production_horizon,
-    require_supported_horizon,
+from src.core.horizon import PRODUCTION_HORIZON
+
+from .contracts import (
+    CorporateAction,
+    CorporateActionCoverage,
+    ExecutablePrice,
+    LabelDataError,
+    LabelResult,
+    LabelWindow,
+    LookAheadError,
+    ONE,
+    decimal_label_value,
+    require_aware_datetime,
 )
+from .corporate_action_return import (
+    executable_total_return,
+    validate_corporate_action_inputs,
+)
+from .cost_resolver import resolve_label_cost
+from .direction_label import (
+    DirectionLabel,
+    NoTradeBandConfig,
+    make_direction_label,
+    make_direction_labels,
+    no_trade_band,
+)
+from .trading_calendar import TradingCalendar
+
+if TYPE_CHECKING:
+    from src.trading.transaction_cost import TransactionCostModel
 
 
-ZERO = Decimal("0")
-ONE = Decimal("1")
-
-
-def _decimal(value: Decimal | int | float | str) -> Decimal:
-    return value if isinstance(value, Decimal) else Decimal(str(value))
-
-
-def _require_aware(value: datetime, name: str) -> None:
-    if value.tzinfo is None or value.utcoffset() is None:
-        raise ValueError(f"{name} must be timezone-aware")
-
-
-class LookAheadError(ValueError):
-    """Raised when a requested label can see data released after the decision."""
-
-
-@dataclass(frozen=True)
-class LabelWindow:
-    decision_date: date
-    entry_date: date
-    exit_date: date
-    horizon: int
-
-
-class TradingCalendar:
-    """Immutable ordered exchange-session calendar."""
-
-    def __init__(self, sessions: Sequence[date]) -> None:
-        normalized = tuple(sessions)
-        if not normalized:
-            raise ValueError("trading calendar cannot be empty")
-        if tuple(sorted(set(normalized))) != normalized:
-            raise ValueError("trading sessions must be unique and strictly increasing")
-        self._sessions = normalized
-        self._positions = {session: position for position, session in enumerate(normalized)}
-
-    @property
-    def sessions(self) -> tuple[date, ...]:
-        return self._sessions
-
-    def label_window(
-        self,
-        decision_date: date,
-        *,
-        horizon: int = PRODUCTION_HORIZON,
-        research: bool = False,
-    ) -> LabelWindow:
-        horizon = (
-            require_supported_horizon(horizon)
-            if research
-            else require_production_horizon(horizon)
-        )
-        try:
-            decision_position = self._positions[decision_date]
-        except KeyError as exc:
-            raise ValueError("decision_date must be an exchange session") from exc
-        entry_position = decision_position + 1
-        exit_position = decision_position + horizon
-        if exit_position >= len(self._sessions):
-            raise ValueError("calendar does not contain the complete label window")
-        return LabelWindow(
-            decision_date=decision_date,
-            entry_date=self._sessions[entry_position],
-            exit_date=self._sessions[exit_position],
-            horizon=horizon,
-        )
-
-
-@dataclass(frozen=True)
-class ExecutablePrice:
-    session_date: date
-    price: Decimal
-    has_trade: bool = True
-    trading_status: str = "ACTIVE"
-    price_limit_state: str = "NONE"
-    counterparty_volume_confirmed: bool | None = None
-    price_basis: str = "UNADJUSTED"
-    reason_codes: tuple[str, ...] = ()
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "price", _decimal(self.price))
-        if self.price <= ZERO:
-            raise ValueError("executable price must be positive")
-        valid_statuses = {"ACTIVE", "SUSPENDED", "STOPPED", "DELISTED"}
-        if self.trading_status not in valid_statuses:
-            raise ValueError(f"unknown trading_status: {self.trading_status}")
-        if self.price_limit_state not in {"NONE", "LIMIT_UP", "LIMIT_DOWN"}:
-            raise ValueError(f"unknown price_limit_state: {self.price_limit_state}")
-        if self.price_basis != "UNADJUSTED":
-            raise ValueError("execution simulation requires unadjusted market prices")
-
-
-@dataclass(frozen=True)
-class CorporateAction:
-    """An ex-date entitlement expressed per pre-action share.
-
-    A position bought at the open on ``ex_date`` is too late to receive the
-    entitlement. A position already held before ``ex_date`` keeps a cash-dividend
-    receivable even when ``payable_date`` falls after the modeled exit. This maps
-    directly to the point-in-time corporate-action ``ex_date``/``payable_date``
-    storage contract and avoids using adjusted prices as executable prices.
-    """
-
-    action_id: str
-    ex_date: date
-    payable_date: date | None = None
-    cash_per_share: Decimal = ZERO
-    share_multiplier: Decimal = ONE
-    source_available_at: datetime | None = None
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "cash_per_share", _decimal(self.cash_per_share))
-        object.__setattr__(self, "share_multiplier", _decimal(self.share_multiplier))
-        if self.cash_per_share < ZERO or self.share_multiplier <= ZERO:
-            raise ValueError("corporate-action cash cannot be negative and multiplier must be positive")
-        if self.payable_date is not None and self.payable_date < self.ex_date:
-            raise ValueError("payable_date cannot precede ex_date")
-        if self.source_available_at is not None:
-            _require_aware(self.source_available_at, "source_available_at")
-
-
-@dataclass(frozen=True)
-class LabelResult:
-    symbol: str
-    window: LabelWindow
-    valid: bool
-    gross_return: Decimal | None
-    net_return: Decimal | None
-    benchmark_return: Decimal | None
-    excess_return: Decimal | None
-    round_trip_cost_rate: Decimal
-    benchmark_id: str
-    benchmark_version: str
-    reason_codes: tuple[str, ...]
-    applied_corporate_actions: tuple[str, ...]
+TAIPEI = ZoneInfo("Asia/Taipei")
 
 
 class LabelFactory:
-    """Build labels used by ranking, direction and return-distribution models."""
+    """Build common ranking, direction and return-distribution targets."""
 
-    def __init__(self, calendar: TradingCalendar) -> None:
-        self.calendar = calendar
+    def __init__(
+        self,
+        calendar: TradingCalendar,
+        transaction_cost_model: TransactionCostModel | None = None,
+    ) -> None:
+        self.calendar: TradingCalendar = calendar
+        self.transaction_cost_model: TransactionCostModel | None = (
+            transaction_cost_model
+        )
 
     def create(
         self,
         *,
         symbol: str,
         decision_at: datetime,
-        entry_open: ExecutablePrice,
-        exit_close: ExecutablePrice,
-        benchmark_return: Decimal | int | float | str,
+        entry_open: ExecutablePrice | None,
+        exit_close: ExecutablePrice | None,
+        benchmark_return: Decimal | int | float | str | None,
         benchmark_id: str,
         benchmark_version: str,
-        round_trip_cost_rate: Decimal | int | float | str,
+        round_trip_cost_rate: Decimal | int | float | str | None = None,
+        cost_profile_version: str | None = None,
+        cost_profile: str = "base_cost",
+        quantity: Decimal | int | float | str | None = None,
+        adv20_ntd: Decimal | int | float | str | None = None,
         feature_available_ats: Mapping[str, datetime] | Iterable[datetime] = (),
         corporate_actions: Iterable[CorporateAction] = (),
+        corporate_action_coverage: CorporateActionCoverage | None = None,
+        trailing_volatility: float | None = None,
+        no_trade_band_config: NoTradeBandConfig | None = None,
         horizon: int = PRODUCTION_HORIZON,
         research: bool = False,
     ) -> LabelResult:
-        _require_aware(decision_at, "decision_at")
+        require_aware_datetime(decision_at, "decision_at")
         self._audit_available_at(feature_available_ats, decision_at)
+        if not symbol.strip():
+            raise LabelDataError("symbol is required")
+        if entry_open is None:
+            raise LabelDataError("entry_open is required")
+        if exit_close is None:
+            raise LabelDataError("exit_close is required")
+
         window = self.calendar.label_window(
-            decision_at.date(), horizon=horizon, research=research
+            decision_at.astimezone(TAIPEI).date(),
+            horizon=horizon,
+            research=research,
         )
         if entry_open.session_date != window.entry_date:
             raise ValueError("entry price must be the t+1 exchange-session open")
         if exit_close.session_date != window.exit_date:
             raise ValueError("exit price must be the h-th held exchange-session close")
+        benchmark = self._validate_benchmark(
+            benchmark_return,
+            benchmark_id,
+            benchmark_version,
+        )
 
-        cost_rate = _decimal(round_trip_cost_rate)
-        benchmark = _decimal(benchmark_return)
-        if cost_rate < ZERO:
-            raise ValueError("round-trip cost rate cannot be negative")
-        if not benchmark_id or not benchmark_version:
-            raise ValueError("benchmark id and version are required for model metadata")
+        actions = tuple(corporate_actions)
+        validate_corporate_action_inputs(
+            calendar=self.calendar,
+            actions=actions,
+            coverage=corporate_action_coverage,
+            window=window,
+        )
+        cost_rate, resolved_cost_version, cost_reasons = resolve_label_cost(
+            transaction_cost_model=self.transaction_cost_model,
+            entry_open=entry_open,
+            exit_close=exit_close,
+            horizon=horizon,
+            round_trip_cost_rate=round_trip_cost_rate,
+            cost_profile_version=cost_profile_version,
+            cost_profile=cost_profile,
+            quantity=quantity,
+            adv20_ntd=adv20_ntd,
+        )
 
         execution_reasons = self._execution_reasons(entry_open, side="BUY")
         execution_reasons.extend(self._execution_reasons(exit_close, side="SELL"))
+        execution_reasons.extend(cost_reasons)
         if execution_reasons:
-            return LabelResult(
+            return self._invalid_result(
                 symbol=symbol,
                 window=window,
-                valid=False,
-                gross_return=None,
-                net_return=None,
-                benchmark_return=None,
-                excess_return=None,
-                round_trip_cost_rate=cost_rate,
+                cost_rate=cost_rate,
+                cost_profile_version=resolved_cost_version,
                 benchmark_id=benchmark_id,
                 benchmark_version=benchmark_version,
-                reason_codes=tuple(dict.fromkeys(execution_reasons)),
-                applied_corporate_actions=(),
+                reason_codes=execution_reasons,
             )
 
-        shares = ONE
-        cash = ZERO
-        applied: list[str] = []
-        entitled_actions = sorted(
-            (
-                action
-                for action in corporate_actions
-                if window.entry_date < action.ex_date <= window.exit_date
-            ),
-            key=lambda action: action.ex_date,
+        gross_return, applied_actions = executable_total_return(
+            entry_price=entry_open.decimal_price,
+            exit_price=exit_close.decimal_price,
+            actions=actions,
+            window=window,
         )
-        # Realized actions define the future target cash flow. They are deliberately
-        # separate from feature_available_ats and cannot enter decision features.
-        # Buying at the ex-date open is not entitled. Once entitled, a later
-        # payable date does not erase the dividend receivable from total return.
-        # Cash and share entitlements on one ex-date are both based on pre-action
-        # shares, so their result cannot depend on input record ordering.
-        for _, same_date_actions in groupby(
-            entitled_actions,
-            key=lambda action: action.ex_date,
-        ):
-            actions = tuple(same_date_actions)
-            pre_action_shares = shares
-            cash += pre_action_shares * sum(
-                (action.cash_per_share for action in actions),
-                start=ZERO,
-            )
-            for action in actions:
-                shares *= action.share_multiplier
-                applied.append(action.action_id)
-
-        terminal_value = shares * exit_close.price + cash
-        gross_return = terminal_value / entry_open.price - ONE
         net_return = gross_return - cost_rate
         excess_return = net_return - benchmark
+        direction, band, band_version = self._direction_target(
+            net_return=net_return,
+            horizon=horizon,
+            trailing_volatility=trailing_volatility,
+            config=no_trade_band_config,
+        )
         return LabelResult(
             symbol=symbol,
             window=window,
@@ -259,10 +164,82 @@ class LabelFactory:
             benchmark_return=benchmark,
             excess_return=excess_return,
             round_trip_cost_rate=cost_rate,
+            cost_profile_version=resolved_cost_version,
             benchmark_id=benchmark_id,
             benchmark_version=benchmark_version,
+            direction=direction,
+            no_trade_band=band,
+            no_trade_band_version=band_version,
             reason_codes=(),
-            applied_corporate_actions=tuple(applied),
+            applied_corporate_actions=applied_actions,
+        )
+
+    @staticmethod
+    def _validate_benchmark(
+        benchmark_return: Decimal | int | float | str | None,
+        benchmark_id: str,
+        benchmark_version: str,
+    ) -> Decimal:
+        if benchmark_return is None:
+            raise LabelDataError("benchmark_return is required")
+        benchmark = decimal_label_value(benchmark_return, name="benchmark_return")
+        if benchmark <= -ONE:
+            raise ValueError("benchmark_return cannot be less than or equal to -1")
+        if not benchmark_id or not benchmark_version:
+            raise ValueError("benchmark id and version are required for model metadata")
+        return benchmark
+
+    @staticmethod
+    def _direction_target(
+        *,
+        net_return: Decimal,
+        horizon: int,
+        trailing_volatility: float | None,
+        config: NoTradeBandConfig | None,
+    ) -> tuple[DirectionLabel | None, Decimal | None, str | None]:
+        if trailing_volatility is None and config is None:
+            return None, None, None
+        if trailing_volatility is None or config is None:
+            raise LabelDataError(
+                "trailing_volatility and no_trade_band_config must be supplied together"
+            )
+        if config.horizon != horizon:
+            raise ValueError("no-trade band horizon must match the label horizon")
+        band = no_trade_band(trailing_volatility, config)
+        return (
+            make_direction_label(float(net_return), trailing_volatility, config),
+            Decimal(str(band)),
+            config.version,
+        )
+
+    @staticmethod
+    def _invalid_result(
+        *,
+        symbol: str,
+        window: LabelWindow,
+        cost_rate: Decimal,
+        cost_profile_version: str,
+        benchmark_id: str,
+        benchmark_version: str,
+        reason_codes: Iterable[str],
+    ) -> LabelResult:
+        return LabelResult(
+            symbol=symbol,
+            window=window,
+            valid=False,
+            gross_return=None,
+            net_return=None,
+            benchmark_return=None,
+            excess_return=None,
+            round_trip_cost_rate=cost_rate,
+            cost_profile_version=cost_profile_version,
+            benchmark_id=benchmark_id,
+            benchmark_version=benchmark_version,
+            direction=None,
+            no_trade_band=None,
+            no_trade_band_version=None,
+            reason_codes=tuple(dict.fromkeys(reason_codes)),
+            applied_corporate_actions=(),
         )
 
     @staticmethod
@@ -270,16 +247,21 @@ class LabelFactory:
         feature_available_ats: Mapping[str, datetime] | Iterable[datetime],
         decision_at: datetime,
     ) -> None:
-        values = (
-            feature_available_ats.items()
-            if isinstance(feature_available_ats, Mapping)
-            else enumerate(feature_available_ats)
-        )
         late: list[str] = []
-        for name, available_at in values:
-            _require_aware(available_at, f"available_at[{name}]")
-            if available_at > decision_at:
-                late.append(str(name))
+        if isinstance(feature_available_ats, Mapping):
+            named_available_ats = cast(
+                Mapping[str, datetime],
+                feature_available_ats,
+            )
+            for name, available_at in named_available_ats.items():
+                require_aware_datetime(available_at, f"available_at[{name}]")
+                if available_at > decision_at:
+                    late.append(name)
+        else:
+            for index, available_at in enumerate(feature_available_ats):
+                require_aware_datetime(available_at, f"available_at[{index}]")
+                if available_at > decision_at:
+                    late.append(str(index))
         if late:
             raise LookAheadError(
                 "features released after decision_at: " + ", ".join(sorted(late))
@@ -292,9 +274,27 @@ class LabelFactory:
             reasons.append(f"{side}_{price.trading_status}")
         if not price.has_trade:
             reasons.append(f"{side}_NO_TRADE")
-        adverse_limit = (
-            side == "BUY" and price.price_limit_state == "LIMIT_UP"
-        ) or (side == "SELL" and price.price_limit_state == "LIMIT_DOWN")
+        adverse_limit = (side == "BUY" and price.price_limit_state == "LIMIT_UP") or (
+            side == "SELL" and price.price_limit_state == "LIMIT_DOWN"
+        )
         if adverse_limit and price.counterparty_volume_confirmed is not True:
             reasons.append(f"{side}_LIMIT_FILL_UNCONFIRMED")
         return reasons
+
+
+__all__ = [
+    "CorporateAction",
+    "CorporateActionCoverage",
+    "DirectionLabel",
+    "ExecutablePrice",
+    "LabelDataError",
+    "LabelFactory",
+    "LabelResult",
+    "LabelWindow",
+    "LookAheadError",
+    "NoTradeBandConfig",
+    "TradingCalendar",
+    "make_direction_label",
+    "make_direction_labels",
+    "no_trade_band",
+]

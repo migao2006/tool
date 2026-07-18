@@ -1,0 +1,152 @@
+"""Read and validate paginated R2 archive manifests from Supabase."""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from dataclasses import dataclass
+from hashlib import sha256
+from types import MappingProxyType
+from typing import Protocol, final
+
+from .contracts import HistoricalArchiveManifest, HistoricalArchiveReadError
+
+
+_MANIFEST_FIELDS = (
+    "archive_id",
+    "archive_key",
+    "storage_provider",
+    "bucket_name",
+    "object_key",
+    "object_etag",
+    "schema_version",
+    "provider_code",
+    "source_dataset",
+    "source_version",
+    "source_symbol",
+    "scheduled_market",
+    "asset_type",
+    "requested_start_date",
+    "requested_end_date",
+    "min_trade_date",
+    "max_trade_date",
+    "source_payload_hash",
+    "parquet_sha256",
+    "byte_size",
+    "row_count",
+    "parsed_row_count",
+    "quarantined_row_count",
+    "first_observed_at",
+    "point_in_time_status",
+    "usage_scope",
+    "system_status",
+    "reason_codes",
+)
+
+
+class ManifestRowSource(Protocol):
+    """Minimal private-schema query boundary used by the repository."""
+
+    def select_rows(
+        self,
+        table: str,
+        *,
+        select: str,
+        filters: Mapping[str, str] | None = None,
+        limit: int = 1_000,
+    ) -> list[dict[str, object]]: ...
+
+
+@dataclass(frozen=True)
+class HistoricalArchiveManifestSnapshot:
+    """Deterministic set of validated manifest rows used by one audit."""
+
+    rows: tuple[Mapping[str, object], ...]
+    snapshot_sha256: str
+    complete: bool
+
+    @property
+    def object_count(self) -> int:
+        return len(self.rows)
+
+
+@final
+class HistoricalArchiveManifestRepository:
+    """Keyset-page manifests without relying on a mutable row offset."""
+
+    def __init__(self, source: ManifestRowSource, *, page_size: int = 500) -> None:
+        if not 1 <= page_size <= 1_000:
+            raise ValueError("page_size must be between 1 and 1000")
+        self.source = source
+        self.page_size = page_size
+
+    def fetch(
+        self, *, max_objects: int | None = None
+    ) -> HistoricalArchiveManifestSnapshot:
+        if max_objects is not None and max_objects <= 0:
+            raise ValueError("max_objects must be positive when provided")
+
+        rows: list[Mapping[str, object]] = []
+        identities: list[str] = []
+        last_archive_id = 0
+        complete = True
+
+        while True:
+            remaining = None if max_objects is None else max_objects - len(rows)
+            if remaining is not None and remaining <= 0:
+                complete = False
+                break
+            request_limit = (
+                self.page_size if remaining is None else min(self.page_size, remaining)
+            )
+            page = self.source.select_rows(
+                "historical_archive_objects",
+                select=",".join(_MANIFEST_FIELDS),
+                filters={
+                    "archive_id": f"gt.{last_archive_id}",
+                    "order": "archive_id.asc",
+                },
+                limit=request_limit,
+            )
+            if len(page) > request_limit:
+                raise HistoricalArchiveReadError(
+                    "HISTORICAL_ARCHIVE_MANIFEST_PAGE_INVALID",
+                    "Supabase returned more archive manifests than requested",
+                )
+            if not page:
+                break
+
+            for raw in page:
+                archive_id = raw.get("archive_id")
+                if (
+                    isinstance(archive_id, bool)
+                    or not isinstance(archive_id, int)
+                    or archive_id <= last_archive_id
+                ):
+                    raise HistoricalArchiveReadError(
+                        "HISTORICAL_ARCHIVE_MANIFEST_ORDER_INVALID",
+                        "Archive manifests are not strictly ordered by archive_id",
+                    )
+                manifest = HistoricalArchiveManifest.from_mapping(raw)
+                last_archive_id = archive_id
+                rows.append(MappingProxyType(dict(raw)))
+                identities.append(
+                    "\0".join(
+                        (
+                            str(archive_id),
+                            manifest.archive_key,
+                            manifest.parquet_sha256,
+                            str(manifest.byte_size),
+                            str(manifest.row_count),
+                        )
+                    )
+                )
+
+            if len(page) < request_limit:
+                break
+
+        digest = sha256("\n".join(identities).encode("utf-8")).hexdigest()
+        return HistoricalArchiveManifestSnapshot(
+            rows=tuple(rows),
+            snapshot_sha256=digest,
+            complete=complete,
+        )

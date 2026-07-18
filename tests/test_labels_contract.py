@@ -6,6 +6,7 @@ import pytest
 
 from src.labels.label_factory import (
     CorporateAction,
+    CorporateActionCoverage,
     ExecutablePrice,
     LabelFactory,
     LookAheadError,
@@ -19,6 +20,14 @@ TAIPEI = ZoneInfo("Asia/Taipei")
 def _sessions() -> list[date]:
     start = date(2026, 7, 1)
     return [start + timedelta(days=offset) for offset in (0, 1, 2, 5, 6, 7, 8, 9)]
+
+
+def _coverage() -> CorporateActionCoverage:
+    return CorporateActionCoverage(
+        start_date=date(2026, 7, 2),
+        end_date=date(2026, 7, 8),
+        source_version="test-actions-v1",
+    )
 
 
 def test_five_session_label_enters_next_open_and_exits_fifth_close() -> None:
@@ -54,7 +63,11 @@ def test_label_rejects_feature_released_after_decision() -> None:
             benchmark_id="TAIEX",
             benchmark_version="v1",
             round_trip_cost_rate=Decimal("0.005"),
-            feature_available_ats={"future_feature": decision_at + timedelta(seconds=1)},
+            cost_profile_version="test-cost-v1",
+            feature_available_ats={
+                "future_feature": decision_at + timedelta(seconds=1)
+            },
+            corporate_action_coverage=_coverage(),
         )
 
 
@@ -84,8 +97,10 @@ def test_total_return_includes_entitled_cash_and_split_then_subtracts_cost() -> 
         benchmark_id="TAIEX",
         benchmark_version="2026-v1",
         round_trip_cost_rate=Decimal("0.005"),
+        cost_profile_version="test-cost-v1",
         feature_available_ats={"close": decision_at},
         corporate_actions=actions,
+        corporate_action_coverage=_coverage(),
     )
 
     assert result.valid is True
@@ -106,6 +121,7 @@ def test_buying_at_ex_date_open_does_not_receive_the_entitlement() -> None:
         benchmark_id="TAIEX",
         benchmark_version="v1",
         round_trip_cost_rate=Decimal("0"),
+        cost_profile_version="test-cost-v1",
         corporate_actions=(
             CorporateAction(
                 action_id="ex-date-cash",
@@ -114,13 +130,16 @@ def test_buying_at_ex_date_open_does_not_receive_the_entitlement() -> None:
                 cash_per_share=Decimal("10"),
             ),
         ),
+        corporate_action_coverage=_coverage(),
     )
 
     assert result.gross_return == Decimal("0")
     assert result.applied_corporate_actions == ()
 
 
-def test_same_ex_date_cash_and_split_use_pre_action_shares_regardless_of_order() -> None:
+def test_same_ex_date_cash_and_split_use_pre_action_shares_regardless_of_order() -> (
+    None
+):
     factory = LabelFactory(TradingCalendar(_sessions()))
     cash = CorporateAction(
         action_id="cash",
@@ -143,7 +162,9 @@ def test_same_ex_date_cash_and_split_use_pre_action_shares_regardless_of_order()
             benchmark_id="TAIEX",
             benchmark_version="v1",
             round_trip_cost_rate=Decimal("0"),
+            cost_profile_version="test-cost-v1",
             corporate_actions=actions,
+            corporate_action_coverage=_coverage(),
         )
 
     assert create((cash, split)).gross_return == Decimal("0.10")
@@ -166,6 +187,8 @@ def test_daily_limit_without_confirmed_counterparty_is_not_assumed_filled() -> N
         benchmark_id="TAIEX",
         benchmark_version="v1",
         round_trip_cost_rate=Decimal("0.005"),
+        cost_profile_version="test-cost-v1",
+        corporate_action_coverage=_coverage(),
     )
 
     assert result.valid is False

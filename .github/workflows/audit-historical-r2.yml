@@ -1,0 +1,81 @@
+name: Audit historical R2 archive
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Daily integrity verification; raw history remains research-only.
+    - cron: "43 19 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: historical-r2-integrity-audit
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install uv with dependency caching
+        uses: astral-sh/setup-uv@v8.3.2
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Synchronize locked environment
+        run: uv sync --frozen
+
+      - name: Require private archive credentials
+        env:
+          R2_ACCOUNT_ID: ${{ vars.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET_NAME: ${{ vars.R2_BUCKET_NAME }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          required=(
+            R2_ACCOUNT_ID
+            R2_ACCESS_KEY_ID
+            R2_SECRET_ACCESS_KEY
+            R2_BUCKET_NAME
+            SUPABASE_URL
+            SUPABASE_SERVICE_ROLE_KEY
+          )
+          for name in "${required[@]}"; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "Required archive audit configuration is not set: $name"
+              exit 1
+            fi
+          done
+
+      - name: Verify every manifest and Parquet object
+        env:
+          R2_ACCOUNT_ID: ${{ vars.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET_NAME: ${{ vars.R2_BUCKET_NAME }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: >-
+          uv run python -m scripts.audit_historical_r2_archive
+          --output historical-r2-audit.json
+
+      - name: Preserve integrity report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: historical-r2-audit-${{ github.run_id }}
+          path: historical-r2-audit.json
+          if-no-files-found: error
+          retention-days: 90

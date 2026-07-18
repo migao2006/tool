@@ -16,8 +16,23 @@
 
 - R2 bucket 必須保持 private，不啟用 `r2.dev` 公開存取或 public custom domain。
 - worker 透過 R2 的 S3-compatible HTTPS endpoint 寫入 immutable Parquet object；R2 client 固定使用 `region=auto`，並以已知 byte length 上傳及驗證 metadata、大小與 SHA-256。
-- Supabase 只為新 R2 封存保存 `historical_archive_objects` manifest，包含 bucket、object key、來源期間、資料雜湊、Parquet 雜湊、列數、狀態及追蹤資訊；新封存的原始歷史列不複製進 PostgreSQL。既有 landing rows 保留，不做破壞性搬移。
+- Supabase 只為新 R2 封存保存 `historical_archive_objects` manifest，包含 bucket、object key、來源期間、資料雜湊、Parquet 雜湊、列數、狀態及追蹤資訊；新封存的原始歷史列不複製進 PostgreSQL。目前多年歷史行情以 R2 為原始封存來源，Supabase landing 可以保持空白並由 queue 重新回補至 R2。
 - object 驗證成功後才寫 manifest。既有 object 或 manifest 必須以相同 key 冪等處理；驗證失敗時 fail closed，排程 task 進入 retry。
+
+## 讀取與完整性稽核
+
+- `HistoricalParquetReader` 先驗證 bucket、R2 head metadata、ETag、byte size 及 SHA-256，再解析 Parquet；任一檢查失敗時不得釋出資料列。
+- Parquet 必須符合固定 schema、schema metadata 與 ZSTD 壓縮，並逐列核對股票代號、日期範圍、來源 payload、資料狀態、排序及 parsed／quarantined 數量。
+- `HistoricalArchiveManifestRepository` 使用 `archive_id` keyset pagination 讀取全部 manifest，不使用會因資料持續新增而漂移的 offset pagination。
+- `.github/workflows/audit-historical-r2.yml` 每日執行全量唯讀稽核，也可手動執行；結果保存為 90 天 GitHub artifact，不包含憑證或原始行情內容。
+- 本機或 CI 可執行：
+
+```powershell
+uv run python -m scripts.audit_historical_r2_archive `
+  --output historical-r2-audit.json
+```
+
+- 完整性 `PASS` 只代表 manifest 與 R2 Parquet 一致，不代表 point-in-time、身分解析、模型或回測已通過；系統仍維持 `RESEARCH_ONLY`。
 
 ## GitHub Actions 設定名稱
 

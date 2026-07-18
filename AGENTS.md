@@ -160,12 +160,13 @@ tests/            # 對應模組測試
 
 ## 七、工具鏈與自動檢查
 
-目前可用工具鏈包含 Git、GitHub CLI、Node.js、npm、pnpm、Python、uv、pytest、Ruff、basedpyright、pre-commit、Playwright、Biome、SQLFluff、actionlint、Gitleaks、pip-audit、Supabase CLI 與 Vercel CLI。工具已安裝不代表自動授權部署、修改遠端資料、變更資料庫或改寫專案設定。
+目前可用工具鏈包含 Git、GitHub CLI、Node.js、npm、pnpm、Python、uv、pytest、pytest-xdist、Ruff、basedpyright、pre-commit、Playwright、Biome、SQLFluff、actionlint、Gitleaks、pip-audit、Supabase CLI 與 Vercel CLI。工具已安裝不代表自動授權部署、修改遠端資料、變更資料庫或改寫專案設定。
 
 ### 7.1 Python
 
 - Python 環境與套件優先使用 `uv`；專案依賴寫入 `pyproject.toml` 並以 `uv.lock` 鎖定，不得依賴本機全域套件才能執行。
 - 使用 Ruff 做格式化與 lint、basedpyright 做型別檢查、pytest 做測試、pip-audit 做相依套件漏洞檢查。
+- Windows 若因企業或系統憑證鏈造成 uv `UnknownIssuer`，可使用 `uv run --system-certs <command>` 或設定 `UV_SYSTEM_CERTS=true`；不得關閉 TLS 驗證或加入不安全來源。
 - 未有明確必要時，不再加入 Black、Flake8、isort、mypy、Poetry 或 pip-tools 等重疊工具。
 - 格式化、型別與安全掃描不能取代標籤、交易成本、時間切割及資料洩漏測試。
 
@@ -173,9 +174,12 @@ tests/            # 對應模組測試
 
 - 前端套件管理統一使用 `pnpm`，不得同時提交 npm 或 Yarn lockfile。
 - 使用 Biome 檢查及格式化 JavaScript、CSS、JSON；使用 Playwright 執行真實瀏覽器互動測試。
+- Playwright 由專案內設定檔統一管理 worker；同一次測試執行共用一個本機 fixture server，並使用 `reuseExistingServer` 避免每個案例重啟網站。
+- Windows 上 pnpm 若遇到 `UnknownIssuer`，可在該次命令設定 `NODE_OPTIONS=--use-system-ca`；禁止以 `strict-ssl=false` 繞過憑證驗證。
 - 全域 Biome 只供本機操作。正式接入專案時，必須在 `package.json` 鎖定版本、提交 `pnpm-lock.yaml` 與 `biome.json`，並排除 `src/vendor`、壓縮檔及其他第三方產物。
 - 已使用 Playwright 時，不新增 Selenium、Cypress 或 Puppeteer，除非有已記錄且 Playwright 無法滿足的需求。
 - 瀏覽器測試至少覆蓋主要導覽、登入狀態、空資料、API 錯誤及 iPhone viewport；不得使用假預測資料讓測試通過。
+- 自動測試可在 `tests/` 內使用明確標記 `TEST_ONLY_FIXTURE` 的固定契約資料，但不得打包至正式前端、寫入正式資料庫，或將 fixture 結果宣稱為模型績效與正式推薦。
 
 ### 7.3 SQL、工作流程與機密
 
@@ -194,6 +198,15 @@ tests/            # 對應模組測試
 - 只有需要登入、缺少權限、接觸機密、執行破壞性操作、進行未明確授權的遠端狀態變更，或必須由使用者決定產品方向時，才要求使用者介入。
 - 工具清單代表已偵測到的開發能力，不代表永久可用或自動授權；實際使用前仍須針對本次任務確認。Docker 目前不列為已安裝工具。
 - 部署與遠端資料庫變更仍須遵守第六章及第九章；未經當次明確授權不得操作 Vercel。
+
+### 7.5 測試加速與快取
+
+- `pytest-xdist` 已納入測試依賴；大型或較慢的測試套件使用 `uv run pytest -n auto`，worker 上限與分派策略由 `pyproject.toml` 管理。
+- 不得為了形式上平行而讓測試變慢。當完整套件仍很短時，預設使用循序 `uv run pytest`；只有實測平行較快或需要 CI 分散負載時才啟用 xdist。
+- Pull Request 可依 backend／frontend 受影響範圍分流測試，但不做容易漏掉間接依賴的單檔猜測；共用設定、未知程式變更、`main`、排程與發布前必須執行完整相關回歸。
+- GitHub Actions 的 Python 工作使用 uv 鎖檔與快取；前端工作使用 pnpm lockfile 與 pnpm store 快取。CI 必須採 frozen lockfile，不得在 runner 中臨時改寫依賴版本。
+- Playwright 使用多 worker 並共用一次啟動的本機網站；若測試共享可變狀態，必須先隔離資料或標記為循序，不得用提高 worker 數掩蓋競態問題。
+- 快速受影響測試只提供提早回饋，不能取代 `main` 的完整回歸與必要的資料洩漏、Auth、Migration、模型及回測驗證。
 
 ## 八、工作流程與驗證尺度
 

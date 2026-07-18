@@ -3,6 +3,7 @@ from datetime import date
 from src.data.ingestion.contracts import IngestionError
 from src.data.ingestion.historical_backfill_runtime import finmind_quota_counters
 from tests.support.historical_backfill_fakes import (
+    Clock,
     FakeLandingService,
     FakeProvider,
     FakeRepository,
@@ -62,9 +63,7 @@ def test_capacity_guard_stops_before_claiming_a_task() -> None:
         [task(1, "2330", "TWSE", "COMMON_STOCK")],
         snapshots=[snapshot(database_bytes=420_000_000)],
     )
-    summary = make_coordinator(
-        FakeProvider(), repository, FakeLandingService()
-    ).run(
+    summary = make_coordinator(FakeProvider(), repository, FakeLandingService()).run(
         start_date=date(2021, 7, 19),
         end_date=date(2026, 7, 17),
         max_tasks=60,
@@ -101,14 +100,54 @@ def test_each_symbol_is_completed_independently_and_order_is_preserved() -> None
     assert landing.refresh_calls == 1
 
 
+def test_pacing_uses_logical_request_start_with_four_second_landing_latency() -> None:
+    clock = Clock()
+    repository = FakeRepository(
+        [
+            task(1, "2330", "TWSE", "COMMON_STOCK"),
+            task(2, "2317", "TWSE", "COMMON_STOCK"),
+        ]
+    )
+    landing = FakeLandingService(latency_fn=lambda _: clock.advance(4.0))
+
+    _ = make_coordinator(FakeProvider(), repository, landing, clock=clock).run(
+        start_date=date(2021, 7, 19),
+        end_date=date(2026, 7, 17),
+        max_tasks=2,
+        worker_id="test",
+    )
+
+    # The initial 6.5 seconds separates the quota call from the first symbol.
+    # Four seconds of logical-call latency leave only 2.5 seconds to the next start.
+    assert clock.sleep_calls == [6.5, 2.5]
+
+
+def test_pacing_does_not_sleep_after_latency_reaches_the_logical_interval() -> None:
+    clock = Clock()
+    repository = FakeRepository(
+        [
+            task(1, "2330", "TWSE", "COMMON_STOCK"),
+            task(2, "2317", "TWSE", "COMMON_STOCK"),
+        ]
+    )
+    landing = FakeLandingService(latency_fn=lambda _: clock.advance(6.5))
+
+    _ = make_coordinator(FakeProvider(), repository, landing, clock=clock).run(
+        start_date=date(2021, 7, 19),
+        end_date=date(2026, 7, 17),
+        max_tasks=2,
+        worker_id="test",
+    )
+
+    assert clock.sleep_calls == [6.5]
+
+
 def test_etf_universe_is_only_seeded_after_common_stage_finishes() -> None:
     common_repository = FakeRepository(
         snapshots=[snapshot(twse=1, tpex=0, etf_tasks=0, etf=0)]
     )
     common_provider = FakeProvider()
-    _ = make_coordinator(
-        common_provider, common_repository, FakeLandingService()
-    ).run(
+    _ = make_coordinator(common_provider, common_repository, FakeLandingService()).run(
         start_date=date(2021, 7, 19),
         end_date=date(2026, 7, 17),
         max_tasks=1,

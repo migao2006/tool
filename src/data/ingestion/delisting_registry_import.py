@@ -19,6 +19,7 @@ from .delisting_registry_contracts import (
     NormalizedDelistingRegistry,
 )
 from .normalizers import data_source_rows, revision_version
+from .parallel_fetch import PayloadFetchRequest, fetch_provider_payloads
 from .returned_ids import returned_id_map
 from .supabase_writer import SupabaseWriter
 
@@ -78,10 +79,16 @@ class DelistingRegistryImporter:
         return self.writer
 
     def _fetch_all(self) -> dict[str, ProviderPayload]:
-        return {
-            market: self.registry[market].fetch("delisting_registry")
-            for market in ("TWSE", "TPEX")
-        }
+        return fetch_provider_payloads(
+            {
+                market: PayloadFetchRequest(
+                    market,
+                    self.registry[market],
+                    "delisting_registry",
+                )
+                for market in ("TWSE", "TPEX")
+            }
+        )
 
     @staticmethod
     def _normalize(

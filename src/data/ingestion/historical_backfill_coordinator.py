@@ -84,11 +84,12 @@ class HistoricalBackfillCoordinator:
             raise ValueError("now_fn must return a timezone-aware datetime")
 
         self.repository.ensure_finmind_source()
-        _ = self.repository.seed_common(
-            start_date=start_date,
-            end_date=end_date,
-            selection_snapshot_at=selection_snapshot_at,
-        )
+        if self.settings.seed_common_tasks:
+            _ = self.repository.seed_common(
+                start_date=start_date,
+                end_date=end_date,
+                selection_snapshot_at=selection_snapshot_at,
+            )
         before = self.repository.snapshot(start_date=start_date, end_date=end_date)
         # Pace logical FinMind calls from request start to request start. Transport
         # retries remain internal to the HTTP client and are not counted as separate

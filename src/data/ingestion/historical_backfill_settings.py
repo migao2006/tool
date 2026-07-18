@@ -53,6 +53,7 @@ class HistoricalBackfillSettings:
     storage_target: str = "SUPABASE"
     max_archive_objects_per_run: int = 100
     max_archive_object_bytes: int = 50_000_000
+    seed_common_tasks: bool = True
     refresh_home_status: bool = True
 
     @classmethod
@@ -97,6 +98,11 @@ class HistoricalBackfillSettings:
                 50_000_000,
                 1_000_000,
                 500_000_000,
+            ),
+            seed_common_tasks=_boolean(
+                values,
+                "HISTORICAL_BACKFILL_SEED_COMMON_TASKS",
+                True,
             ),
             refresh_home_status=_boolean(
                 values,

@@ -89,6 +89,21 @@ def test_watchlist_api_requires_session_and_refreshes_after_auth_changes() -> No
     assert 'new CustomEvent("alpha-lens:auth-change"' in auth_controller
 
 
+def test_supabase_sdk_loader_is_shared_bounded_and_fail_closed() -> None:
+    index = read("index.html")
+    loader = read("src/data/supabase-sdk-loader.js")
+    client = read("src/data/supabase-client.js")
+    prediction = read("src/data/prediction-api.js")
+
+    assert "supabase-2.110.7.min.js" not in index
+    assert "let sdkPromise" in loader
+    assert "MAX_ATTEMPTS = 2" in loader
+    assert "SUPABASE_SDK_LOAD_FAILED" in loader
+    assert "sdkPromise ??= loadWithRetry()" in loader
+    assert "await loadSupabaseCreateClient()" in client
+    assert "isSupabaseSdkLoadError(error)" in prediction
+
+
 def test_decision_gate_renderer_matches_backend_contract_and_formats_objects() -> None:
     gates = read("src/components/decision-gates.js")
     for key in (

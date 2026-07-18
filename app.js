@@ -6,9 +6,9 @@ import { initializeWatchlistFilters } from "./src/features/watchlist-filters.js"
 import { CURRENT_HORIZON } from "./src/core/five-day-contract.js";
 import { createRouter } from "./src/core/router.js?v=debug-1";
 import { UI_STATE, applyUiState, resolveSnapshotUiState } from "./src/core/ui-state.js";
-import { loadPredictionSnapshot } from "./src/data/prediction-api.js?v=api-5";
+import { loadPredictionSnapshot } from "./src/data/prediction-api.js?v=api-6";
 import { createUnavailableSnapshot } from "./src/data/prediction-contract.js?v=api-4";
-import { setWatchlistMembership } from "./src/data/watchlist-api.js?v=api-4";
+import { setWatchlistMembership } from "./src/data/watchlist-api.js?v=api-5";
 import { createCandidatesPage, renderCandidatesPage } from "./src/pages/candidates-page.js?v=ui-3";
 import { createOverviewPage, renderOverviewPage } from "./src/pages/overview-page.js?v=ui-4";
 import { createStockDetailPage, renderStockDetailPage } from "./src/pages/stock-detail-page.js?v=ui-3";

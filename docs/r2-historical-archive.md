@@ -68,6 +68,8 @@ HISTORICAL_BENCHMARK_BACKFILL_ENABLED
 HISTORICAL_SUPPLEMENTAL_BACKFILL_ENABLED
 FINMIND_HISTORICAL_EVIDENCE_ENABLED
 TWSE_RESEARCH_FEATURE_DATASET_ENABLED
+FUGLE_ADJUSTED_BACKFILL_ENABLED
+FUGLE_ADJUSTED_MIGRATION_READY
 ```
 
 Repository secrets：
@@ -76,6 +78,7 @@ Repository secrets：
 FINMIND_TOKEN
 FINMIND_TOKEN_SECONDARY
 FINMIND_TOKEN_TERTIARY
+FUGLE_API_KEY
 R2_ACCESS_KEY_ID
 R2_SECRET_ACCESS_KEY
 SUPABASE_URL
@@ -97,6 +100,11 @@ HISTORICAL_SUPPLEMENTAL_ALLOWED_DATASETS
 `institutional_flows,margin_short`。`adjusted_bars` 任務不刪除、不記為成功，會以
 `ADJUSTED_BARS_PROVIDER_ACCESS_UNAVAILABLE` 延後；確認 credential 已取得
 `TaiwanStockPriceAdj` 權限後，才可在手動 workflow dispatch 明確加入 `adjusted_bars`。
+
+Fugle adjusted workflow 另用單一 `FUGLE_API_KEY`，不共用 FinMind supplemental RPC 或
+credential slot。兩個 Fugle repository variables 未同時明確設為 `true` 時，排程 job 會保持
+關閉；worker 本身也會在 dedicated migration RPC 不存在時先 fail closed，之後才可能建立
+R2 client 或呼叫 provider。
 
 `.env.example` 只記錄名稱與空值；實際 secret 不得以明文保存或回傳。
 

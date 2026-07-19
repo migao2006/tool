@@ -1,0 +1,79 @@
+name: Backfill Fugle adjusted TWSE history
+
+on:
+  workflow_dispatch:
+    inputs:
+      max_tasks:
+        description: Maximum one-year symbol chunks processed in this run
+        required: true
+        default: 25
+        type: number
+  schedule:
+    - cron: "17 */2 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fugle-adjusted-backfill
+  cancel-in-progress: false
+
+jobs:
+  backfill:
+    if: >-
+      ${{ vars.FUGLE_ADJUSTED_BACKFILL_ENABLED == 'true' &&
+          vars.FUGLE_ADJUSTED_MIGRATION_READY == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install uv with dependency caching
+        uses: astral-sh/setup-uv@v8.3.2
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Synchronize locked environment
+        run: uv sync --frozen
+
+      - name: Run isolated pacing-aware Fugle adjusted backfill
+        env:
+          FUGLE_API_KEY: ${{ secrets.FUGLE_API_KEY }}
+          R2_ACCOUNT_ID: ${{ vars.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET_NAME: ${{ vars.R2_BUCKET_NAME }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          FUGLE_ADJUSTED_BACKFILL_ENABLED: "true"
+          FUGLE_ADJUSTED_REQUEST_BUDGET_PER_RUN: "25"
+          FUGLE_ADJUSTED_PACING_SECONDS: "2"
+          FUGLE_ADJUSTED_RETRY_AFTER_SECONDS: "3600"
+          HISTORICAL_BACKFILL_MAX_RUNTIME_SECONDS: "1200"
+          HISTORICAL_BACKFILL_STORAGE_TARGET: R2
+          HISTORICAL_BACKFILL_MAX_ARCHIVE_OBJECTS_PER_RUN: "100"
+          HISTORICAL_BACKFILL_MAX_ARCHIVE_OBJECT_BYTES: "50000000"
+          HISTORICAL_BACKFILL_SEED_COMMON_TASKS: "true"
+          HISTORICAL_BACKFILL_REFRESH_HOME_STATUS: "false"
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run python -m scripts.backfill_fugle_adjusted \
+            --start-date 2018-01-01 \
+            --end-date 2026-07-17 \
+            --max-tasks "${{ github.event.inputs.max_tasks || '25' }}" \
+            --output fugle-adjusted-summary.json
+
+      - name: Preserve compact research audit summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fugle-adjusted-summary-${{ github.run_id }}
+          path: fugle-adjusted-summary.json
+          if-no-files-found: warn
+          retention-days: 90

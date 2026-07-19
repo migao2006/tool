@@ -24,7 +24,7 @@ export function createCandidateCard(prediction, { horizon, compact = false } = {
         <span class="decision-badge">${escapeHtml(prediction.decision ?? "—")}</span>
       </header>
       <p class="candidate-meta">${escapeHtml(prediction.market ?? "—")} · ${escapeHtml(prediction.industry ?? "—")}</p>
-      ${compact ? `<p class="compact-rank">Rank Score <strong>${formatRankScore(prediction.rank_score)}</strong> · ${formatRank(prediction.global_rank)}</p>` : detailRows}
+      ${compact ? `<p class="compact-rank">Rank Score <strong>${formatRankScore(prediction.rank_score)}</strong> · ${formatRank(prediction.global_rank)}<br>校準後 UP <strong>${formatPercent(prediction.calibrated_p_up)}</strong> · 條件 P50 <strong>${formatPercent(prediction.net_q50)}</strong></p>` : detailRows}
       <button class="card-open-button" type="button" data-open-stock data-symbol="${symbol}">查看決策詳情</button>
     </article>`;
 }

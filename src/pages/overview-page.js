@@ -6,7 +6,11 @@ import { createHomeDataStatusPanel } from "../components/home-data-status.js?v=h
 import { createValidationReportDrawer, renderValidationReport } from "../components/validation-report-drawer.js";
 import { formatDateTime, formatPercent } from "../core/formatters.js";
 import { setText } from "../core/html.js";
-import { canDisplaySnapshotRecords, overviewStockRecords } from "../features/prediction-selection.js";
+import {
+  canDisplaySnapshotRecords,
+  isHistoricalResearchSnapshot,
+  overviewStockRecords,
+} from "../features/prediction-selection.js";
 
 export function createOverviewPage({ horizon }) {
   return `
@@ -101,7 +105,12 @@ export function renderOverviewPage(snapshot, uiState) {
 
   const list = root.querySelector("[data-overview-candidates]");
   const researchOnly = snapshot.systemStatus === "RESEARCH_ONLY";
-  setText(root, "[data-overview-list-title]", researchOnly ? "5 日研究排序" : "通過門檻的前 3～5 檔");
+  const historicalResearch = isHistoricalResearchSnapshot(snapshot);
+  setText(
+    root,
+    "[data-overview-list-title]",
+    historicalResearch ? "5 日歷史研究排序" : researchOnly ? "5 日研究排序" : "通過門檻的前 3～5 檔",
+  );
   const candidates = overviewStockRecords(snapshot).slice(0, 5);
   if (list) {
     list.innerHTML = candidates.length

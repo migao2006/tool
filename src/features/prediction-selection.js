@@ -5,9 +5,15 @@ export function isOrdinaryStock(record) {
 }
 
 export function canDisplaySnapshotRecords(snapshot) {
-  return ["PASS", "RESEARCH_ONLY"].includes(snapshot?.systemStatus)
-    && !snapshot.stale
-    && !snapshot.dataQualityHardFail;
+  if (!["PASS", "RESEARCH_ONLY"].includes(snapshot?.systemStatus)
+    || snapshot.dataQualityHardFail) return false;
+  // OOS research rows require their future label before evaluation, so they are
+  // historical by design. Formal PASS snapshots remain fail-closed when stale.
+  return snapshot.systemStatus === "RESEARCH_ONLY" || !snapshot.stale;
+}
+
+export function isHistoricalResearchSnapshot(snapshot) {
+  return snapshot?.systemStatus === "RESEARCH_ONLY" && snapshot.stale === true;
 }
 
 export function compareRankOnly(left, right) {

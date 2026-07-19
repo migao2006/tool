@@ -177,6 +177,39 @@ def build_research_snapshot() -> dict[str, object]:
     return payload
 
 
+def build_stale_oos_research_snapshot() -> dict[str, object]:
+    """Mirror the stored OOS publisher: complete fields, all rows NO_TRADE."""
+
+    payload = build_snapshot()
+    prediction = dict(payload["predictions"][0])
+    prediction.update(
+        {
+            "symbol": "OOS1",
+            "name": "歷史研究標的",
+            "rank_score": 97.0,
+            "global_rank": 1,
+            "global_rank_percentile": 0.97,
+            "calibrated_p_up": 0.61,
+            "calibrated_p_neutral": 0.27,
+            "calibrated_p_down": 0.12,
+            "net_q10": -0.024,
+            "net_q50": 0.013,
+            "net_q90": 0.046,
+            "interval_width": 0.07,
+            "decision": "NO_TRADE",
+            "reason_codes": ["RESEARCH_ONLY_NO_FORMAL_DECISION_POLICY"],
+            "gates": [],
+        }
+    )
+    payload["system_status"] = "RESEARCH_ONLY"
+    payload["stale"] = True
+    payload["predictions"] = [prediction]
+    payload["watchlist"] = []
+    payload["excluded"] = []
+    payload["reason_codes"] = ["RESEARCH_ONLY", "STALE_PREDICTION_SNAPSHOT"]
+    return payload
+
+
 class FixtureHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args: object, **kwargs: object) -> None:
         super().__init__(*args, directory=str(ROOT), **kwargs)
@@ -202,6 +235,14 @@ class FixtureHandler(SimpleHTTPRequestHandler):
             return
         if parsed.path == "/api-research/prediction-snapshot":
             body = json.dumps(build_research_snapshot(), ensure_ascii=False, allow_nan=False).encode()
+            self._send(200, body, "application/json; charset=utf-8")
+            return
+        if parsed.path == "/api-stale-oos-research/prediction-snapshot":
+            body = json.dumps(
+                build_stale_oos_research_snapshot(),
+                ensure_ascii=False,
+                allow_nan=False,
+            ).encode()
             self._send(200, body, "application/json; charset=utf-8")
             return
         if parsed.path == "/api-conflict/prediction-snapshot":
@@ -236,6 +277,7 @@ try {
                 "contract-error": "api-contract-error",
                 "conflict": "api-conflict",
                 "research": "api-research",
+                "stale-oos-research": "api-stale-oos-research",
             }.get(mode, "api")
             html = (ROOT / "index.html").read_text(encoding="utf-8").replace(
                 '<html lang="zh-Hant">',

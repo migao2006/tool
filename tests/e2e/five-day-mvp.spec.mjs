@@ -164,6 +164,39 @@ test("研究快照顯示已完成欄位，缺值維持破折號", async ({ page 
   await expect(watchCard.locator(".decision-badge")).toHaveText("—");
 });
 
+test("歷史 OOS 研究快照的 NO_TRADE 排序與已完成輸出仍可檢視", async ({ page }) => {
+  await page.goto("/?api_mode=stale-oos-research", { waitUntil: "domcontentloaded" });
+
+  await expect(page.locator("body")).toHaveAttribute("data-ui-state", "stale");
+  await expect(page.locator('[data-page="home"] [data-ui-state-title]')).toHaveText("資料已過期");
+  await expect(page.locator("[data-overview-list-title]")).toHaveText("5 日歷史研究排序");
+  const overviewCard = page.locator('[data-overview-candidates] .candidate-card[data-symbol="OOS1"]');
+  await expect(overviewCard).toBeVisible();
+  await expect(overviewCard).toContainText("Rank Score 97.0");
+  await expect(overviewCard).toContainText("校準後 UP 61.0%");
+  await expect(overviewCard).toContainText("條件 P50 1.3%");
+  await expect(page.locator('[data-overview-count="NO_TRADE"]')).toHaveText("1");
+
+  const navigation = page.getByRole("navigation", { name: "主要導覽" });
+  await navigation.getByRole("button", { name: "5 日候選" }).click();
+  await expect(page.locator("[data-candidate-list-title]")).toHaveText("5 日歷史研究結果");
+  const researchCard = page.locator('[data-candidate-list] .candidate-card[data-symbol="OOS1"]');
+  await expect(researchCard).toBeVisible();
+  await expect(researchCard.locator(".decision-badge")).toHaveText("NO_TRADE");
+  await expect(researchCard).toContainText("97.0");
+  await expect(researchCard).toContainText("61.0%／27.0%／12.0%");
+  await expect(researchCard).toContainText("-2.4%／1.3%／4.6%");
+
+  await researchCard.getByRole("button", { name: "查看決策詳情" }).click();
+  await expect(page.getByRole("heading", { name: /OOS1/u })).toBeVisible();
+  await expect(page.locator('[data-stock-field="decision"]')).toHaveText("NO_TRADE");
+  await expect(page.locator('[data-stock-field="rank_score"]')).toHaveText("97.0");
+  await expect(page.locator('[data-stock-field="calibrated_p_up"]')).toHaveText("61.0%");
+  await expect(page.locator('[data-stock-field="net_q10"]')).toHaveText("-2.4%");
+  await expect(page.locator('[data-stock-field="net_q50"]')).toHaveText("1.3%");
+  await expect(page.locator('[data-stock-field="net_q90"]')).toHaveText("4.6%");
+});
+
 test("首頁只把資料庫真實摘要顯示為 RAW／RESEARCH_ONLY", async ({ page }) => {
   await page.goto("/?api_mode=contract-error", { waitUntil: "domcontentloaded" });
 

@@ -3,7 +3,11 @@ import { createCandidateCard } from "../components/candidate-card.js";
 import { createExcludedSecuritiesDrawer, renderExcludedSecurities } from "../components/excluded-securities-drawer.js";
 import { createStatusBanner } from "../components/status-banner.js";
 import { filterCandidateRecords } from "../features/candidate-filters.js";
-import { canDisplaySnapshotRecords, displayableStockRecords } from "../features/prediction-selection.js";
+import {
+  canDisplaySnapshotRecords,
+  displayableStockRecords,
+  isHistoricalResearchSnapshot,
+} from "../features/prediction-selection.js";
 
 export function createCandidatesPage({ horizon }) {
   return `
@@ -61,7 +65,11 @@ export function renderCandidatesPage(snapshot, uiState, filters = {}) {
   const researchOnly = snapshot.systemStatus === "RESEARCH_ONLY";
   const records = canShow ? filterCandidateRecords(displayableStockRecords(snapshot), filters) : [];
   const heading = root.querySelector("[data-candidate-list-title]");
-  if (heading) heading.textContent = researchOnly ? "5 日研究結果" : "正式候選清單";
+  if (heading) {
+    heading.textContent = isHistoricalResearchSnapshot(snapshot)
+      ? "5 日歷史研究結果"
+      : researchOnly ? "5 日研究結果" : "正式候選清單";
+  }
   if (records.length) {
     list.innerHTML = records.map((record) => createCandidateCard(record, { horizon: snapshot.horizon })).join("");
     return;

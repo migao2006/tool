@@ -25,6 +25,18 @@ async function verifyTouchTarget(locator) {
   });
 }
 
+async function scrollToPageMiddle(page) {
+  return page.evaluate(() => {
+    const root = document.documentElement;
+    const previousBehavior = root.style.scrollBehavior;
+    const top = Math.round((root.scrollHeight - window.innerHeight) / 2);
+    root.style.scrollBehavior = "auto";
+    window.scrollTo({ top, behavior: "auto" });
+    root.style.scrollBehavior = previousBehavior;
+    return top;
+  });
+}
+
 async function verifyMobileViewport(page, { includeNavigation = true } = {}) {
   const layout = await page.evaluate(() => ({
     clientWidth: document.documentElement.clientWidth,
@@ -179,6 +191,36 @@ for (const viewport of MOBILE_VIEWPORTS) {
     await expect(authOpener).toBeFocused();
   });
 }
+
+test("手機瀏覽器上一頁與下一頁會恢復各頁捲動位置", async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 568 });
+  await page.goto("/?api_mode=stale-oos-research", { waitUntil: "domcontentloaded" });
+  await page.getByRole("navigation", { name: "主要導覽" })
+    .getByRole("button", { name: "5 日候選" })
+    .click();
+  await expect(page.getByRole("heading", { name: "5 日候選股" })).toBeVisible();
+
+  const candidateScroll = await scrollToPageMiddle(page);
+  expect(candidateScroll).toBeGreaterThan(100);
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(candidateScroll);
+
+  await page.locator(".app-page.is-active [data-candidate-list] .candidate-card button")
+    .first()
+    .evaluate((button) => button.click());
+  await expect(page.getByRole("heading", { name: /OOS1/u })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
+  const detailScroll = await scrollToPageMiddle(page);
+  expect(detailScroll).toBeGreaterThan(300);
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(detailScroll);
+
+  await page.goBack();
+  await expect(page.getByRole("heading", { name: "5 日候選股" })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(candidateScroll);
+
+  await page.goForward();
+  await expect(page.getByRole("heading", { name: /OOS1/u })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(detailScroll);
+});
 
 test("320px 長文字不會造成頁面水平溢位", async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 320, height: 568 });

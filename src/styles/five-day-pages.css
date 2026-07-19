@@ -120,8 +120,9 @@
 .detail-section-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 10px; }
 .detail-section-grid > .panel { min-width: 0; }
 .detail-wide { grid-column: 1 / -1; }
-.quantile-fields { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; margin: 13px 0 0; }
-.quantile-fields div { min-height: 68px; display: flex; flex-direction: column; justify-content: center; padding: 10px; border-radius: 11px; background: var(--surface-2); }
+.quantile-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; margin: 13px 0 0; }
+.quantile-fields div { min-width: 0; min-height: 68px; display: flex; flex-direction: column; justify-content: center; padding: 10px; border-radius: 11px; background: var(--surface-2); }
+.quantile-fields small { overflow-wrap: anywhere; word-break: break-word; }
 .quantile-fields dd { margin-top: 3px; text-align: left; }
 .inline-fields { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0 12px; }
 
@@ -148,4 +149,8 @@
   .watch-filters { display: grid; overflow: visible; }
   .watch-filters button { min-width: 0; }
   .date-badge { max-width: 48%; white-space: nowrap; }
+}
+
+@media (max-width: 360px) {
+  .quantile-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }

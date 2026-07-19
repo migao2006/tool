@@ -281,7 +281,24 @@ test("320px 放大至 150% 時個股詳情不會被裁切", async ({ page }, tes
     expect(panel.left).toBeGreaterThanOrEqual(detailLayout.shell.left - 1);
     expect(panel.right).toBeLessThanOrEqual(detailLayout.shell.right + 1);
   });
+  for (const selector of [".quantile-fields", ".tab-icon-watchlist"]) {
+    const dimensions = await page.locator(selector).first().evaluate((element) => ({
+      clientWidth: element.clientWidth,
+      scrollWidth: element.scrollWidth,
+    }));
+    expect(dimensions.scrollWidth).toBeLessThanOrEqual(dimensions.clientWidth + 1);
+  }
+  const quantileColumns = await page.locator(".quantile-fields").evaluate((element) => ({
+    columnCount: getComputedStyle(element).gridTemplateColumns.split(" ").length,
+    itemWidths: Array.from(element.children, (child) => child.getBoundingClientRect().width),
+  }));
+  expect(quantileColumns.columnCount).toBe(2);
+  quantileColumns.itemWidths.forEach((width) => {
+    expect(width).toBeGreaterThanOrEqual(120);
+  });
   await captureViewport(page, testInfo, "12-stock-detail-large-text-150");
+  await page.locator(".quantile-fields").scrollIntoViewIfNeeded();
+  await captureViewport(page, testInfo, "13-stock-detail-quantiles-large-text-150");
 });
 
 test("320px 長文字不會造成頁面水平溢位", async ({ page }, testInfo) => {

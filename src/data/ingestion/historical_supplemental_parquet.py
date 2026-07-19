@@ -1,4 +1,4 @@
-"""Serialize one FinMind supplemental dataset to deterministic ZSTD Parquet."""
+"""Serialize one provider supplemental dataset to deterministic ZSTD Parquet."""
 
 # pyright: reportAny=false, reportExplicitAny=false, reportMissingTypeStubs=false
 
@@ -140,7 +140,7 @@ def _archive_row(
     source_code = _required_text(row, "source_code")
     source_dataset = _required_text(row, "source_dataset")
     source_payload_hash = _required_text(row, "source_payload_hash")
-    if source_code != "FINMIND" or source_dataset != request.source_dataset:
+    if source_code != request.provider_code or source_dataset != request.source_dataset:
         raise IngestionError(
             "HISTORICAL_ARCHIVE_SOURCE_INVALID",
             "archive row does not match the supplemental request",
@@ -248,6 +248,7 @@ def serialize_historical_supplemental_parquet(
             b"archive.requested_end_date": request.requested_end_date.isoformat().encode(),
             b"archive.source_payload_sha256": request.source_payload_sha256.encode(),
             b"archive.retrieved_at": request.retrieved_at.isoformat().encode(),
+            b"archive.provider_code": request.provider_code.encode(),
         }
     )
     table = pa.Table.from_pylist(archived, schema=schema)

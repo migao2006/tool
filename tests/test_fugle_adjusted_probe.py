@@ -179,6 +179,26 @@ def test_probe_rejects_unbounded_requests(
     assert captured.value.reason_code == reason_code
 
 
+def test_probe_range_limit_counts_both_boundary_dates() -> None:
+    assert (
+        validate_probe_request(
+            symbol="2330",
+            start_date=date(2024, 1, 1),
+            end_date=date(2024, 12, 31),
+            pacing_seconds=0,
+        )
+        == "2330"
+    )
+    with pytest.raises(FugleAdjustedProbeError) as captured:
+        _ = validate_probe_request(
+            symbol="2330",
+            start_date=date(2024, 1, 1),
+            end_date=date(2025, 1, 1),
+            pacing_seconds=0,
+        )
+    assert captured.value.reason_code == "FUGLE_ADJUSTED_PROBE_DATE_RANGE_LIMIT"
+
+
 @pytest.mark.parametrize(
     ("rows", "reason_code"),
     [

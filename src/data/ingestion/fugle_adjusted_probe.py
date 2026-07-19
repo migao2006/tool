@@ -51,7 +51,7 @@ def validate_probe_request(
             "FUGLE_ADJUSTED_PROBE_DATE_RANGE_INVALID",
             "start_date must not be after end_date",
         )
-    if (end_date - start_date).days > MAX_RANGE_DAYS:
+    if (end_date - start_date).days + 1 > MAX_RANGE_DAYS:
         raise FugleAdjustedProbeError(
             "FUGLE_ADJUSTED_PROBE_DATE_RANGE_LIMIT",
             "Fugle historical candle probe cannot exceed one year",

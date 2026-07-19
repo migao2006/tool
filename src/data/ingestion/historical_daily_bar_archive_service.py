@@ -171,6 +171,8 @@ def _verified_object(
     ]
     if "source-dataset" in expected_metadata:
         required_metadata.append("source-dataset")
+    if "provider-code" in expected_metadata:
+        required_metadata.append("provider-code")
     if (
         any(metadata.get(name) != expected_metadata[name] for name in required_metadata)
         or metadata.get("byte-size") != str(head.content_length)
@@ -242,7 +244,6 @@ class HistoricalDailyBarArchiveService:
         backfill_task_id: int | None,
     ) -> HistoricalArchiveWriteResult:
         request = HistoricalArchiveRequest(
-            provider_code=payload.provider,
             scheduled_market=scheduled_market,
             asset_type=asset_type,
             source_symbol=symbol,
@@ -251,6 +252,7 @@ class HistoricalDailyBarArchiveService:
             source_payload_sha256=payload.payload_sha256,
             retrieved_at=payload.retrieved_at,
             source_dataset=payload.dataset,
+            provider_code=payload.provider,
         )
         prepared = _with_quarantine_issues(rows, quarantine_rows)
         if payload.dataset == "daily_bars":
@@ -268,7 +270,7 @@ class HistoricalDailyBarArchiveService:
         else:
             raise IngestionError(
                 "HISTORICAL_ARCHIVE_SOURCE_INVALID",
-                "The FinMind archive dataset is not supported",
+                "The provider archive dataset is not supported",
             )
         object_metadata = artifact.object_metadata()
         if artifact.byte_size > self.max_object_bytes:

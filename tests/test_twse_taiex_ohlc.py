@@ -197,6 +197,7 @@ def test_parquet_is_zstd_and_retains_provenance_and_research_semantics() -> None
         == batch.source_payload_sha256.encode()
     )
     assert metadata[b"archive.requested_month"] == b"2024-01"
+    assert metadata[b"archive.provider_code"] == b"TWSE"
     assert metadata[b"available_at.semantics"] == b"first-project-retrieval-only"
     assert metadata[b"benchmark.semantics"] == b"price-index-not-total-return"
     assert metadata[b"usage.scope"] == b"RAW_LANDING_ONLY"

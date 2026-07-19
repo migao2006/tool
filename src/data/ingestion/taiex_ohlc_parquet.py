@@ -178,6 +178,7 @@ def serialize_taiex_ohlc_parquet(
             b"archive.requested_end_date": request.requested_end_date.isoformat().encode(),
             b"archive.source_payload_sha256": request.source_payload_sha256.encode(),
             b"archive.retrieved_at": request.retrieved_at.isoformat().encode(),
+            b"archive.provider_code": request.provider_code.encode(),
             b"archive.requested_month": batch.requested_month.strftime(
                 "%Y-%m"
             ).encode(),

@@ -44,7 +44,6 @@ from .twse_research_row_assembler import (
 _BASE_AUDIT_REASONS = (
     "UNADJUSTED_PRICE_RESEARCH_ONLY",
     "FORMAL_LABEL_FACTORY_NOT_USED",
-    "BENCHMARK_CLOSE_TO_CLOSE_NOT_EXECUTION_PATH_ALIGNED",
 )
 
 
@@ -73,9 +72,8 @@ def assemble_twse_research_dataset(
         raise ResearchAssemblyInputError("dataset and benchmark provenance is required")
     features = feature_records(feature_rows)
     bars, duplicate_bar_keys = bar_frame(raw_bars)
-    benchmark, duplicate_benchmark_dates, sessions = benchmark_levels(
-        benchmark_sessions
-    )
+    benchmark, duplicate_benchmark_dates = benchmark_levels(benchmark_sessions)
+    sessions = benchmark.sessions
     session_positions = {session: position for position, session in enumerate(sessions)}
     actions = intervals(corporate_action_intervals, "KNOWN_CORPORATE_ACTION_WINDOW")
     suspensions = intervals(suspension_intervals, "KNOWN_SUSPENSION_WINDOW")
@@ -92,6 +90,10 @@ def assemble_twse_research_dataset(
         key for key, count in Counter(feature_keys).items() if count > 1
     }
     audit_reasons: list[str] = list(_BASE_AUDIT_REASONS)
+    if benchmark.path == "T_PLUS_ONE_OPEN_TO_H_CLOSE":
+        audit_reasons.append("BENCHMARK_PRICE_INDEX_NOT_TOTAL_RETURN")
+    else:
+        audit_reasons.append("BENCHMARK_CLOSE_TO_CLOSE_NOT_EXECUTION_PATH_ALIGNED")
     if not corporate_action_history_verified:
         audit_reasons.append("COMPANY_ACTION_HISTORY_INCOMPLETE")
     if not security_state_history_verified:

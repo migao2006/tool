@@ -148,6 +148,29 @@ def test_adapter_rejects_other_datasets_and_multi_year_requests(
     assert client.calls == []
 
 
+def test_adapter_allows_one_complete_leap_year_but_not_next_new_year() -> None:
+    client = FakeFugleClient()
+    provider = FugleAdjustedBackfillProvider(client)
+
+    _ = provider.fetch(
+        "adjusted_bars",
+        data_id="2330",
+        start_date=date(2024, 1, 1),
+        end_date=date(2024, 12, 31),
+    )
+
+    assert len(client.calls) == 1
+    with pytest.raises(IngestionError) as captured:
+        _ = provider.fetch(
+            "adjusted_bars",
+            data_id="2330",
+            start_date=date(2024, 1, 1),
+            end_date=date(2025, 1, 1),
+        )
+    assert captured.value.reason_code == "FUGLE_ADJUSTED_RANGE_LIMIT"
+    assert len(client.calls) == 1
+
+
 def test_fugle_adjusted_parquet_is_provider_scoped_and_research_only() -> None:
     payload = FugleAdjustedBackfillProvider(FakeFugleClient()).fetch(
         "adjusted_bars",

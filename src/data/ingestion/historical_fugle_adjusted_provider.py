@@ -76,7 +76,8 @@ class FugleAdjustedBackfillProvider:
                 "FUGLE_ADJUSTED_RANGE_INVALID",
                 "start_date must not be after end_date",
             )
-        if (range_end - range_start).days > FUGLE_MAX_RANGE_DAYS:
+        inclusive_days = (range_end - range_start).days + 1
+        if inclusive_days > FUGLE_MAX_RANGE_DAYS:
             raise IngestionError(
                 "FUGLE_ADJUSTED_RANGE_LIMIT",
                 "Fugle adjusted candle requests cannot exceed one year",

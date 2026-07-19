@@ -162,7 +162,7 @@ Artifact／provenance：
 
 ### 最新上市橫截面研究推論
 
-[GitHub Actions run `29695406502`](https://github.com/migao2006/tool/actions/runs/29695406502) 已使用最新驗證特徵橫截面、最後一個 walk-forward fold 的凍結模型 bundle，完成研究推論並以單一 transaction 原子發布至 Production Supabase：
+[GitHub Actions run `29701335309`](https://github.com/migao2006/tool/actions/runs/29701335309) 已使用最新驗證特徵橫截面、最後一個 walk-forward fold 的凍結模型 bundle，完成研究推論並發布至 Production Supabase；快照 RPC 與後續 gate attachment 均完成不可變讀回驗證：
 
 | 項目 | 已驗證結果 |
 | --- | ---: |
@@ -170,26 +170,27 @@ Artifact／provenance：
 | `as_of_date` | `2026-07-17` |
 | `decision_at` | `2026-07-17T17:00:00+08:00` |
 | 預測列數 | 1,068 |
-| Supabase `prediction_run_id` | 2 |
+| Supabase `prediction_run_id` | 4 |
 | Model version | `twse-price-research-h5-v1` |
 | Training end date | `2024-06-18` |
 | 決策 | `CANDIDATE=0`、`WATCH=0`、`NO_TRADE=1,068` |
 | 系統狀態 | `RESEARCH_ONLY` |
 | 公開 API 資料品質 | 1,068 筆 `WARN`，0 筆 hard fail |
 | Industry coverage | 0／1,068 |
+| Decision gate rows | 8,544；每檔固定 8 層 |
 
 完整性核對：股票與 global rank 均無重複、排名為 1～1,068 連續整數、三分類機率總和為 1、
 毛／淨 P10≤P50≤P90，且 `latest_available_at <= decision_at`。Provenance：
 
 - Feature artifact SHA-256：`24c90589d51de6b0c06f084ca977c4bfb99993f91164d65b3bad33bce3c73aac`。
-- Model bundle SHA-256：`b588f93a9d43639b7329155aafff3f3d31c00dd6e78875618e426f8dd8f50156`。
-- Prediction snapshot SHA-256：`0b1f116e64ccdfb3880acd352b95913e03fb8419c24196f6f4d6b2e1458b088a`。
-- Snapshot artifact SHA-256：`ff9707336a27315bcf5d087b24b7c30aaa2d94b2807b59a80cd570fdd9532914`。
-- GitHub artifact：`8444923880`，digest `044985dba1fdc7c94c60e9a4c52cf8225a0f2edc4e9ca7d8e201c7f823b00f9f`。
+- Model bundle SHA-256：`c41b76df09decf6be62da3cc59012597c7fd889d4980e43c14eb7cca70de5ca7`。
+- Prediction snapshot SHA-256：`4581af6f96eb56791a498343784e484a3c604ef7c32f549ffdbbfc7dce60f505`。
+- Snapshot artifact SHA-256：`605c19a53b4321e307848e4affa081c4a760601a3a0186a26192036c61395eee`。
+- GitHub artifact：`8446597593`，digest `b06a8280e9780f19378f682ed4ad55ff9017fb684cbe1dd9abc953d7d9948199`。
 
-這是回溯研究推論，不是新的 OOS 驗證。現有 Production run 仍是發布前的舊快照；本次程式已
-接上既有 `decision_policy` 的八層研究評估與 `decision_gate_results` 寫入，但尚未重新發布該
-快照。已具備真實輸入的資料品質、流動性容量、校準方向機率、淨分位數及排名資格會顯示
+這是回溯研究推論，不是新的 OOS 驗證。Production API 已實測回傳 HTTP 200、1,068 檔且每檔
+恰好 8 層 gate；gate order、actual、threshold、reason code 與 attachment snapshot hash 均通過
+契約驗證。已具備真實輸入的資料品質、流動性容量、校準方向機率、淨分位數及排名資格會顯示
 實際值與門檻；缺少 point-in-time 可交易性、市場模型及部位配置輸入時一律 fail closed。
 所有列仍固定為 `NO_TRADE / RESEARCH_ONLY`，不得描述為正式候選股、即時交易訊號或獲利保證。
 
@@ -249,7 +250,7 @@ point-in-time 或正式模型可用度。
 
 ## 七、下一個安全執行順序
 
-1. 由 GitHub 發布新版 inference／API／UI，重新產生 1,068 筆研究快照並核對 8,544 筆 gate read-back；若附件缺列或 hash 不符，API 必須回傳 409 且 workflow 失敗，修復後以相同不可變 run 重試，不得顯示部分完成的 gate。
+1. 將已發布的 1,068 筆研究快照與 8,544 筆 gate 納入每日推論回歸監控；若附件缺列或 hash 不符，API 必須回傳 409 且 workflow 失敗，修復後以相同不可變 run 重試，不得顯示部分完成的 gate。
 2. 補齊歷史 listing periods、代號重用、ISIN、產業 vintage 與下市解析，不得把 current snapshot 當歷史真相。
 3. 完成剩餘融資券任務，建立可驗證的 adjusted price／公司行動／交易狀態來源，再把 supplemental 資料納入 fold 內特徵工程。
 4. 補齊可驗證交易日曆、可成交性及 TAIEX total-return benchmark 契約，讓 tradability 與 market exposure gate 能使用正式輸入。

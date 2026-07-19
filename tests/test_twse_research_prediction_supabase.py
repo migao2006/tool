@@ -89,6 +89,23 @@ class _Writer:
         return {"prediction_run_id": 7, "prediction_count": len(predictions)}
 
 
+class _DatabaseRoundedWriter(_Writer):
+    def __init__(self, *, stored_p_up: object = "0.60000000") -> None:
+        super().__init__()
+        self.stored_p_up = stored_p_up
+
+    @override
+    def rpc(
+        self,
+        function_name: str,
+        parameters: Mapping[str, object],
+    ) -> object:
+        result = super().rpc(function_name, parameters)
+        self.stock_predictions[0]["calibrated_p_up"] = self.stored_p_up
+        self.stock_predictions[0]["calibrated_p_neutral"] = "0.30000000"
+        return result
+
+
 def _payload(
     *,
     evaluation_scope: str = "OUT_OF_SAMPLE_TEST",
@@ -277,6 +294,44 @@ def test_gated_research_snapshot_persists_all_eight_verified_gate_rows() -> None
     assert "RESEARCH_ONLY_NO_FORMAL_DECISION_POLICY" in cast(
         list[object], stock["reason_codes"]
     )
+
+
+def test_gate_attachment_verification_respects_database_numeric_scales() -> None:
+    writer = _DatabaseRoundedWriter()
+    payload = _payload(include_gates=True)
+    prediction = cast(list[dict[str, object]], payload["predictions"])[0]
+    prediction["calibrated_p_up"] = 0.600000004
+    prediction["calibrated_p_neutral"] = 0.299999996
+    payload["snapshot_sha256"] = sha256(
+        json.dumps(
+            {key: value for key, value in payload.items() if key != "snapshot_sha256"},
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
+
+    result = TwseResearchPredictionSupabasePublisher(
+        writer,
+        target_environment="staging",
+        publish_enabled=True,
+    ).publish(payload)
+
+    assert result.decision_gate_count == 8
+
+
+def test_gate_attachment_verification_rejects_material_database_difference() -> None:
+    writer = _DatabaseRoundedWriter(stored_p_up="0.60010000")
+
+    with pytest.raises(
+        ValueError,
+        match=r"research gate inputs differ from stored prediction: 2330.calibrated_p_up",
+    ):
+        _ = TwseResearchPredictionSupabasePublisher(
+            writer,
+            target_environment="staging",
+            publish_enabled=True,
+        ).publish(_payload(include_gates=True))
 
 
 def test_same_cost_profile_version_reuses_only_exact_immutable_parameters() -> None:

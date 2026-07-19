@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import cast
 
 from .twse_research_prediction_supabase_contracts import SupabaseResearchWriter
@@ -25,20 +25,18 @@ _STOCK_COMPARE_FIELDS = (
     "data_quality_status",
     "decision",
 )
-_NUMERIC_STOCK_FIELDS = frozenset(
-    {
-        "global_rank",
-        "rank_score",
-        "calibrated_p_up",
-        "calibrated_p_neutral",
-        "calibrated_p_down",
-        "net_q10",
-        "net_q50",
-        "net_q90",
-        "adv20_ntd",
-        "maximum_order_notional_ntd",
-    }
-)
+_NUMERIC_STOCK_SCALES = {
+    "global_rank": 0,
+    "rank_score": 6,
+    "calibrated_p_up": 8,
+    "calibrated_p_neutral": 8,
+    "calibrated_p_down": 8,
+    "net_q10": 10,
+    "net_q50": 10,
+    "net_q90": 10,
+    "adv20_ntd": 4,
+    "maximum_order_notional_ntd": 4,
+}
 _GATE_FIELDS = (
     "stock_prediction_id",
     "gate_order",
@@ -50,13 +48,16 @@ _GATE_FIELDS = (
 )
 
 
-def _same_number(left: object, right: object) -> bool:
+def _same_number(left: object, right: object, *, scale: int) -> bool:
     if left is None or right is None:
         return left is right
     if isinstance(left, bool) or isinstance(right, bool):
         return False
     try:
-        return Decimal(str(left)) == Decimal(str(right))
+        quantum = Decimal(1).scaleb(-scale)
+        expected = Decimal(str(left)).quantize(quantum, rounding=ROUND_HALF_UP)
+        stored = Decimal(str(right)).quantize(quantum, rounding=ROUND_HALF_UP)
+        return expected == stored
     except (InvalidOperation, ValueError):
         return False
 
@@ -103,9 +104,10 @@ def _verify_stock_inputs(
         for field_name in _STOCK_COMPARE_FIELDS:
             expected_value = row.get(field_name)
             actual_value = stored.get(field_name)
+            scale = _NUMERIC_STOCK_SCALES.get(field_name)
             matches = (
-                _same_number(expected_value, actual_value)
-                if field_name in _NUMERIC_STOCK_FIELDS
+                _same_number(expected_value, actual_value, scale=scale)
+                if scale is not None
                 else expected_value == actual_value
             )
             if not matches:

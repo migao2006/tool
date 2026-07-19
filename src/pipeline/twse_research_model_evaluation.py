@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from typing import Any
 
 from src.calibration.interval_calibrator import IntervalCalibrator, crossing_rate
@@ -36,6 +36,24 @@ from .twse_research_fold_preparation import (
 )
 
 
+def _column_values(
+    frame: Any,
+    indices: Sequence[int],
+    name: str,
+) -> list[Any]:
+    """Take one column positionally without copying unrelated frame blocks."""
+
+    return frame[name].iloc[list(indices)].tolist()
+
+
+def _sample_ids(frame: Any, indices: Sequence[int]) -> Iterator[str]:
+    """Yield stable IDs from only the two identifying columns, in input order."""
+
+    rows = frame[["symbol", "decision_date"]].iloc[list(indices)]
+    for symbol, decision_date in rows.itertuples(index=False, name=None):
+        yield f"{symbol}:{decision_date.isoformat()}"
+
+
 def evaluate_rank(
     *,
     frame: Any,
@@ -49,9 +67,11 @@ def evaluate_rank(
     train_dates = frame_dates(frame, train_indices)
     test_dates = frame_dates(frame, test_indices)
     train_alpha = [
-        float(value) for value in frame.iloc[list(train_indices)]["net_alpha"]
+        float(value) for value in _column_values(frame, train_indices, "net_alpha")
     ]
-    test_alpha = [float(value) for value in frame.iloc[list(test_indices)]["net_alpha"]]
+    test_alpha = [
+        float(value) for value in _column_values(frame, test_indices, "net_alpha")
+    ]
     train_relevance = make_relevance_labels(train_dates, train_alpha)
     test_relevance = make_relevance_labels(test_dates, test_alpha)
     ranker = LGBMStockRanker(
@@ -75,20 +95,27 @@ def evaluate_rank(
         eval_at=context.config.rank.eval_at,
     )
 
-    sample_ids = [
-        f"{row.symbol}:{row.decision_date.isoformat()}"
-        for row in frame.iloc[list(test_indices)].itertuples()
-    ]
     baselines: dict[str, dict[str, float]] = {}
     baseline_scores: dict[str, Sequence[float]] = {
-        "random": random_baseline_scores(sample_ids, seed=context.config.rank.seed),
+        "random": random_baseline_scores(
+            _sample_ids(frame, test_indices),
+            seed=context.config.rank.seed,
+        ),
         "momentum_5d": [
             float(value)
-            for value in frame.iloc[list(test_indices)]["raw_close_return_5d"]
+            for value in _column_values(
+                frame,
+                test_indices,
+                "raw_close_return_5d",
+            )
         ],
         "momentum_20d": [
             float(value)
-            for value in frame.iloc[list(test_indices)]["raw_close_return_20d"]
+            for value in _column_values(
+                frame,
+                test_indices,
+                "raw_close_return_20d",
+            )
         ],
     }
     for backend in ("linear", "lightgbm"):
@@ -124,9 +151,9 @@ def evaluate_direction(
 ) -> DirectionEvaluation:
     """Train the direction candidate and calibrate on a disjoint time slice."""
 
-    train_labels = list(frame.iloc[list(train_indices)]["direction"])
-    calibration_labels = list(frame.iloc[list(calibration_indices)]["direction"])
-    test_labels = list(frame.iloc[list(test_indices)]["direction"])
+    train_labels = _column_values(frame, train_indices, "direction")
+    calibration_labels = _column_values(frame, calibration_indices, "direction")
+    test_labels = _column_values(frame, test_indices, "direction")
     model = DirectionModel(
         horizon=context.horizon,
         backend="lightgbm",
@@ -134,19 +161,12 @@ def evaluate_direction(
         verbosity=-1,
     ).fit(matrices.train, train_labels)
     calibration_raw = model.predict_raw_proba(matrices.calibration)
-    train_ids = [
-        f"{row.symbol}:{row.decision_date.isoformat()}"
-        for row in frame.iloc[list(train_indices)].itertuples()
-    ]
-    calibration_ids = [
-        f"{row.symbol}:{row.decision_date.isoformat()}"
-        for row in frame.iloc[list(calibration_indices)].itertuples()
-    ]
+    calibration_ids = tuple(_sample_ids(frame, calibration_indices))
     calibrator = ProbabilityCalibrator(method="temperature").fit(
         calibration_raw,
         calibration_labels,
         calibration_ids=calibration_ids,
-        base_training_ids=train_ids,
+        base_training_ids=_sample_ids(frame, train_indices),
     )
     probabilities = calibrator.transform_rows(model.predict_raw_proba(matrices.test))
     summary = direction_metric_summary(
@@ -182,10 +202,12 @@ def evaluate_quantiles(
     """Train gross-return quantiles and evaluate calibrated net intervals."""
 
     train_gross = [
-        float(value) for value in frame.iloc[list(train_indices)]["gross_return"]
+        float(value)
+        for value in _column_values(frame, train_indices, "gross_return")
     ]
     calibration_gross = [
-        float(value) for value in frame.iloc[list(calibration_indices)]["gross_return"]
+        float(value)
+        for value in _column_values(frame, calibration_indices, "gross_return")
     ]
     model = QuantileReturnModel(
         horizon=context.horizon,
@@ -193,24 +215,18 @@ def evaluate_quantiles(
         verbosity=-1,
     ).fit(matrices.train, train_gross)
     calibration_raw = model.predict_raw(matrices.calibration)
-    train_ids = [
-        f"{row.symbol}:{row.decision_date.isoformat()}"
-        for row in frame.iloc[list(train_indices)].itertuples()
-    ]
-    calibration_ids = [
-        f"{row.symbol}:{row.decision_date.isoformat()}"
-        for row in frame.iloc[list(calibration_indices)].itertuples()
-    ]
+    calibration_ids = tuple(_sample_ids(frame, calibration_indices))
     calibrator = IntervalCalibrator().fit(
         calibration_gross,
         *calibration_raw,
         calibration_ids=calibration_ids,
-        base_training_ids=train_ids,
+        base_training_ids=_sample_ids(frame, train_indices),
     )
     raw_test = model.predict_raw(matrices.test)
     calibrated = calibrator.transform(*raw_test)
     costs = [
-        float(value) for value in frame.iloc[list(test_indices)]["round_trip_cost_rate"]
+        float(value)
+        for value in _column_values(frame, test_indices, "round_trip_cost_rate")
     ]
     gross_quantiles = tuple(
         (float(row[0]), float(row[1]), float(row[2])) for row in calibrated
@@ -223,7 +239,7 @@ def evaluate_quantiles(
     q50 = [row[1] for row in net_quantiles]
     q90 = [row[2] for row in net_quantiles]
     actual_net = [
-        float(value) for value in frame.iloc[list(test_indices)]["net_return"]
+        float(value) for value in _column_values(frame, test_indices, "net_return")
     ]
     summary = quantile_metric_summary(
         actual=actual_net,

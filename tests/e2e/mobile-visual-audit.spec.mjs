@@ -5,8 +5,8 @@ import { routeHomeDataStatus } from "./support/home-data-status-fixture.mjs";
 
 const MOBILE_VIEWPORTS = Object.freeze([
   { name: "iphone-se", width: 320, height: 568 },
-  { name: "iphone-standard", width: 390, height: 844 },
-  { name: "iphone-large", width: 430, height: 932 },
+  { name: "iphone-13", width: 390, height: 664 },
+  { name: "iphone-15-pro-max", width: 430, height: 739 },
 ]);
 
 async function verifyTouchTarget(locator) {
@@ -102,7 +102,8 @@ async function captureViewport(page, testInfo, name, options) {
   await verifyMobileViewport(page, options);
   const auditDirectory = join(process.cwd(), "artifacts", "mobile-ui-audit");
   await mkdir(auditDirectory, { recursive: true });
-  const screenshotPath = join(auditDirectory, `${name}.png`);
+  const projectName = testInfo.project.name.replaceAll(/[^a-z0-9-]/giu, "-");
+  const screenshotPath = join(auditDirectory, `${name}-${projectName}.png`);
   await page.screenshot({ path: screenshotPath, fullPage: false });
   await testInfo.attach(name, {
     path: screenshotPath,
@@ -220,6 +221,28 @@ test("手機瀏覽器上一頁與下一頁會恢復各頁捲動位置", async ({
   await page.goForward();
   await expect(page.getByRole("heading", { name: /OOS1/u })).toBeVisible();
   await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(detailScroll);
+});
+
+test("iPhone 橫向畫面不會溢位且登入抽屜可操作", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 814, height: 380 });
+  await page.goto("/?api_mode=stale-oos-research", { waitUntil: "domcontentloaded" });
+  await expect(page.getByRole("heading", { name: "今日總覽" })).toBeVisible();
+  await expect(page.locator(".topbar")).toBeHidden();
+  await captureViewport(page, testInfo, "10-overview-iphone-landscape");
+
+  const navigation = page.getByRole("navigation", { name: "主要導覽" });
+  await navigation.getByRole("button", { name: "自選" }).click();
+  await expect(page.getByRole("heading", { name: "自選股" })).toBeVisible();
+  const authOpener = page.getByRole("button", { name: "開啟登入" });
+  await authOpener.click();
+  await verifyDialogViewport(page);
+  await expect(page.locator('[data-auth-view="signin"]:not([hidden])').getByLabel("Email"))
+    .toBeFocused();
+  await captureViewport(page, testInfo, "11-signin-iphone-landscape", {
+    includeNavigation: false,
+  });
+  await page.getByRole("button", { name: "關閉" }).click();
+  await expect(authOpener).toBeFocused();
 });
 
 test("320px 長文字不會造成頁面水平溢位", async ({ page }, testInfo) => {

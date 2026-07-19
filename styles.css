@@ -125,7 +125,10 @@ button:disabled { cursor: not-allowed; opacity: 0.42; }
 }
 
 .app-shell {
-  width: min(760px, calc(100% - 28px));
+  width: min(
+    760px,
+    calc(100% - max(14px, env(safe-area-inset-left)) - max(14px, env(safe-area-inset-right)))
+  );
   margin: 0 auto;
   padding: 16px 0 calc(118px + env(safe-area-inset-bottom));
 }
@@ -757,7 +760,7 @@ h2 {
   position: relative;
   z-index: 1;
   margin: -96px auto calc(86px + env(safe-area-inset-bottom));
-  padding: 0 18px;
+  padding: 0 max(18px, env(safe-area-inset-right)) 0 max(18px, env(safe-area-inset-left));
   color: var(--muted-2);
   font-size: 0.63rem;
   text-align: center;
@@ -768,10 +771,17 @@ h2 {
   .trend-card { grid-column: auto; }
 }
 
+@media (hover: none) and (pointer: coarse) {
+  .topbar { display: none; }
+  .app-shell { padding-top: calc(12px + env(safe-area-inset-top)); }
+}
+
 @media (max-width: 600px) {
   .topbar { display: none; }
   .app-shell {
-    width: calc(100% - 32px);
+    width: calc(
+      100% - max(16px, env(safe-area-inset-left)) - max(16px, env(safe-area-inset-right))
+    );
     padding-top: calc(12px + env(safe-area-inset-top));
   }
   .page-heading { min-height: 50px; }
@@ -791,7 +801,11 @@ h2 {
 }
 
 @media (max-width: 380px) {
-  .app-shell { width: calc(100% - 16px); }
+  .app-shell {
+    width: calc(
+      100% - max(8px, env(safe-area-inset-left)) - max(8px, env(safe-area-inset-right))
+    );
+  }
   .horizon-summary-grid { gap: 5px; }
   .horizon-summary { padding: 9px 7px; }
   .segmented button { font-size: 0.75rem; }

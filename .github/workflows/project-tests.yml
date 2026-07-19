@@ -149,8 +149,8 @@ jobs:
       - name: Discover browser tests
         run: pnpm run check
 
-      - name: Install Chromium runtime
-        run: pnpm exec playwright install --with-deps chromium
+      - name: Install Chromium and WebKit runtimes
+        run: pnpm exec playwright install --with-deps chromium webkit
 
       - name: Run browser tests with configured workers
         run: pnpm run test:e2e

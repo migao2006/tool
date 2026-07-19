@@ -34,3 +34,24 @@ def test_unsupported_horizon_fails_before_external_io_and_preserves_output(
     assert payload["system_status"] == "FAIL"
     assert output.read_bytes() == b"previous verified artifact"
     assert not list(tmp_path.glob("*.candidate"))
+
+
+def test_missing_calendar_snapshot_returns_stable_reason_code(tmp_path: Path) -> None:
+    audit = tmp_path / "audit.json"
+
+    exit_code = cli.main(
+        [
+            "--feature",
+            str(tmp_path / "missing-feature.parquet"),
+            "--feature-manifest",
+            str(tmp_path / "missing-feature.json"),
+            "--output",
+            str(tmp_path / "prepared.parquet"),
+            "--audit",
+            str(audit),
+        ]
+    )
+
+    payload = json.loads(audit.read_text(encoding="utf-8"))
+    assert exit_code == 1
+    assert payload["reason_codes"] == ["TRADING_CALENDAR_SNAPSHOT_MISMATCH"]

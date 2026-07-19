@@ -3,11 +3,48 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from hashlib import sha256
+import json
 import re
 
 
 PREPARED_ARTIFACT_VERSION = "twse-prepared-research-5d.v1"
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
+
+
+def prepared_dataset_snapshot_hash(
+    *,
+    feature_artifact_sha256: str,
+    daily_archive_snapshot_sha256: str,
+    current_identity_snapshot_sha256: str,
+    taiex_archive_snapshot_sha256: str,
+    calendar_snapshot_sha256: str,
+    feature_dataset_snapshot_id: str,
+    label_version: str,
+    cost_profile_version: str,
+    horizon: int,
+) -> str:
+    """Hash every versioned input that changes prepared-dataset meaning."""
+
+    payload = {
+        "calendar_snapshot_sha256": calendar_snapshot_sha256,
+        "cost_profile_version": cost_profile_version,
+        "current_identity_snapshot_sha256": current_identity_snapshot_sha256,
+        "daily_archive_snapshot_sha256": daily_archive_snapshot_sha256,
+        "feature_artifact_sha256": feature_artifact_sha256,
+        "feature_dataset_snapshot_id": feature_dataset_snapshot_id,
+        "horizon": horizon,
+        "label_version": label_version,
+        "snapshot_contract": "twse-prepared-dataset-inputs.v1",
+        "taiex_archive_snapshot_sha256": taiex_archive_snapshot_sha256,
+    }
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    return sha256(encoded).hexdigest()
 
 
 class PreparedResearchArtifactError(RuntimeError):
@@ -24,7 +61,12 @@ class PreparedResearchArtifactManifest:
     schema_sha256: str
     byte_size: int
     row_count: int
+    prepared_dataset_snapshot_sha256: str
     dataset_snapshot_id: str
+    daily_archive_snapshot_sha256: str
+    current_identity_snapshot_sha256: str
+    feature_artifact_sha256: str
+    calendar_snapshot_sha256: str
     source_hash: str
     benchmark_snapshot_sha256: str
     benchmark_id: str
@@ -44,6 +86,11 @@ class PreparedResearchArtifactManifest:
         hashes = (
             self.parquet_sha256,
             self.schema_sha256,
+            self.prepared_dataset_snapshot_sha256,
+            self.daily_archive_snapshot_sha256,
+            self.current_identity_snapshot_sha256,
+            self.feature_artifact_sha256,
+            self.calendar_snapshot_sha256,
             self.source_hash,
             self.benchmark_snapshot_sha256,
             self.feature_schema_hash,
@@ -71,6 +118,19 @@ class PreparedResearchArtifactManifest:
         )
         if any(not value.strip() for value in text):
             raise ValueError("prepared artifact provenance is incomplete")
+        expected_snapshot = prepared_dataset_snapshot_hash(
+            feature_artifact_sha256=self.feature_artifact_sha256,
+            daily_archive_snapshot_sha256=self.daily_archive_snapshot_sha256,
+            current_identity_snapshot_sha256=self.current_identity_snapshot_sha256,
+            taiex_archive_snapshot_sha256=self.benchmark_snapshot_sha256,
+            calendar_snapshot_sha256=self.calendar_snapshot_sha256,
+            feature_dataset_snapshot_id=self.dataset_snapshot_id,
+            label_version=self.label_version,
+            cost_profile_version=self.cost_profile_version,
+            horizon=self.horizon,
+        )
+        if self.prepared_dataset_snapshot_sha256 != expected_snapshot:
+            raise ValueError("prepared dataset input snapshot is inconsistent")
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -80,4 +140,5 @@ __all__ = [
     "PREPARED_ARTIFACT_VERSION",
     "PreparedResearchArtifactError",
     "PreparedResearchArtifactManifest",
+    "prepared_dataset_snapshot_hash",
 ]

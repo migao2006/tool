@@ -14,6 +14,9 @@ from src.data.archive.contracts import HistoricalArchiveManifest
 from src.data.archive.historical_parquet_reader import HistoricalParquetReader
 from src.data.archive.manifest_repository import HistoricalArchiveManifestSnapshot
 from src.data.providers.twse import TAIEX_MONTHLY_OHLC_DATASET
+from src.data.research.twse_trading_calendar_snapshot import (
+    TwseTradingCalendarSnapshot,
+)
 
 
 DAILY_BAR_FILTERS = {
@@ -45,6 +48,7 @@ class VerifiedTwseResearchArchiveInputs:
     benchmark_manifest_count: int
     benchmark_snapshot_sha256: str
     benchmark_source_version: str
+    calendar_snapshot_sha256: str
 
     def __post_init__(self) -> None:
         counts = (
@@ -55,8 +59,14 @@ class VerifiedTwseResearchArchiveInputs:
         )
         if any(value <= 0 for value in counts):
             raise ValueError("verified archive inputs must be non-empty")
-        if len(self.benchmark_snapshot_sha256) != 64:
-            raise ValueError("benchmark snapshot SHA-256 is invalid")
+        if any(
+            len(value) != 64
+            for value in (
+                self.benchmark_snapshot_sha256,
+                self.calendar_snapshot_sha256,
+            )
+        ):
+            raise ValueError("archive input snapshot SHA-256 is invalid")
 
 
 def _manifest(row: Mapping[str, object]) -> HistoricalArchiveManifest:
@@ -120,6 +130,7 @@ class TwseResearchArchiveInputLoader:
         *,
         daily_manifests: HistoricalArchiveManifestSnapshot,
         benchmark_manifests: HistoricalArchiveManifestSnapshot,
+        calendar_snapshot: TwseTradingCalendarSnapshot | None,
         feature_rows: Any,
         expected_daily_snapshot_sha256: str,
     ) -> VerifiedTwseResearchArchiveInputs:
@@ -138,9 +149,22 @@ class TwseResearchArchiveInputLoader:
                 "FEATURE_DAILY_ARCHIVE_SNAPSHOT_MISMATCH",
                 "Feature and daily-bar artifacts do not use the same manifest snapshot",
             )
+        if calendar_snapshot is None:
+            raise TwseResearchDatasetBuildError(
+                "TRADING_CALENDAR_SNAPSHOT_MISMATCH",
+                "A versioned trading-calendar snapshot is required",
+            )
         raw_bars, daily_by_key, daily_by_id = self._daily_rows(daily_manifests)
         self._validate_feature_lineage(feature_rows, daily_by_key, daily_by_id)
         benchmark_rows, source_version = self._benchmark_rows(benchmark_manifests)
+        benchmark_dates = tuple(
+            sorted(cast(date, row["trade_date"]) for row in benchmark_rows)
+        )
+        if calendar_snapshot.session_dates != benchmark_dates:
+            raise TwseResearchDatasetBuildError(
+                "TRADING_CALENDAR_SNAPSHOT_MISMATCH",
+                "Trading-calendar and TAIEX sessions must match exactly",
+            )
         return VerifiedTwseResearchArchiveInputs(
             raw_bars=tuple(raw_bars),
             benchmark_rows=tuple(benchmark_rows),
@@ -148,6 +172,9 @@ class TwseResearchArchiveInputLoader:
             benchmark_manifest_count=benchmark_manifests.object_count,
             benchmark_snapshot_sha256=benchmark_manifests.snapshot_sha256,
             benchmark_source_version=source_version,
+            calendar_snapshot_sha256=(
+                calendar_snapshot.calendar_snapshot_sha256
+            ),
         )
 
     def _daily_rows(
@@ -200,6 +227,19 @@ class TwseResearchArchiveInputLoader:
             archive_id = getattr(feature, "archive_id", None)
             object_key = str(getattr(feature, "source_object_key", ""))
             parquet_hash = str(getattr(feature, "source_parquet_sha256", ""))
+            payload_hash = str(getattr(feature, "source_payload_sha256", ""))
+            symbol = str(getattr(feature, "symbol", "")).strip()
+            market = str(getattr(feature, "market", "")).strip().upper()
+            asset_type = str(getattr(feature, "asset_type", "")).strip().upper()
+            raw_decision_date = getattr(feature, "decision_date", None)
+            try:
+                decision_date = (
+                    raw_decision_date
+                    if type(raw_decision_date) is date
+                    else date.fromisoformat(str(raw_decision_date)[:10])
+                )
+            except ValueError:
+                decision_date = None
             manifest = by_key.get(object_key)
             if (
                 isinstance(archive_id, bool)
@@ -207,6 +247,16 @@ class TwseResearchArchiveInputLoader:
                 or manifest is None
                 or by_id.get(archive_id) != manifest
                 or parquet_hash != manifest.parquet_sha256
+                or payload_hash != manifest.source_payload_hash
+                or symbol != manifest.source_symbol
+                or market != "TWSE"
+                or asset_type != "COMMON_STOCK"
+                or decision_date is None
+                or not (
+                    manifest.min_trade_date
+                    <= decision_date
+                    <= manifest.max_trade_date
+                )
             ):
                 raise TwseResearchDatasetBuildError(
                     "FEATURE_DAILY_ARCHIVE_LINEAGE_MISMATCH",

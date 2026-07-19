@@ -54,6 +54,17 @@ def _metadata(result: TwseResearchDatasetBuildResult) -> dict[bytes, bytes]:
         b"horizon": b"5",
         b"benchmark.path": b"T_PLUS_ONE_OPEN_TO_H_CLOSE",
         b"benchmark.semantics": b"PRICE_INDEX_NOT_TOTAL_RETURN",
+        b"prepared_dataset.snapshot_sha256": (
+            result.prepared_dataset_snapshot_sha256.encode()
+        ),
+        b"daily_archive.snapshot_sha256": (
+            result.daily_archive_snapshot_sha256.encode()
+        ),
+        b"current_identity.snapshot_sha256": (
+            result.current_identity_snapshot_sha256.encode()
+        ),
+        b"feature_artifact.sha256": result.feature_artifact_sha256.encode(),
+        b"calendar.snapshot_sha256": result.calendar_snapshot_sha256.encode(),
         b"benchmark.snapshot_sha256": result.benchmark_snapshot_sha256.encode(),
         b"benchmark.id": audit.benchmark_id.encode(),
         b"benchmark.version": result.benchmark_version.encode(),
@@ -127,7 +138,16 @@ def _manifest(path: Path, table: Any, result: TwseResearchDatasetBuildResult) ->
         schema_sha256=_schema_digest(table.schema),
         byte_size=size,
         row_count=table.num_rows,
+        prepared_dataset_snapshot_sha256=(
+            result.prepared_dataset_snapshot_sha256
+        ),
         dataset_snapshot_id=audit.dataset_snapshot_id,
+        daily_archive_snapshot_sha256=result.daily_archive_snapshot_sha256,
+        current_identity_snapshot_sha256=(
+            result.current_identity_snapshot_sha256
+        ),
+        feature_artifact_sha256=result.feature_artifact_sha256,
+        calendar_snapshot_sha256=result.calendar_snapshot_sha256,
         source_hash=audit.source_hash,
         benchmark_snapshot_sha256=result.benchmark_snapshot_sha256,
         benchmark_id=audit.benchmark_id,
@@ -221,6 +241,17 @@ class PreparedResearchArtifactWriter:
             b"horizon": str(expected.horizon).encode(),
             b"benchmark.path": expected.benchmark_path.encode(),
             b"benchmark.semantics": expected.benchmark_semantics.encode(),
+            b"prepared_dataset.snapshot_sha256": (
+                expected.prepared_dataset_snapshot_sha256.encode()
+            ),
+            b"daily_archive.snapshot_sha256": (
+                expected.daily_archive_snapshot_sha256.encode()
+            ),
+            b"current_identity.snapshot_sha256": (
+                expected.current_identity_snapshot_sha256.encode()
+            ),
+            b"feature_artifact.sha256": expected.feature_artifact_sha256.encode(),
+            b"calendar.snapshot_sha256": expected.calendar_snapshot_sha256.encode(),
             b"benchmark.snapshot_sha256": expected.benchmark_snapshot_sha256.encode(),
             b"benchmark.id": expected.benchmark_id.encode(),
             b"benchmark.version": expected.benchmark_version.encode(),

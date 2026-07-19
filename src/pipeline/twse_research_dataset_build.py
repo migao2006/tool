@@ -15,9 +15,13 @@ from src.data.research.twse_feature_artifact_contracts import (
     VerifiedTwseFeatureArtifact,
 )
 from src.data.research.twse_feature_artifact_reader import TwseFeatureArtifactReader
+from src.data.research.twse_trading_calendar_snapshot import (
+    TwseTradingCalendarSnapshot,
+)
 from src.trading.transaction_cost import TransactionCostModel
 
 from .twse_feature_artifact_input import feature_artifact_assembly_input
+from .twse_prepared_research_contracts import prepared_dataset_snapshot_hash
 from .twse_research_archive_inputs import (
     DAILY_BAR_FILTERS,
     TAIEX_OHLC_FILTERS,
@@ -40,7 +44,12 @@ class TwseResearchDatasetBuildResult:
     daily_verified_row_count: int
     benchmark_manifest_count: int
     benchmark_verified_row_count: int
+    daily_archive_snapshot_sha256: str
+    current_identity_snapshot_sha256: str
+    feature_artifact_sha256: str
+    calendar_snapshot_sha256: str
     benchmark_snapshot_sha256: str
+    prepared_dataset_snapshot_sha256: str
     benchmark_version: str
     generated_at: datetime
 
@@ -55,8 +64,30 @@ class TwseResearchDatasetBuildResult:
         )
         if any(value <= 0 for value in counts):
             raise ValueError("verified research inputs must be non-empty")
-        if len(self.benchmark_snapshot_sha256) != 64:
-            raise ValueError("benchmark snapshot SHA-256 is invalid")
+        hashes = (
+            self.daily_archive_snapshot_sha256,
+            self.current_identity_snapshot_sha256,
+            self.feature_artifact_sha256,
+            self.calendar_snapshot_sha256,
+            self.benchmark_snapshot_sha256,
+            self.prepared_dataset_snapshot_sha256,
+        )
+        if any(len(value) != 64 for value in hashes):
+            raise ValueError("research input snapshot SHA-256 is invalid")
+        audit = self.assembly.audit
+        expected = prepared_dataset_snapshot_hash(
+            feature_artifact_sha256=self.feature_artifact_sha256,
+            daily_archive_snapshot_sha256=self.daily_archive_snapshot_sha256,
+            current_identity_snapshot_sha256=self.current_identity_snapshot_sha256,
+            taiex_archive_snapshot_sha256=self.benchmark_snapshot_sha256,
+            calendar_snapshot_sha256=self.calendar_snapshot_sha256,
+            feature_dataset_snapshot_id=audit.dataset_snapshot_id,
+            label_version=audit.label_version,
+            cost_profile_version=audit.cost_profile_version,
+            horizon=audit.horizon,
+        )
+        if expected != self.prepared_dataset_snapshot_sha256:
+            raise ValueError("prepared dataset snapshot is inconsistent")
 
     def audit_payload(self) -> dict[str, object]:
         audit = self.assembly.audit
@@ -76,7 +107,14 @@ class TwseResearchDatasetBuildResult:
             "daily_verified_row_count": self.daily_verified_row_count,
             "benchmark_manifest_count": self.benchmark_manifest_count,
             "benchmark_verified_row_count": self.benchmark_verified_row_count,
+            "daily_archive_snapshot_sha256": self.daily_archive_snapshot_sha256,
+            "current_identity_snapshot_sha256": self.current_identity_snapshot_sha256,
+            "feature_artifact_sha256": self.feature_artifact_sha256,
+            "calendar_snapshot_sha256": self.calendar_snapshot_sha256,
             "benchmark_snapshot_sha256": self.benchmark_snapshot_sha256,
+            "prepared_dataset_snapshot_sha256": (
+                self.prepared_dataset_snapshot_sha256
+            ),
             "benchmark_id": audit.benchmark_id,
             "benchmark_version": self.benchmark_version,
             "benchmark_path": "T_PLUS_ONE_OPEN_TO_H_CLOSE",
@@ -110,6 +148,7 @@ class TwseResearchDatasetBuilder:
         *,
         daily_manifests: HistoricalArchiveManifestSnapshot,
         benchmark_manifests: HistoricalArchiveManifestSnapshot,
+        calendar_snapshot: TwseTradingCalendarSnapshot | None,
         feature_artifact: VerifiedTwseFeatureArtifact,
         horizon: int = PRODUCTION_HORIZON,
         transaction_cost_model: TransactionCostModel | None = None,
@@ -127,6 +166,7 @@ class TwseResearchDatasetBuilder:
         archives = self.archive_inputs.load(
             daily_manifests=daily_manifests,
             benchmark_manifests=benchmark_manifests,
+            calendar_snapshot=calendar_snapshot,
             feature_rows=bound.feature_rows,
             expected_daily_snapshot_sha256=(
                 feature_artifact.manifest.source_archive_snapshot_sha256
@@ -155,13 +195,37 @@ class TwseResearchDatasetBuilder:
                 "TWSE_RESEARCH_DATASET_EMPTY",
                 "No row passed the conservative research assembly gates",
             )
+        prepared_snapshot = prepared_dataset_snapshot_hash(
+            feature_artifact_sha256=feature_artifact.manifest.parquet_sha256,
+            daily_archive_snapshot_sha256=(
+                feature_artifact.manifest.source_archive_snapshot_sha256
+            ),
+            current_identity_snapshot_sha256=(
+                feature_artifact.manifest.current_identity_snapshot_sha256
+            ),
+            taiex_archive_snapshot_sha256=archives.benchmark_snapshot_sha256,
+            calendar_snapshot_sha256=archives.calendar_snapshot_sha256,
+            feature_dataset_snapshot_id=bound.dataset_snapshot_id,
+            label_version=assembly.audit.label_version,
+            cost_profile_version=assembly.audit.cost_profile_version,
+            horizon=horizon,
+        )
         return TwseResearchDatasetBuildResult(
             assembly=assembly,
             daily_manifest_count=archives.daily_manifest_count,
             daily_verified_row_count=len(archives.raw_bars),
             benchmark_manifest_count=archives.benchmark_manifest_count,
             benchmark_verified_row_count=len(archives.benchmark_rows),
+            daily_archive_snapshot_sha256=(
+                feature_artifact.manifest.source_archive_snapshot_sha256
+            ),
+            current_identity_snapshot_sha256=(
+                feature_artifact.manifest.current_identity_snapshot_sha256
+            ),
+            feature_artifact_sha256=feature_artifact.manifest.parquet_sha256,
+            calendar_snapshot_sha256=archives.calendar_snapshot_sha256,
             benchmark_snapshot_sha256=archives.benchmark_snapshot_sha256,
+            prepared_dataset_snapshot_sha256=prepared_snapshot,
             benchmark_version=benchmark_version,
             generated_at=datetime.now(timezone.utc),
         )

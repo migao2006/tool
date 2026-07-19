@@ -2,7 +2,8 @@ from __future__ import annotations
 
 # pyright: reportAny=false, reportMissingTypeStubs=false
 
-from dataclasses import asdict
+from collections.abc import Mapping, Sequence
+from dataclasses import asdict, replace
 from datetime import date, datetime, timezone
 from hashlib import sha256
 import json
@@ -28,6 +29,11 @@ from src.data.research.twse_archive_feature_parquet import (
     TwseArchiveFeatureParquetWriter,
 )
 from src.data.research.twse_feature_artifact_reader import TwseFeatureArtifactReader
+from src.data.research.twse_trading_calendar_snapshot import (
+    TwseTradingCalendarSession,
+    TwseTradingCalendarSnapshot,
+    calendar_snapshot_hash,
+)
 from src.features.twse_price_volume_schema import (
     TWSE_PRICE_VOLUME_FEATURE_NAMES,
     TWSE_PRICE_VOLUME_FEATURE_SCHEMA_HASH,
@@ -182,7 +188,11 @@ class _ArchiveReader:
         )
 
 
-def _feature_artifact(path: Path):
+def _feature_artifact(
+    path: Path,
+    *,
+    row_overrides: Mapping[str, object] | None = None,
+):
     decision_date = SESSIONS[0]
     row: dict[str, object] = {
         "dataset_snapshot_sha256": DATASET_SNAPSHOT,
@@ -224,6 +234,7 @@ def _feature_artifact(path: Path):
             for index, name in enumerate(TWSE_PRICE_VOLUME_FEATURE_NAMES)
         }
     )
+    row.update(row_overrides or {})
     writer = TwseArchiveFeatureParquetWriter(
         path,
         dataset_snapshot_sha256=DATASET_SNAPSHOT,
@@ -236,7 +247,38 @@ def _feature_artifact(path: Path):
     return reader.verify(path, reader.manifest_from_parquet(path))
 
 
-def _result(tmp_path: Path):
+def _calendar_snapshot(
+    sessions: Sequence[date] = SESSIONS,
+) -> TwseTradingCalendarSnapshot:
+    values = tuple(
+        TwseTradingCalendarSession(
+            trading_date=session,
+            source_version="finmind-calendar-v1",
+            source_revision_hash=sha256(session.isoformat().encode()).hexdigest(),
+            source_payload_hash="9" * 64,
+            first_observed_at=datetime(2026, 7, 19, tzinfo=timezone.utc),
+            available_at=datetime(2026, 7, 19, tzinfo=timezone.utc),
+            available_at_basis="FIRST_OBSERVED_AT_RETRIEVAL",
+            calendar_verification_status="UNRESOLVED",
+            market_basis="SCHEDULING_HINT",
+            usage_scope="CALENDAR_RESEARCH_ONLY",
+            system_status="RESEARCH_ONLY",
+            reason_codes=("OFFICIAL_SESSION_TIMES_UNAVAILABLE",),
+        )
+        for session in sessions
+    )
+    return TwseTradingCalendarSnapshot(
+        sessions=values,
+        calendar_snapshot_sha256=calendar_snapshot_hash(values),
+    )
+
+
+def _result(
+    tmp_path: Path,
+    *,
+    benchmark_snapshot_hash: str = "f" * 64,
+):
+    tmp_path.mkdir(parents=True, exist_ok=True)
     return TwseResearchDatasetBuilder(  # pyright: ignore[reportArgumentType]
         _ArchiveReader()
     ).build(
@@ -248,8 +290,9 @@ def _result(tmp_path: Path):
         benchmark_manifests=_snapshot(
             BENCHMARK_MANIFEST,
             archive_id=201,
-            snapshot_hash="f" * 64,
+            snapshot_hash=benchmark_snapshot_hash,
         ),
+        calendar_snapshot=_calendar_snapshot(),
         feature_artifact=_feature_artifact(tmp_path / "features.parquet"),
     )
 
@@ -286,6 +329,7 @@ def test_builder_rejects_unsupported_horizon_and_snapshot_mismatch(
             benchmark_manifests=_snapshot(
                 BENCHMARK_MANIFEST, archive_id=201, snapshot_hash="f" * 64
             ),
+            calendar_snapshot=_calendar_snapshot(),
             feature_artifact=artifact,
             horizon=3,
         )
@@ -299,9 +343,70 @@ def test_builder_rejects_unsupported_horizon_and_snapshot_mismatch(
             benchmark_manifests=_snapshot(
                 BENCHMARK_MANIFEST, archive_id=201, snapshot_hash="f" * 64
             ),
+            calendar_snapshot=_calendar_snapshot(),
             feature_artifact=artifact,
         )
     assert mismatch.value.reason_code == "FEATURE_DAILY_ARCHIVE_SNAPSHOT_MISMATCH"
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"source_payload_sha256": "8" * 64},
+        {"symbol": "2317"},
+        {"decision_date": date(2024, 2, 1)},
+        {"market": "TPEX"},
+        {"asset_type": "ETF"},
+    ],
+)
+def test_builder_rejects_feature_lineage_semantic_mismatch(
+    tmp_path: Path,
+    overrides: Mapping[str, object],
+) -> None:
+    builder = TwseResearchDatasetBuilder(  # pyright: ignore[reportArgumentType]
+        _ArchiveReader()
+    )
+    with pytest.raises(TwseResearchDatasetBuildError) as captured:
+        builder.build(
+            daily_manifests=_snapshot(
+                DAILY_MANIFEST, archive_id=101, snapshot_hash=SOURCE_SNAPSHOT
+            ),
+            benchmark_manifests=_snapshot(
+                BENCHMARK_MANIFEST, archive_id=201, snapshot_hash="f" * 64
+            ),
+            calendar_snapshot=_calendar_snapshot(),
+            feature_artifact=_feature_artifact(
+                tmp_path / f"features-{len(str(overrides))}.parquet",
+                row_overrides=overrides,
+            ),
+        )
+    assert captured.value.reason_code == "FEATURE_DAILY_ARCHIVE_LINEAGE_MISMATCH"
+
+
+def test_builder_requires_exact_versioned_calendar_snapshot(tmp_path: Path) -> None:
+    artifact = _feature_artifact(tmp_path / "features.parquet")
+    builder = TwseResearchDatasetBuilder(  # pyright: ignore[reportArgumentType]
+        _ArchiveReader()
+    )
+    arguments = {
+        "daily_manifests": _snapshot(
+            DAILY_MANIFEST, archive_id=101, snapshot_hash=SOURCE_SNAPSHOT
+        ),
+        "benchmark_manifests": _snapshot(
+            BENCHMARK_MANIFEST, archive_id=201, snapshot_hash="f" * 64
+        ),
+        "feature_artifact": artifact,
+    }
+    with pytest.raises(TwseResearchDatasetBuildError) as missing:
+        builder.build(**arguments, calendar_snapshot=None)
+    assert missing.value.reason_code == "TRADING_CALENDAR_SNAPSHOT_MISMATCH"
+
+    with pytest.raises(TwseResearchDatasetBuildError) as mismatch:
+        builder.build(
+            **arguments,
+            calendar_snapshot=_calendar_snapshot(SESSIONS[:-1]),
+        )
+    assert mismatch.value.reason_code == "TRADING_CALENDAR_SNAPSHOT_MISMATCH"
 
 
 def test_prepared_writer_roundtrips_and_detects_replacement(tmp_path: Path) -> None:
@@ -315,8 +420,28 @@ def test_prepared_writer_roundtrips_and_detects_replacement(tmp_path: Path) -> N
     assert manifest.system_status == "RESEARCH_ONLY"
     assert manifest.benchmark_path == "T_PLUS_ONE_OPEN_TO_H_CLOSE"
     assert dataset.frame.iloc[0]["symbol"] == "2330"
+    assert manifest.daily_archive_snapshot_sha256 == SOURCE_SNAPSHOT
+    assert manifest.current_identity_snapshot_sha256 == IDENTITY_SNAPSHOT
+    assert manifest.feature_artifact_sha256 == result.feature_artifact_sha256
+    assert manifest.calendar_snapshot_sha256 == result.calendar_snapshot_sha256
 
     output.write_bytes(output.read_bytes() + b"tampered")
     with pytest.raises(PreparedResearchArtifactError) as captured:
         _ = writer.verify(output, manifest)
     assert captured.value.reason_code == "PREPARED_RESEARCH_ARTIFACT_MANIFEST_MISMATCH"
+
+
+def test_prepared_snapshot_changes_with_taiex_input_and_rejects_mixed_manifest(
+    tmp_path: Path,
+) -> None:
+    first = _result(tmp_path / "first", benchmark_snapshot_hash="f" * 64)
+    second = _result(tmp_path / "second", benchmark_snapshot_hash="7" * 64)
+    writer = PreparedResearchArtifactWriter()
+    manifest = writer.write(tmp_path / "prepared.parquet", first)
+
+    assert (
+        first.prepared_dataset_snapshot_sha256
+        != second.prepared_dataset_snapshot_sha256
+    )
+    with pytest.raises(ValueError, match="input snapshot"):
+        _ = replace(manifest, benchmark_snapshot_sha256="7" * 64)

@@ -35,6 +35,9 @@ from src.data.research.twse_feature_artifact_contracts import (  # noqa: E402
 from src.data.research.twse_feature_artifact_reader import (  # noqa: E402
     TwseFeatureArtifactReader,
 )
+from src.data.research.twse_trading_calendar_snapshot import (  # noqa: E402
+    read_trading_calendar_snapshot,
+)
 from src.pipeline.twse_prepared_research_artifact import (  # noqa: E402
     PreparedResearchArtifactWriter,
 )
@@ -57,6 +60,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     _ = parser.add_argument("--feature", required=True, type=Path)
     _ = parser.add_argument("--feature-manifest", required=True, type=Path)
+    _ = parser.add_argument("--trading-calendar-snapshot", type=Path)
     _ = parser.add_argument("--output", required=True, type=Path)
     _ = parser.add_argument("--audit", required=True, type=Path)
     _ = parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH)
@@ -128,6 +132,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "UNSUPPORTED_HORIZON",
                 "Only horizon=5 has an independent prepared-dataset contract",
             )
+        calendar_path = cast(Path | None, arguments.trading_calendar_snapshot)
+        if calendar_path is None:
+            raise TwseResearchDatasetBuildError(
+                "TRADING_CALENDAR_SNAPSHOT_MISMATCH",
+                "A versioned trading-calendar snapshot file is required",
+            )
+        calendar_snapshot = read_trading_calendar_snapshot(calendar_path)
         config = load_mvp_config(cast(Path, arguments.config))
         source = SupabaseWriter(
             url=os.environ.get("SUPABASE_URL"),
@@ -147,6 +158,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         ).build(
             daily_manifests=daily_snapshot,
             benchmark_manifests=benchmark_snapshot,
+            calendar_snapshot=calendar_snapshot,
             feature_artifact=feature_artifact,
             horizon=horizon,
             transaction_cost_model=TransactionCostModel(

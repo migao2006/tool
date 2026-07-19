@@ -1,6 +1,6 @@
 import { createBottomNavigation } from "./src/components/bottom-navigation.js";
 import { initializeDrawers } from "./src/components/drawer-controller.js?v=debug-1";
-import { initializeResearchSettings, readResearchSettings } from "./src/features/research-settings.js?v=debug-2";
+import { initializeResearchSettings } from "./src/features/research-settings.js?v=stored-snapshot-1";
 import { initializeCandidateFilters } from "./src/features/candidate-filters.js";
 import { initializeWatchlistFilters } from "./src/features/watchlist-filters.js";
 import { CURRENT_HORIZON } from "./src/core/five-day-contract.js";
@@ -14,7 +14,7 @@ import {
 } from "./src/core/ui-state.js?v=research-ui-1";
 import { renderHomeDataStatus } from "./src/components/home-data-status.js?v=home-data-1";
 import { loadHomeDataStatus } from "./src/data/home-data-status-api.js?v=home-data-1";
-import { loadPredictionSnapshot } from "./src/data/prediction-api.js?v=research-ui-1";
+import { loadPredictionSnapshot } from "./src/data/prediction-api.js?v=stored-snapshot-1";
 import { createUnavailableSnapshot } from "./src/data/prediction-contract.js?v=research-ui-1";
 import { setWatchlistMembership } from "./src/data/watchlist-api.js?v=api-5";
 import { isSupabaseSdkLoadError } from "./src/data/supabase-sdk-loader.js?v=auth-1";
@@ -85,14 +85,13 @@ if (appRoot && navigationRoot) {
     }
   }
 
-  async function refreshSnapshot(settings = readResearchSettings()) {
+  async function refreshSnapshot() {
     requestController?.abort();
     requestController = new AbortController();
     applyUiState(UI_STATE.LOADING);
     try {
       const snapshot = await loadPredictionSnapshot({
         horizon: CURRENT_HORIZON,
-        settings,
         signal: requestController.signal,
       });
       const uiState = resolveSnapshotUiState(snapshot);

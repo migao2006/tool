@@ -54,11 +54,30 @@ def archive_id(values: Mapping[str, object]) -> int:
 def group_manifests(
     rows: Sequence[Mapping[str, object]],
 ) -> dict[str, list[Mapping[str, object]]]:
-    grouped: dict[str, list[Mapping[str, object]]] = {}
+    grouped: dict[
+        str, list[tuple[HistoricalArchiveManifest, Mapping[str, object]]]
+    ] = {}
     for row in rows:
         manifest = HistoricalArchiveManifest.from_mapping(row)
-        grouped.setdefault(manifest.source_symbol, []).append(row)
-    return dict(sorted(grouped.items()))
+        grouped.setdefault(manifest.source_symbol, []).append((manifest, row))
+
+    ordered: dict[str, list[Mapping[str, object]]] = {}
+    for symbol, entries in sorted(grouped.items()):
+        entries.sort(
+            key=lambda entry: (
+                entry[0].requested_start_date,
+                entry[0].requested_end_date,
+                archive_id(entry[1]),
+            )
+        )
+        for previous, current in zip(entries, entries[1:], strict=False):
+            if current[0].requested_start_date <= previous[0].requested_end_date:
+                raise TwseArchiveFeatureBuildError(
+                    "TWSE_ARCHIVE_DATE_RANGE_OVERLAP",
+                    "One TWSE symbol has overlapping archive campaign ranges",
+                )
+        ordered[symbol] = [row for _, row in entries]
+    return ordered
 
 
 def source_reason_codes(value: object) -> tuple[str, ...]:

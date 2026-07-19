@@ -278,3 +278,46 @@ def test_builder_rejects_empty_manifest_snapshot_without_publishing(
     assert captured.value.reason_code == "TWSE_ARCHIVE_MANIFESTS_EMPTY"
     assert not output.exists()
     assert not writer.partial_path.exists()
+
+
+def test_builder_rejects_overlapping_symbol_archive_campaigns(
+    tmp_path: Path,
+) -> None:
+    reader, original = _archive()
+    duplicate = dict(original.rows[0])
+    duplicate["archive_id"] = 2
+    manifests = HistoricalArchiveManifestSnapshot(
+        rows=(original.rows[0], MappingProxyType(duplicate)),
+        snapshot_sha256="b" * 64,
+        complete=True,
+    )
+    identity = TwseCurrentSecurityIdentity(
+        security_id=2330,
+        symbol="2330",
+        listing_date=START_DATE,
+    )
+    identities = TwseIdentitySnapshot(
+        by_symbol={"2330": identity},
+        snapshot_sha256=identity_snapshot_hash({"2330": identity}),
+    )
+    output = tmp_path / "must-not-overlap.parquet"
+    writer = TwseArchiveFeatureParquetWriter(
+        output,
+        dataset_snapshot_sha256=dataset_snapshot_hash(
+            source_archive_snapshot_sha256=manifests.snapshot_sha256,
+            current_identity_snapshot_sha256=identities.snapshot_sha256,
+        ),
+        source_archive_snapshot_sha256=manifests.snapshot_sha256,
+        current_identity_snapshot_sha256=identities.snapshot_sha256,
+    )
+
+    with pytest.raises(TwseArchiveFeatureBuildError) as captured:
+        _ = TwseArchiveFeatureDatasetBuilder(reader).build(
+            manifests=manifests,
+            identities=identities,
+            writer=writer,
+        )
+
+    assert captured.value.reason_code == "TWSE_ARCHIVE_DATE_RANGE_OVERLAP"
+    assert not output.exists()
+    assert not writer.partial_path.exists()

@@ -1,4 +1,4 @@
-name: Backfill historical daily bars
+name: Extend TWSE research history
 
 on:
   workflow_dispatch:
@@ -8,14 +8,12 @@ on:
         required: true
         default: 100
         type: number
-  schedule:
-    # Three isolated credential workers share one resumable queue every hour.
-    # Quota, runtime, and storage guards may stop any worker early.
-    - cron: "17 * * * *"
 
 permissions:
   contents: read
 
+# This fixed, non-overlapping slice precedes the existing 2021-07-19 campaign.
+# The shared queue always claims TWSE common stocks before TPEX and ETFs.
 concurrency:
   group: historical-daily-bar-backfill
   cancel-in-progress: false
@@ -24,10 +22,10 @@ jobs:
   primary:
     uses: ./.github/workflows/historical-daily-bar-backfill-worker.yml
     with:
-      credential_slot: primary
+      credential_slot: primary-history-extension
       max_tasks: ${{ fromJSON(github.event.inputs.max_tasks || '100') }}
-      start_date: "2021-07-19"
-      end_date: "2026-07-17"
+      start_date: "2018-01-01"
+      end_date: "2021-07-18"
       seed_common_tasks: true
     secrets:
       finmind_token: ${{ secrets.FINMIND_TOKEN }}
@@ -39,10 +37,10 @@ jobs:
   secondary:
     uses: ./.github/workflows/historical-daily-bar-backfill-worker.yml
     with:
-      credential_slot: secondary
+      credential_slot: secondary-history-extension
       max_tasks: ${{ fromJSON(github.event.inputs.max_tasks || '100') }}
-      start_date: "2021-07-19"
-      end_date: "2026-07-17"
+      start_date: "2018-01-01"
+      end_date: "2021-07-18"
       seed_common_tasks: false
     secrets:
       finmind_token: ${{ secrets.FINMIND_TOKEN_SECONDARY }}
@@ -54,10 +52,10 @@ jobs:
   tertiary:
     uses: ./.github/workflows/historical-daily-bar-backfill-worker.yml
     with:
-      credential_slot: tertiary
+      credential_slot: tertiary-history-extension
       max_tasks: ${{ fromJSON(github.event.inputs.max_tasks || '100') }}
-      start_date: "2021-07-19"
-      end_date: "2026-07-17"
+      start_date: "2018-01-01"
+      end_date: "2021-07-18"
       seed_common_tasks: false
     secrets:
       finmind_token: ${{ secrets.FINMIND_TOKEN_TERTIARY }}

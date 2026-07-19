@@ -11,6 +11,14 @@ on:
         description: Maximum FinMind symbols processed by this credential
         required: true
         type: number
+      start_date:
+        description: Inclusive campaign start date (YYYY-MM-DD)
+        required: true
+        type: string
+      end_date:
+        description: Inclusive campaign end date (YYYY-MM-DD)
+        required: true
+        type: string
       seed_common_tasks:
         description: Whether this worker creates the shared common-stock task queue
         required: true
@@ -89,6 +97,8 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.supabase_service_role_key }}
           API_HTTP_TIMEOUT_SECONDS: "30"
           MAX_TASKS: ${{ inputs.max_tasks }}
+          START_DATE: ${{ inputs.start_date }}
+          END_DATE: ${{ inputs.end_date }}
           FINMIND_QUOTA_RESERVE: "20"
           HISTORICAL_BACKFILL_MAX_RUNTIME_SECONDS: "1200"
           HISTORICAL_BACKFILL_MAX_DATABASE_BYTES: "420000000"
@@ -102,8 +112,8 @@ jobs:
         run: |
           set -euo pipefail
           uv run python -m scripts.backfill_historical_daily_bars \
-            --start-date 2021-07-19 \
-            --end-date 2026-07-17 \
+            --start-date "$START_DATE" \
+            --end-date "$END_DATE" \
             --max-tasks "$MAX_TASKS" \
             --output historical-backfill-summary.json
 

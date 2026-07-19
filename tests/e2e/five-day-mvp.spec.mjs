@@ -112,6 +112,32 @@ test("iPhone 版只顯示三個主要入口並可開啟個股詳情", async ({ p
   await expect(page.locator('[data-page="stock"]')).toHaveAttribute("data-horizon", "5");
 });
 
+test("裝置研究偏好不會破壞已發布的固定快照請求", async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem("alpha-lens:five-day-research-settings", JSON.stringify({
+      commission_discount: 0.5,
+      cost_profile: "base_cost",
+      max_adv_participation: 0.01,
+    }));
+  });
+  const predictionUrls = [];
+  page.on("request", (request) => {
+    if (request.url().includes("prediction-snapshot")) predictionUrls.push(request.url());
+  });
+
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+
+  await expect(page.locator("body")).toHaveAttribute("data-ui-state", "ready");
+  expect(predictionUrls.length).toBeGreaterThan(0);
+  predictionUrls.forEach((value) => {
+    const url = new URL(value);
+    expect(url.searchParams.get("horizon")).toBe("5");
+    expect(url.searchParams.has("cost_profile")).toBe(false);
+    expect(url.searchParams.has("commission_discount")).toBe(false);
+    expect(url.searchParams.has("max_adv_participation")).toBe(false);
+  });
+});
+
 test("API 契約錯誤時顯示 FAIL，且不把 fixture 當成候選", async ({ page }) => {
   await page.goto("/?api_mode=contract-error", { waitUntil: "domcontentloaded" });
 

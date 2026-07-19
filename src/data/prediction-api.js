@@ -15,30 +15,12 @@ import { isSupabaseSdkLoadError } from "./supabase-sdk-loader.js?v=auth-1";
 
 export { PredictionApiError };
 
-const RESEARCH_SETTING_KEYS = Object.freeze([
-  "commission_discount",
-  "minimum_fee",
-  "estimated_order_notional_ntd",
-  "max_adv_participation",
-  "cost_profile",
-  "max_single_position",
-  "max_industry_position",
-  "max_market_exposure",
-]);
-
-function predictionQuery(horizon, settings) {
-  const query = { horizon };
-  if (!settings || typeof settings !== "object") return query;
-  RESEARCH_SETTING_KEYS.forEach((key) => {
-    const value = settings[key];
-    if (value !== null && value !== undefined && value !== "") query[key] = value;
-  });
-  return query;
+function predictionQuery(horizon) {
+  return { horizon };
 }
 
 export async function loadPredictionSnapshot({
   horizon = CURRENT_HORIZON,
-  settings,
   signal,
   config = publicConfig,
 } = {}) {
@@ -58,7 +40,10 @@ export async function loadPredictionSnapshot({
     }
   }
   const payload = await requestPredictionApi("prediction-snapshot", {
-    query: predictionQuery(normalizedHorizon, settings),
+    // The current endpoint reads an immutable stored snapshot. Device research
+    // preferences remain local until the API can produce a separately versioned
+    // result for those settings; forwarding them would invalidate the request.
+    query: predictionQuery(normalizedHorizon),
     accessToken,
     signal,
     config,

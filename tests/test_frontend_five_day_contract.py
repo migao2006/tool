@@ -69,7 +69,8 @@ def test_prediction_client_accepts_horizon_fetches_only_when_configured() -> Non
     assert 'new URL("./", globalThis.location.href)' in public_config
     assert "new URL(apiBaseUrl, globalThis.location?.href)" in transport
     assert "fetch(url" in transport
-    assert "query: predictionQuery(normalizedHorizon, settings)" in client
+    assert "query: predictionQuery(normalizedHorizon)" in client
+    assert "RESEARCH_SETTING_KEYS" not in client
     assert "readSupabaseAccessToken" in client
     assert "accessToken," in client
     assert "PREDICTION_API_CONTRACT_ERROR" in client
@@ -184,6 +185,7 @@ def test_stock_route_and_saved_research_settings_are_guarded() -> None:
     assert "NUMERIC_RULES" in settings
     assert "COST_PROFILES" in settings
     assert "請修正超出允許範圍的設定" in settings
+    assert "目前仍顯示已發布快照的成本設定" in settings
     assert 'min="0.01" max="1"' in form
     assert 'name="estimated_order_notional_ntd" type="number" min="1"' in form
 

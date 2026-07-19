@@ -64,7 +64,7 @@ export function initializeResearchSettings({ onChange } = {}) {
     const settings = normalizedSettings(Object.fromEntries(new FormData(form).entries()));
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
-      if (feedback) feedback.textContent = "已儲存，將重新讀取符合此成本與容量設定的結果。";
+      if (feedback) feedback.textContent = "已儲存裝置偏好；目前仍顯示已發布快照的成本設定。";
       onChange?.(settings);
     } catch {
       if (feedback) feedback.textContent = "無法儲存這台裝置的研究設定。";

@@ -3,7 +3,7 @@
 `market_data` 是只允許伺服器端 `service_role` 存取的研究資料 schema。它會註冊於 Data API，
 但 `anon`／`authenticated` 沒有 schema 或資料表權限；`service_role` 絕不可放入瀏覽器或 Git。
 
-執行順序：
+以下檔案是可讀的 declarative schema 來源，供契約審查與新 migration 產生使用：
 
 1. `001_market_facts.sql`
 2. `002_research_outputs.sql`
@@ -32,11 +32,16 @@ VERIFIED 證據，避免重複修訂灌高就緒筆數。
 既有 `securities` 仍有 `(market, symbol)` 唯一限制，因此同市場代號重用的完整
 歷史身分遷移仍是後續工作；在完成前相關證據必須維持 UNRESOLVED／RESEARCH_ONLY。
 
-全新專案依序執行十三個檔案。既有專案需依序補上尚未執行的檔案；這些 migration
-均可安全重跑，且
-`004_contract_alignment.sql` 以單一 transaction 套用，失敗時不會留下
-部分變更，且可安全重跑。執行角色必須是 `market_data` 物件擁有者，才能讓
-`ALTER DEFAULT PRIVILEGES` 同時套用到日後由同一角色建立的物件。
+實際資料庫版本只以 `supabase/migrations/` 為 source of truth，不得直接把本目錄
+當作正式 migration 依序重跑。全新本機資料庫由
+`20260717180000_initial_market_data_baseline.sql` 建立；該 baseline 具有
+fail-closed guard，只允許空資料庫執行。
+
+既有正式資料庫不得執行 baseline。必須先完成 schema 等價稽核，再把 baseline 版本
+標記為已套用，且確認 migration 差異只包含尚未執行的 forward-only migration。
+`004_contract_alignment.sql` 雖使用單一 transaction，仍不可因此假設所有 schema
+檔案都能安全重跑。執行角色必須是 `market_data` 物件擁有者，才能讓
+`ALTER DEFAULT PRIVILEGES` 套用到日後由同一角色建立的物件。
 
 所有可修訂的 point-in-time 事實表都保留 `available_at`、來源與來源版本。
 `feature_snapshots` 與 `prediction_runs` 以資料庫約束強制

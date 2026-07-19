@@ -1,5 +1,3 @@
-begin;
-
 set local search_path = pg_catalog, public, extensions;
 
 create or replace function market_data.historical_backfill_snapshot(
@@ -56,7 +54,5 @@ revoke all on function market_data.historical_backfill_snapshot(date, date)
 from public, anon, authenticated;
 grant execute on function market_data.historical_backfill_snapshot(date, date)
 to service_role;
-
-commit;
 
 notify pgrst, 'reload schema';

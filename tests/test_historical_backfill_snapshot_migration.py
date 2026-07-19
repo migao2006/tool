@@ -6,7 +6,7 @@ MIGRATION = (
     ROOT
     / "supabase"
     / "migrations"
-    / "20260719043000_optimize_historical_backfill_snapshot.sql"
+    / "20260718191828_optimize_historical_backfill_snapshot.sql"
 )
 
 

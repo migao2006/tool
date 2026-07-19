@@ -76,6 +76,21 @@ $env:NODE_OPTIONS = "--use-system-ca"
 
 高風險變更應使用分階段 migration、向後相容 schema 及明確 rollback。
 
+### 本機 Supabase 重建與歷史對齊
+
+- 本機首次啟動及 migration 變更後，必須執行
+  `pnpm exec supabase db reset --local --no-seed`。
+- 重建後必須執行
+  `pnpm exec supabase db lint --local --schema public,market_data --level warning --fail-on error`。
+- `20260717180000_initial_market_data_baseline.sql` 只供空資料庫重建；
+  既有正式資料庫不得重新執行此 baseline。
+- 正式資料庫的既有 migration 版本與 SQL 內容必須先完成等價稽核。
+  baseline 只能在確認 schema 等價後標記為已套用。
+- 在遠端 migration history 尚未完成上述對齊前，禁止執行
+  `supabase db push`、`--include-all` 或盲目使用 migration repair。
+- 正式推送前，migration 差異必須只包含經驗證、確實尚未套用的
+  forward-only migration。
+
 ## 五、發布閘門
 
 部署 Production 前必須確認：

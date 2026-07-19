@@ -6,13 +6,13 @@ MIGRATION = (
     ROOT
     / "supabase"
     / "migrations"
-    / "20260718163123_historical_backfill_control.sql"
+    / "20260718170255_historical_backfill_control.sql"
 )
 FIX_MIGRATION = (
     ROOT
     / "supabase"
     / "migrations"
-    / "20260718170638_fix_historical_backfill_claim_priority.sql"
+    / "20260718171030_fix_historical_backfill_claim_priority.sql"
 )
 
 

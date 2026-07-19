@@ -34,7 +34,7 @@ test("登入處理中保留焦點並阻止 Escape 關閉", async ({ page }) => {
   await page.goto("/contract-test", { waitUntil: "domcontentloaded" });
 
   const busyState = await page.evaluate(async () => {
-    const { AuthDialog } = await import("/src/components/auth/auth-dialog.js?v=auth-6");
+    const { AuthDialog } = await import("/src/components/auth/auth-dialog.js?v=auth-7");
     const root = document.createElement("div");
     const entryRoot = document.createElement("div");
     document.body.append(entryRoot, root);

@@ -1,5 +1,5 @@
 import { AuthController } from "./auth-controller.js?v=auth-6";
-import { AuthDialog } from "../components/auth/auth-dialog.js?v=auth-6";
+import { AuthDialog } from "../components/auth/auth-dialog.js?v=auth-7";
 import { publicConfig } from "../core/public-config.js?v=auth-6";
 import { createSupabaseClient } from "../data/supabase-client.js?v=auth-6";
 import { createAuthService } from "../features/auth/auth-service.js?v=auth-5";

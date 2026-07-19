@@ -25,8 +25,10 @@ export class AuthDialog {
   }
 
   bindEvents() {
-    this.entryRoot.addEventListener("click", () => {
-      this.open(this.user ? "account" : "signin");
+    this.entryRoot.addEventListener("click", (event) => {
+      const opener = event.target.closest("[data-auth-open]");
+      if (!opener) return;
+      this.open(this.user ? "account" : "signin", opener);
     });
 
     this.root.addEventListener("click", (event) => {
@@ -66,9 +68,9 @@ export class AuthDialog {
     this.signOutHandler = handler;
   }
 
-  open(view = "signin") {
+  open(view = "signin", opener = document.activeElement) {
     const wasOpen = this.dialog.open;
-    if (!wasOpen) this.returnFocus = document.activeElement;
+    if (!wasOpen) this.returnFocus = opener instanceof HTMLElement ? opener : null;
     this.showView(view);
     if (!wasOpen) {
       if (typeof this.dialog.showModal === "function") {
@@ -98,10 +100,13 @@ export class AuthDialog {
   }
 
   restoreFocus() {
-    if (this.returnFocus instanceof HTMLElement && this.returnFocus.isConnected) {
-      this.returnFocus.focus();
-    }
+    const target = this.returnFocus;
     this.returnFocus = null;
+    if (!(target instanceof HTMLElement) || !target.isConnected) return;
+    target.focus();
+    window.requestAnimationFrame(() => {
+      if (!this.dialog.open && target.isConnected) target.focus();
+    });
   }
 
   showView(view) {

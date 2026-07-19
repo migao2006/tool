@@ -1,7 +1,13 @@
-import { defineConfig } from "@playwright/test";
+import { defineConfig, devices } from "@playwright/test";
 
 const port = Number.parseInt(process.env.PLAYWRIGHT_PORT ?? "4180", 10);
 const baseURL = `http://127.0.0.1:${port}`;
+const mobileUse = Object.freeze({
+  viewport: { width: 390, height: 844 },
+  deviceScaleFactor: 3,
+  hasTouch: true,
+  isMobile: true,
+});
 
 export default defineConfig({
   testDir: "./tests/e2e",
@@ -15,7 +21,6 @@ export default defineConfig({
   outputDir: "artifacts/playwright-results",
   use: {
     baseURL,
-    browserName: "chromium",
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
     video: "retain-on-failure",
@@ -24,10 +29,16 @@ export default defineConfig({
     {
       name: "iphone-chromium",
       use: {
-        viewport: { width: 390, height: 844 },
-        deviceScaleFactor: 3,
-        hasTouch: true,
-        isMobile: true,
+        ...mobileUse,
+        browserName: "chromium",
+      },
+    },
+    {
+      name: "iphone-webkit",
+      testMatch: /(?:auth-mobile-accessibility|mobile-visual-audit)\.spec\.mjs/,
+      use: {
+        ...devices["iPhone 13"],
+        browserName: "webkit",
       },
     },
   ],

@@ -1,5 +1,6 @@
-import { publicConfig } from "../core/public-config.js?v=home-data-1";
+import { publicConfig } from "../core/public-config.js?v=home-data-2";
 import { normalizeHomeDataStatus } from "./home-data-status-contract.js?v=home-data-1";
+import { createRequestSignal } from "./request-signal.js?v=request-signal-1";
 import { createSupabaseClient } from "./supabase-client.js?v=auth-6";
 
 const HOME_DATA_STATUS_FIELDS = Object.freeze([
@@ -49,31 +50,58 @@ export async function loadHomeDataStatus({
 		);
 	}
 
-	let query = client
-		.from("home_data_status")
-		.select(HOME_DATA_STATUS_FIELDS.join(","))
-		.eq("status_key", "latest")
-		.maybeSingle();
-	if (signal && typeof query.abortSignal === "function")
-		query = query.abortSignal(signal);
-
-	const { data, error } = await query;
-	if (error) {
-		throw new HomeDataStatusApiError(
-			"無法讀取資料庫同步摘要",
-			"HOME_DATA_STATUS_REQUEST_FAILED",
-			{ cause: error },
-		);
-	}
-	if (!data) return null;
+	const timeoutMs = Number.isFinite(config.homeDataStatusTimeoutMs) &&
+		config.homeDataStatusTimeoutMs > 0
+		? config.homeDataStatusTimeoutMs
+		: 12_000;
+	const request = createRequestSignal(signal, timeoutMs);
 
 	try {
-		return normalizeHomeDataStatus(data);
+		let query = client
+			.from("home_data_status")
+			.select(HOME_DATA_STATUS_FIELDS.join(","))
+			.eq("status_key", "latest")
+			.maybeSingle();
+		if (typeof query.abortSignal === "function") {
+			query = query.abortSignal(request.signal);
+		}
+
+		const { data, error } = await query;
+		if (request.timedOut()) {
+			throw new HomeDataStatusApiError(
+				"資料庫同步摘要回應逾時",
+				"HOME_DATA_STATUS_TIMEOUT",
+				{ cause: error },
+			);
+		}
+		if (error) {
+			throw new HomeDataStatusApiError(
+				"無法讀取資料庫同步摘要",
+				"HOME_DATA_STATUS_REQUEST_FAILED",
+				{ cause: error },
+			);
+		}
+		if (!data) return null;
+
+		try {
+			return normalizeHomeDataStatus(data);
+		} catch (error) {
+			throw new HomeDataStatusApiError(
+				"資料庫同步摘要格式不相容",
+				error?.code ?? "HOME_DATA_STATUS_CONTRACT_ERROR",
+				{ cause: error },
+			);
+		}
 	} catch (error) {
-		throw new HomeDataStatusApiError(
-			"資料庫同步摘要格式不相容",
-			error?.code ?? "HOME_DATA_STATUS_CONTRACT_ERROR",
-			{ cause: error },
-		);
+		if (request.timedOut() && error?.code !== "HOME_DATA_STATUS_TIMEOUT") {
+			throw new HomeDataStatusApiError(
+				"資料庫同步摘要回應逾時",
+				"HOME_DATA_STATUS_TIMEOUT",
+				{ cause: error },
+			);
+		}
+		throw error;
+	} finally {
+		request.cleanup();
 	}
 }

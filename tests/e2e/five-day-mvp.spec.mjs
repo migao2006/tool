@@ -370,6 +370,39 @@ test("首頁資料庫摘要請求失敗時顯示 error 且不使用舊資料", a
   await expect(panel).toContainText("未以舊資料或假資料替代");
 });
 
+test("資料庫同步摘要逾時會中止請求並結束 loading", async ({ page }) => {
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+  await expect(page.locator("[data-home-data-status]")).toHaveAttribute("data-state", "ready");
+
+  await page.unroute(HOME_DATA_ROUTE);
+  await routeHomeDataStatus(page, { delayMs: 500 });
+  const outcome = await page.evaluate(async () => {
+    const [{ loadHomeDataStatus }, { publicConfig }, { renderHomeDataStatus }] = await Promise.all([
+      import("/src/data/home-data-status-api.js?v=home-data-2"),
+      import("/src/core/public-config.js?v=home-data-2"),
+      import("/src/components/home-data-status.js?v=mobile-ui-1"),
+    ]);
+    const startedAt = performance.now();
+    try {
+      await loadHomeDataStatus({
+        config: { ...publicConfig, homeDataStatusTimeoutMs: 50 },
+      });
+      return { code: null, elapsedMs: performance.now() - startedAt };
+    } catch (error) {
+      renderHomeDataStatus(null, "error", { reasonCode: error?.code });
+      return { code: error?.code, elapsedMs: performance.now() - startedAt };
+    }
+  });
+
+  expect(outcome.code).toBe("HOME_DATA_STATUS_TIMEOUT");
+  expect(outcome.elapsedMs).toBeLessThan(400);
+  const panel = page.locator("[data-home-data-status]");
+  await expect(panel).toHaveAttribute("data-state", "error");
+  await expect(panel).toContainText("同步摘要回應逾時");
+  await expect(panel).toContainText("未以舊資料或假資料替代");
+  await expect(panel).toContainText("HOME_DATA_STATUS_TIMEOUT");
+});
+
 test("Supabase SDK 載入較慢時仍能完成登入初始化", async ({ page }) => {
   await stubSentry(page);
   let attempts = 0;

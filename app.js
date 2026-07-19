@@ -13,8 +13,8 @@ import {
   resolveSnapshotUiState,
 } from "./src/core/ui-state.js?v=research-ui-1";
 import { renderHomeDataStatus } from "./src/components/home-data-status.js?v=mobile-ui-1";
-import { loadHomeDataStatus } from "./src/data/home-data-status-api.js?v=home-data-1";
-import { loadPredictionSnapshot } from "./src/data/prediction-api.js?v=stored-snapshot-1";
+import { loadHomeDataStatus } from "./src/data/home-data-status-api.js?v=home-data-2";
+import { loadPredictionSnapshot } from "./src/data/prediction-api.js?v=stored-snapshot-2";
 import { createUnavailableSnapshot } from "./src/data/prediction-contract.js?v=research-ui-1";
 import { setWatchlistMembership } from "./src/data/watchlist-api.js?v=api-5";
 import { isSupabaseSdkLoadError } from "./src/data/supabase-sdk-loader.js?v=auth-1";

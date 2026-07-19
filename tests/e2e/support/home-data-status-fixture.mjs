@@ -29,7 +29,7 @@ export const HOME_DATA_ROUTE = "**/rest/v1/home_data_status*";
 
 export async function routeHomeDataStatus(
   page,
-  { body = TEST_ONLY_HOME_DATA_STATUS, status = 200 } = {},
+  { body = TEST_ONLY_HOME_DATA_STATUS, delayMs = 0, status = 200 } = {},
 ) {
   await page.route(HOME_DATA_ROUTE, async (route) => {
     if (route.request().method() === "OPTIONS") {
@@ -42,6 +42,9 @@ export async function routeHomeDataStatus(
         },
       });
       return;
+    }
+    if (delayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
     await route.fulfill({
       status,

@@ -110,9 +110,12 @@ export function renderHomeDataStatus(status, state, { reasonCode = "" } = {}) {
 		return;
 	}
 	if (state === HOME_DATA_STATE.ERROR) {
+		const timedOut = reasonCode === "HOME_DATA_STATUS_TIMEOUT";
 		content.innerHTML = statusMessage(
-			"無法讀取同步摘要",
-			"資料庫連線或公開唯讀權限目前不可用；未以舊資料或假資料替代。",
+			timedOut ? "同步摘要回應逾時" : "無法讀取同步摘要",
+			timedOut
+				? "資料庫同步摘要未在 12 秒內回應；未以舊資料或假資料替代。"
+				: "資料庫連線或公開唯讀權限目前不可用；未以舊資料或假資料替代。",
 			reasonCode || "HOME_DATA_STATUS_REQUEST_FAILED",
 		);
 		return;

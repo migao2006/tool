@@ -8,7 +8,7 @@ import {
   PredictionApiError,
   requestPredictionApi,
   resolvePredictionApiBaseUrl,
-} from "./api-client.js?v=api-4";
+} from "./api-client.js?v=api-5";
 import { createUnavailableSnapshot, normalizePredictionSnapshot } from "./prediction-contract.js?v=research-ui-2";
 import { readSupabaseAccessToken } from "./session-token.js?v=api-4";
 import { isSupabaseSdkLoadError } from "./supabase-sdk-loader.js?v=auth-1";

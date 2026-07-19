@@ -236,6 +236,62 @@ def test_invalid_adjusted_ohlc_is_preserved_but_quarantined() -> None:
     }
 
 
+def test_duplicate_adjusted_trade_date_is_quarantined() -> None:
+    payload = _remote_payload()
+    body = dict(payload.payload)
+    rows = list(body["data"])
+    rows.append(dict(rows[0]))
+    body["data"] = rows
+    encoded = json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
+    duplicate_payload = ProviderPayload(
+        provider=payload.provider,
+        dataset=payload.dataset,
+        source_version=payload.source_version,
+        source_url=payload.source_url,
+        retrieved_at=payload.retrieved_at,
+        payload_sha256=sha256(encoded).hexdigest(),
+        payload=body,
+        request_metadata=payload.request_metadata,
+    )
+
+    batch = normalize_historical_supplemental(
+        FugleAdjustedBackfillProvider(FakeFugleClient(duplicate_payload)).fetch(
+            "adjusted_bars",
+            data_id="2330",
+            start_date=START,
+            end_date=END,
+        )
+    )
+
+    assert batch.source_row_count == 2
+    assert batch.quarantined_count == 1
+    assert {issue["reason_code"] for issue in batch.quarantine_rows} == {
+        "DUPLICATE_TRADE_DATE"
+    }
+
+
+@pytest.mark.parametrize(
+    ("market", "asset_type"),
+    (("TPEX", "COMMON_STOCK"), ("TWSE", "ETF")),
+)
+def test_archive_contract_rejects_fugle_outside_twse_common_stock(
+    market: str,
+    asset_type: str,
+) -> None:
+    with pytest.raises(ValueError, match="TWSE common stocks"):
+        HistoricalArchiveRequest(
+            provider_code="FUGLE",
+            source_dataset="adjusted_bars",
+            scheduled_market=market,
+            asset_type=asset_type,
+            source_symbol="2330",
+            requested_start_date=START,
+            requested_end_date=END,
+            source_payload_sha256="a" * 64,
+            retrieved_at=datetime(2026, 7, 19, tzinfo=timezone.utc),
+        )
+
+
 class FakeArchive:
     def __init__(self) -> None:
         self.payloads: list[ProviderPayload] = []

@@ -136,6 +136,10 @@ def _read_table(payload: bytes, manifest: HistoricalArchiveManifest) -> Any:
         b"archive.source_payload_sha256": manifest.source_payload_hash.encode("ascii"),
         b"archive.retrieved_at": manifest.first_observed_at.isoformat().encode("ascii"),
     }
+    if manifest.provider_code != "FINMIND":
+        expected_metadata[b"archive.provider_code"] = manifest.provider_code.encode(
+            "ascii"
+        )
     if any(metadata.get(key) != value for key, value in expected_metadata.items()):
         raise _fail(
             "HISTORICAL_ARCHIVE_SCHEMA_METADATA_MISMATCH",

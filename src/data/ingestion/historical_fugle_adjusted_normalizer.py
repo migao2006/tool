@@ -136,6 +136,7 @@ def normalize_fugle_adjusted_bars(
     source_rows = cast(list[object], rows_value)
     landing_rows: list[dict[str, object]] = []
     quarantine_rows: list[dict[str, object]] = []
+    seen_trade_dates: set[str] = set()
     observed_at = payload.retrieved_at.isoformat()
     for row_index, raw in enumerate(source_rows):
         source_row: object = raw
@@ -150,6 +151,10 @@ def normalize_fugle_adjusted_bars(
             issues.append(("ROW_NOT_OBJECT", "*"))
         if trade_date is None:
             issues.append(("TRADE_DATE_INVALID", "date"))
+        elif trade_date in seen_trade_dates:
+            issues.append(("DUPLICATE_TRADE_DATE", "date"))
+        else:
+            seen_trade_dates.add(trade_date)
         issues.extend(_ohlc_issues(row))
         revision_hash = _canonical_hash(
             {

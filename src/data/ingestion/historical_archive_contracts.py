@@ -90,6 +90,12 @@ class HistoricalArchiveRequest:
             raise ValueError(
                 "provider_code and source_dataset are not an allowed archive pair"
             )
+        if provider_code == "FUGLE" and (
+            scheduled_market != "TWSE" or asset_type != "COMMON_STOCK"
+        ):
+            raise ValueError(
+                "FUGLE adjusted archives are limited to TWSE common stocks"
+            )
         if (
             type(self.requested_start_date) is not date
             or type(self.requested_end_date) is not date

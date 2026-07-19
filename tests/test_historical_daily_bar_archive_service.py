@@ -4,10 +4,13 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from hashlib import sha256
+from io import BytesIO
 import json
+from typing import Any
 
 import pytest
 
+from src.data.archive import HistoricalParquetReader
 from src.data.ingestion.contracts import IngestionError
 from src.data.ingestion.historical_archive_repository import (
     HistoricalArchiveRepository,
@@ -23,6 +26,7 @@ from src.data.ingestion.historical_supplemental_normalizer import (
     normalize_historical_supplemental,
 )
 from src.data.object_storage.r2_client import ObjectMetadata
+from src.data.object_storage.r2_client import R2Client, R2Settings
 from src.data.providers.contracts import ProviderPayload
 
 
@@ -164,6 +168,24 @@ class MemoryArchiveStore:
         return self.objects[key].body
 
 
+class MemoryReaderS3Client:
+    def __init__(self, stored: StoredObject) -> None:
+        self.stored = stored
+
+    def head_object(self, **kwargs: Any) -> dict[str, object]:
+        _ = kwargs
+        return {
+            "ContentLength": len(self.stored.body),
+            "ContentType": self.stored.content_type,
+            "Metadata": dict(self.stored.metadata),
+            "ETag": self.stored.etag,
+        }
+
+    def get_object(self, **kwargs: Any) -> dict[str, object]:
+        _ = kwargs
+        return {"Body": BytesIO(self.stored.body)}
+
+
 class RecordingManifestWriter:
     def __init__(self, *, error: Exception | None = None) -> None:
         self.error = error
@@ -283,6 +305,22 @@ def test_fugle_adjusted_archive_records_provider_without_changing_daily_keys() -
     assert manifest["usage_scope"] == "RAW_LANDING_ONLY"
     daily_key = _seed(MemoryArchiveStore()).object_key
     assert daily_key.startswith("raw/v1/provider=finmind/dataset=daily_bars/")
+
+    settings = R2Settings(
+        account_id="account123",
+        access_key_id="access-key",
+        secret_access_key="secret-key",
+        bucket_name=store.bucket_name,
+    )
+    verified = HistoricalParquetReader(
+        R2Client(
+            settings,
+            s3_client=MemoryReaderS3Client(store.objects[result.object_key]),
+        )
+    ).read(manifest)
+    assert verified.row_count == 1
+    assert verified.manifest.provider_code == "FUGLE"
+    assert verified.rows[0]["source_code"] == "FUGLE"
 
 
 def test_existing_object_is_downloaded_and_hash_verified_before_manifest() -> None:

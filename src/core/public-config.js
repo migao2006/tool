@@ -8,6 +8,7 @@ export const publicConfig = Object.freeze({
   authConfirmationRedirectUrl: runtimeBaseUrl,
   predictionApiBaseUrl: "https://zuhwkxlmnvwiktcmijup.supabase.co/functions/v1/",
   predictionApiTimeoutMs: 12_000,
+  homeDataStatusTimeoutMs: 12_000,
   predictionApiContractVersion: "prediction-snapshot.v1",
 });
 

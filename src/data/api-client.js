@@ -1,4 +1,5 @@
 import { publicConfig } from "../core/public-config.js?v=api-3";
+import { createRequestSignal } from "./request-signal.js?v=request-signal-1";
 
 export class PredictionApiError extends Error {
   constructor(code, message, { status = null, cause = null } = {}) {
@@ -14,26 +15,6 @@ export function resolvePredictionApiBaseUrl(config = publicConfig) {
   return globalThis.document?.documentElement?.dataset?.predictionApiBaseUrl?.trim()
     || config.predictionApiBaseUrl?.trim()
     || "";
-}
-
-function createRequestSignal(externalSignal, timeoutMs) {
-  const controller = new AbortController();
-  let timedOut = false;
-  const forwardAbort = () => controller.abort(externalSignal?.reason);
-  if (externalSignal?.aborted) forwardAbort();
-  else externalSignal?.addEventListener("abort", forwardAbort, { once: true });
-  const timer = setTimeout(() => {
-    timedOut = true;
-    controller.abort();
-  }, timeoutMs);
-  return Object.freeze({
-    signal: controller.signal,
-    timedOut: () => timedOut,
-    cleanup: () => {
-      clearTimeout(timer);
-      externalSignal?.removeEventListener("abort", forwardAbort);
-    },
-  });
 }
 
 function buildUrl(path, query, config) {

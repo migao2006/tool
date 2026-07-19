@@ -9,6 +9,27 @@ import {
   isHistoricalResearchSnapshot,
 } from "../features/prediction-selection.js";
 
+const CANDIDATE_BATCH_SIZE = 25;
+
+function visibleLimit(root) {
+  const value = Number.parseInt(root.dataset.candidateVisibleLimit ?? "", 10);
+  return Number.isSafeInteger(value) && value > 0 ? value : CANDIDATE_BATCH_SIZE;
+}
+
+function renderPagination(root, visibleCount, totalCount) {
+  const pagination = root.querySelector("[data-candidate-pagination]");
+  if (!pagination) return;
+  pagination.hidden = totalCount <= CANDIDATE_BATCH_SIZE;
+  const summary = pagination.querySelector("[data-candidate-pagination-summary]");
+  if (summary) summary.textContent = `目前顯示 ${visibleCount}／${totalCount} 檔`;
+  const button = pagination.querySelector("[data-load-more-candidates]");
+  if (button) {
+    const moveFocusToSummary = button === document.activeElement && visibleCount >= totalCount;
+    button.hidden = visibleCount >= totalCount;
+    if (moveFocusToSummary) summary?.focus({ preventScroll: true });
+  }
+}
+
 export function createCandidatesPage({ horizon }) {
   return `
     <section class="app-page" data-page="opportunities" data-horizon="${horizon}" aria-labelledby="candidates-title" hidden>
@@ -45,9 +66,28 @@ export function createCandidatesPage({ horizon }) {
         </div>
         <p class="quantile-note">P10／P50／P90 為條件報酬分位數，不是最低、平均、最高報酬或獲利保證。</p>
         <div data-candidate-list>${createEmptyState({ title: "正在讀取", description: "正在取得正式 5 日候選資料。" })}</div>
+        <div class="candidate-list-pagination" data-candidate-pagination hidden>
+          <p data-candidate-pagination-summary role="status" aria-live="polite" tabindex="-1">目前顯示 0／0 檔</p>
+          <button class="secondary-button" type="button" data-load-more-candidates>顯示更多</button>
+        </div>
       </section>
       ${createExcludedSecuritiesDrawer()}
     </section>`;
+}
+
+export function initializeCandidatePagination({ onChange } = {}) {
+  const root = document.querySelector('[data-page="opportunities"]');
+  if (!root) return Object.freeze({ reset: () => {} });
+  root.addEventListener("click", (event) => {
+    if (!event.target.closest("[data-load-more-candidates]")) return;
+    root.dataset.candidateVisibleLimit = String(visibleLimit(root) + CANDIDATE_BATCH_SIZE);
+    onChange?.();
+  });
+  return Object.freeze({
+    reset: () => {
+      root.dataset.candidateVisibleLimit = String(CANDIDATE_BATCH_SIZE);
+    },
+  });
 }
 
 export function renderCandidatesPage(snapshot, uiState, filters = {}) {
@@ -71,9 +111,14 @@ export function renderCandidatesPage(snapshot, uiState, filters = {}) {
       : researchOnly ? "5 日研究結果" : "正式候選清單";
   }
   if (records.length) {
-    list.innerHTML = records.map((record) => createCandidateCard(record, { horizon: snapshot.horizon })).join("");
+    const visibleRecords = records.slice(0, visibleLimit(root));
+    list.innerHTML = visibleRecords
+      .map((record) => createCandidateCard(record, { horizon: snapshot.horizon }))
+      .join("");
+    renderPagination(root, visibleRecords.length, records.length);
     return;
   }
+  renderPagination(root, 0, 0);
   const reasonCode = snapshot.reasonCodes?.[0] ?? (canShow ? "NO_MATCHING_ELIGIBLE_STOCKS" : "NO_DISPLAYABLE_RESULTS");
   list.innerHTML = createEmptyState({
     title: canShow ? "沒有符合篩選的股票" : uiState === "no_candidates" ? "今日無正式候選" : "無正式候選股",

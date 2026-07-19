@@ -2,9 +2,9 @@ import { createEmptyState } from "../components/empty-state.js";
 import { createCandidateCard } from "../components/candidate-card.js";
 import { createResearchSettingsDrawer } from "../components/research-settings-drawer.js?v=debug-1";
 import { createStatusBanner } from "../components/status-banner.js";
-import { createHomeDataStatusPanel } from "../components/home-data-status.js?v=home-data-1";
+import { createHomeDataStatusPanel } from "../components/home-data-status.js?v=mobile-ui-1";
 import { createValidationReportDrawer, renderValidationReport } from "../components/validation-report-drawer.js";
-import { formatDateTime, formatPercent } from "../core/formatters.js";
+import { formatDateTime, formatPercent } from "../core/formatters.js?v=mobile-ui-1";
 import { setText } from "../core/html.js";
 import {
   canDisplaySnapshotRecords,
@@ -20,7 +20,6 @@ export function createOverviewPage({ horizon }) {
         <button class="icon-text-button" type="button" data-open-drawer="research-settings">研究設定</button>
       </div>
       ${createStatusBanner()}
-      ${createHomeDataStatusPanel()}
 
       <section class="contract-meta" aria-label="預測時間契約">
         <div><span>資料日期</span><small>as_of_date</small><strong data-overview-field="as_of_date">—</strong></div>
@@ -51,6 +50,8 @@ export function createOverviewPage({ horizon }) {
         <div class="panel-heading"><div><span class="eyebrow">僅按 Rank Score 排序</span><h2 id="top-candidate-title" data-overview-list-title>通過門檻的前 3～5 檔</h2></div><button class="text-button" type="button" data-route="opportunities">查看候選</button></div>
         <div data-overview-candidates>${createEmptyState({ title: "正在讀取", description: "正在取得正式 5 日模型狀態。" })}</div>
       </section>
+
+      ${createHomeDataStatusPanel()}
 
       <section class="panel traceability-panel" aria-labelledby="traceability-title">
         <div class="panel-heading"><h2 id="traceability-title">模型追溯</h2><span class="system-badge" data-system-status-label data-traceability-status>RESEARCH_ONLY</span></div>

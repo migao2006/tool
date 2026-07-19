@@ -1,58 +1,5 @@
 import { expect, test } from "@playwright/test";
-
-const TEST_ONLY_HOME_DATA_STATUS = Object.freeze({
-  status_key: "latest",
-  contract_version: "home-data-status.v1",
-  as_of_date: "2026-07-17",
-  latest_available_at: "2026-07-18T01:00:00Z",
-  securities_count: 2_104,
-  twse_securities_count: 1_096,
-  tpex_securities_count: 1_008,
-  daily_bars_latest_date: "2026-07-17",
-  daily_bars_latest_count: 2_080,
-  twse_daily_bars_latest_count: 1_080,
-  tpex_daily_bars_latest_count: 1_000,
-  production_ready_daily_bars_count: 2_040,
-  historical_landing_count: 14_000,
-  historical_parsed_count: 12_000,
-  historical_quarantined_count: 2_000,
-  historical_production_eligible_count: 0,
-  data_sources_count: 4,
-  source_codes: ["MOPS", "TPEX", "TWSE", "FINMIND"],
-  prediction_runs_count: 0,
-  stock_predictions_count: 0,
-  market_predictions_count: 0,
-  model_output_status: "RESEARCH_ONLY",
-  reason_codes: ["MODEL_OUTPUT_NOT_AVAILABLE"],
-  updated_at: "2026-07-18T01:10:00Z",
-});
-
-const HOME_DATA_ROUTE = "**/rest/v1/home_data_status*";
-
-async function routeHomeDataStatus(page, { body = TEST_ONLY_HOME_DATA_STATUS, status = 200 } = {}) {
-  await page.route(HOME_DATA_ROUTE, async (route) => {
-    if (route.request().method() === "OPTIONS") {
-      await route.fulfill({
-        status: 204,
-        headers: {
-          "Access-Control-Allow-Origin": "*",
-          "Access-Control-Allow-Headers": "authorization, apikey, content-type",
-          "Access-Control-Allow-Methods": "GET, OPTIONS",
-        },
-      });
-      return;
-    }
-    await route.fulfill({
-      status,
-      contentType: "application/json",
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Content-Profile": "public",
-      },
-      body: JSON.stringify(body),
-    });
-  });
-}
+import { HOME_DATA_ROUTE, routeHomeDataStatus } from "./support/home-data-status-fixture.mjs";
 
 test.beforeEach(async ({ page }) => {
   await routeHomeDataStatus(page);
@@ -91,6 +38,12 @@ test("iPhone 版只顯示三個主要入口並可開啟個股詳情", async ({ p
   await page.goto("/", { waitUntil: "domcontentloaded" });
 
   await expect(page.locator("body")).toHaveAttribute("data-ui-state", "ready");
+  const marketPanel = page.getByRole("region", { name: "市場判斷" });
+  const dataPanel = page.getByRole("region", { name: "資料庫同步摘要" });
+  const [marketBox, dataBox] = await Promise.all([marketPanel.boundingBox(), dataPanel.boundingBox()]);
+  expect(marketBox).not.toBeNull();
+  expect(dataBox).not.toBeNull();
+  expect(dataBox.y).toBeGreaterThan(marketBox.y);
   const navigation = page.getByRole("navigation", { name: "主要導覽" });
   const navigationButtons = navigation.getByRole("button");
   await expect(navigationButtons).toHaveCount(3);
@@ -110,6 +63,53 @@ test("iPhone 版只顯示三個主要入口並可開啟個股詳情", async ({ p
   await expect(page.getByRole("heading", { name: /TEST1/u })).toBeVisible();
   await expect(navigation.getByRole("button")).toHaveCount(3);
   await expect(page.locator('[data-page="stock"]')).toHaveAttribute("data-horizon", "5");
+  await expect(page.locator('[data-stock-field="decision_at"]')).toHaveText("2026/07/17 16:00");
+});
+
+test("大量候選結果在手機分批顯示", async ({ page }) => {
+  await page.route("**/api/prediction-snapshot**", async (route) => {
+    const response = await route.fetch();
+    const payload = await response.json();
+    const template = payload.predictions[0];
+    payload.predictions = Array.from({ length: 80 }, (_, index) => ({
+      ...template,
+      symbol: `T${String(index + 1).padStart(4, "0")}`,
+      global_rank: index + 1,
+      industry_rank: index + 1,
+      rank_score: 100 - index * 0.1,
+    }));
+    await route.fulfill({ response, json: payload });
+  });
+
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+  await page.getByRole("navigation", { name: "主要導覽" })
+    .getByRole("button", { name: "5 日候選" })
+    .click();
+
+  const cards = page.locator('[data-candidate-list] .candidate-card');
+  await expect(cards).toHaveCount(25);
+  await expect(page.locator("[data-candidate-pagination-summary]")).toHaveText("目前顯示 25／80 檔");
+  await page.getByRole("button", { name: "顯示更多" }).click();
+  await expect(cards).toHaveCount(50);
+  await expect(page.locator("[data-candidate-pagination-summary]")).toHaveText("目前顯示 50／80 檔");
+
+  await page.locator("[data-candidate-filters] summary").click();
+  const rankScoreMinimum = page.locator('[data-candidate-filters] input[name="rank_score_min"]');
+  await rankScoreMinimum.fill("99");
+  await expect(cards).toHaveCount(11);
+  await expect(page.locator("[data-candidate-pagination]")).toBeHidden();
+
+  await rankScoreMinimum.fill("");
+  await expect(cards).toHaveCount(25);
+  await expect(page.locator("[data-candidate-pagination-summary]")).toHaveText("目前顯示 25／80 檔");
+  await page.getByRole("button", { name: "顯示更多" }).click();
+  await page.getByRole("button", { name: "顯示更多" }).click();
+  await page.getByRole("button", { name: "顯示更多" }).click();
+  await expect(cards).toHaveCount(80);
+  const paginationSummary = page.locator("[data-candidate-pagination-summary]");
+  await expect(paginationSummary).toHaveText("目前顯示 80／80 檔");
+  await expect(paginationSummary).toBeFocused();
+  await expect(page.getByRole("button", { name: "顯示更多" })).toBeHidden();
 });
 
 test("裝置研究偏好不會破壞已發布的固定快照請求", async ({ page }) => {
@@ -149,6 +149,7 @@ test("API 契約錯誤時顯示 FAIL，且不把 fixture 當成候選", async ({
     .getByRole("button", { name: "5 日候選" })
     .click();
   await expect(page.locator('[data-candidate-list] .candidate-card')).toHaveCount(0);
+  await expect(page.locator("[data-candidate-pagination]")).toBeHidden();
   await expect(page.locator("[data-candidate-list]")).toContainText("無正式候選股");
 });
 

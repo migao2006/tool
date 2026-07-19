@@ -190,6 +190,22 @@ def test_stock_route_and_saved_research_settings_are_guarded() -> None:
     assert 'name="estimated_order_notional_ntd" type="number" min="1"' in form
 
 
+def test_mobile_home_priority_pagination_and_taipei_time_are_explicit() -> None:
+    overview = read("src/pages/overview-page.js")
+    candidates = read("src/pages/candidates-page.js")
+    stock = read("src/pages/stock-detail-page.js")
+    formatters = read("src/core/formatters.js")
+
+    market_panel = '<section class="panel" aria-labelledby="market-heading">'
+    data_panel = "${createHomeDataStatusPanel()}"
+    assert overview.index(market_panel) < overview.rindex(data_panel)
+    assert "const CANDIDATE_BATCH_SIZE = 25" in candidates
+    assert "data-load-more-candidates" in candidates
+    assert "visibleRecords = records.slice(0, visibleLimit(root))" in candidates
+    assert "formatDateTime(prediction.decision_at)" in stock
+    assert 'timeZone: "Asia/Taipei"' in formatters
+
+
 def test_drawer_restores_focus_to_its_opening_control() -> None:
     drawer = read("src/components/drawer-controller.js")
     assert "drawerTriggers = new WeakMap()" in drawer

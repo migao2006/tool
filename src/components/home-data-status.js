@@ -1,4 +1,4 @@
-import { formatDateTime } from "../core/formatters.js";
+import { formatDateTime } from "../core/formatters.js?v=mobile-ui-1";
 import { escapeHtml } from "../core/html.js";
 import { HOME_DATA_STATE } from "../core/ui-state.js?v=home-data-1";
 

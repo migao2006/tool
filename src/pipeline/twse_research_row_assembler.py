@@ -25,6 +25,7 @@ from src.trading.transaction_cost import TransactionCostModel
 
 from .twse_research_assembly_contracts import ResearchRowExclusion
 from .twse_research_assembly_inputs import (
+    BenchmarkSeries,
     FEATURE_INPUTS,
     EvidenceInterval,
     ResearchAssemblyInputError,
@@ -44,7 +45,7 @@ TAIPEI = ZoneInfo("Asia/Taipei")
 class RowAssemblyContext:
     bars: pd.DataFrame
     duplicate_bar_keys: set[tuple[str, date]]
-    benchmark: dict[date, float]
+    benchmark: BenchmarkSeries
     duplicate_benchmark_dates: set[date]
     sessions: tuple[date, ...]
     session_positions: dict[date, int]
@@ -188,9 +189,17 @@ def _path_reasons(
         session in context.duplicate_benchmark_dates for session in path_dates
     ):
         reasons.append("DUPLICATE_BENCHMARK_SESSION")
-    if decision_date not in context.benchmark or (
-        path_dates and exit_date not in context.benchmark
-    ):
+    if context.benchmark.path == "T_PLUS_ONE_OPEN_TO_H_CLOSE":
+        benchmark_window_missing = bool(path_dates) and (
+            path_dates[0] not in context.benchmark.open_levels
+            or exit_date not in context.benchmark.close_levels
+        )
+    else:
+        benchmark_window_missing = (
+            decision_date not in context.benchmark.close_levels
+            or (bool(path_dates) and exit_date not in context.benchmark.close_levels)
+        )
+    if benchmark_window_missing:
         reasons.append("BENCHMARK_WINDOW_MISSING")
     reasons.extend(
         overlap_reasons(
@@ -319,9 +328,18 @@ def assemble_research_row(
     assert cost_rate is not None and cost_version is not None
     gross_return = exit_close / entry_open - 1
     net_return = gross_return - cost_rate
-    benchmark_return = (
-        context.benchmark[exit_date] / context.benchmark[decision_date] - 1
-    )
+    if context.benchmark.path == "T_PLUS_ONE_OPEN_TO_H_CLOSE":
+        benchmark_return = (
+            context.benchmark.close_levels[exit_date]
+            / context.benchmark.open_levels[entry_date]
+            - 1
+        )
+    else:
+        benchmark_return = (
+            context.benchmark.close_levels[exit_date]
+            / context.benchmark.close_levels[decision_date]
+            - 1
+        )
     daily_volatility = values["realized_volatility_20"] / sqrt(20)
     direction = make_direction_label(net_return, daily_volatility, context.band_config)
     row_reasons = context.research_reason_codes + feature_limitations

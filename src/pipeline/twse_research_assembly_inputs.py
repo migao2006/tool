@@ -33,6 +33,31 @@ class EvidenceInterval:
     reason_code: str
 
 
+@dataclass(frozen=True)
+class BenchmarkSeries:
+    """Validated benchmark levels and the return path they support."""
+
+    sessions: tuple[date, ...]
+    close_levels: dict[date, float]
+    open_levels: dict[date, float]
+    path: str
+    semantics: str
+
+    def __post_init__(self) -> None:
+        if self.path not in {
+            "DECISION_CLOSE_TO_EXIT_CLOSE",
+            "T_PLUS_ONE_OPEN_TO_H_CLOSE",
+        }:
+            raise ValueError("benchmark path is unsupported")
+        if not self.sessions:
+            raise ValueError("benchmark sessions cannot be empty")
+        if self.path == "T_PLUS_ONE_OPEN_TO_H_CLOSE" and (
+            self.semantics != "PRICE_INDEX_NOT_TOTAL_RETURN"
+            or not self.open_levels
+        ):
+            raise ValueError("benchmark OHLC semantics are incomplete")
+
+
 def records(value: object) -> tuple[object, ...]:
     if isinstance(value, pd.DataFrame):
         return tuple(value.to_dict(orient="records"))
@@ -180,36 +205,78 @@ def bar_frame(value: object) -> tuple[pd.DataFrame, set[tuple[str, date]]]:
 
 def benchmark_levels(
     value: object,
-) -> tuple[dict[date, float], set[date], tuple[date, ...]]:
-    parsed: list[tuple[date, float | None]] = []
+) -> tuple[BenchmarkSeries, set[date]]:
+    parsed: list[tuple[date, float | None, float | None]] = []
+    modes: set[str] = set()
+    semantics: set[str] = set()
     for record in records(value):
         raw_date = read(
             record,
             "session_date",
             read(record, "observation_at", read(record, "trade_date")),
         )
-        raw_level = read(
-            record,
-            "total_return_index",
-            read(record, "numeric_value", read(record, "price")),
-        )
         if raw_date is None:
             raise ResearchAssemblyInputError("benchmark session date is required")
+        raw_open = read(record, "open_index")
+        raw_close = read(record, "close_index")
+        if raw_open is not None or raw_close is not None:
+            modes.add("OHLC")
+            semantics.add(str(read(record, "benchmark_semantics", "")).strip())
+            open_level = positive_number(raw_open)
+            close_level = positive_number(raw_close)
+        else:
+            modes.add("CLOSE")
+            open_level = None
+            close_level = positive_number(
+                read(
+                    record,
+                    "total_return_index",
+                    read(record, "numeric_value", read(record, "price")),
+                )
+            )
         parsed.append(
             (
                 date_value(raw_date, "benchmark_session_date"),
-                positive_number(raw_level),
+                open_level,
+                close_level,
             )
         )
-    date_counts = Counter(session for session, _ in parsed)
+    if not parsed:
+        raise ResearchAssemblyInputError("benchmark sessions cannot be empty")
+    if len(modes) != 1:
+        raise ResearchAssemblyInputError("benchmark path formats cannot be mixed")
+    is_ohlc = modes == {"OHLC"}
+    if is_ohlc and semantics != {"PRICE_INDEX_NOT_TOTAL_RETURN"}:
+        raise ResearchAssemblyInputError(
+            "benchmark OHLC must declare PRICE_INDEX_NOT_TOTAL_RETURN"
+        )
+    date_counts = Counter(session for session, _, _ in parsed)
     duplicate_dates = {session for session, count in date_counts.items() if count > 1}
-    output = {
-        session: level
-        for session, level in parsed
-        if session not in duplicate_dates and level is not None
+    close_levels = {
+        session: close_level
+        for session, _, close_level in parsed
+        if session not in duplicate_dates and close_level is not None
+    }
+    open_levels = {
+        session: open_level
+        for session, open_level, _ in parsed
+        if session not in duplicate_dates and open_level is not None
     }
     sessions = tuple(sorted(date_counts))
-    return output, duplicate_dates, sessions
+    series = BenchmarkSeries(
+        sessions=sessions,
+        close_levels=close_levels,
+        open_levels=open_levels,
+        path=(
+            "T_PLUS_ONE_OPEN_TO_H_CLOSE"
+            if is_ohlc
+            else "DECISION_CLOSE_TO_EXIT_CLOSE"
+        ),
+        semantics=(
+            "PRICE_INDEX_NOT_TOTAL_RETURN" if is_ohlc else "CALLER_DEFINED_LEVEL"
+        ),
+    )
+    return series, duplicate_dates
 
 
 def intervals(
@@ -278,6 +345,7 @@ def empty_prepared() -> pd.DataFrame:
 
 
 __all__ = [
+    "BenchmarkSeries",
     "FEATURE_INPUTS",
     "ResearchAssemblyInputError",
     "aware_timestamp",

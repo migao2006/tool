@@ -66,7 +66,10 @@ export function applyUiState(state) {
 export function resolveSnapshotUiState(snapshot) {
   if (!snapshot) return UI_STATE.LOADING;
   if (snapshot.reasonCodes?.includes("MODEL_NOT_RELEASED")) return UI_STATE.MODEL_NOT_AVAILABLE;
-  if (snapshot.stale) return UI_STATE.STALE;
+  // Historical OOS research outputs are stale by construction because their
+  // realized label window must finish before publication. Keep them usable as
+  // research while formal PASS snapshots remain fail-closed when stale.
+  if (snapshot.stale && snapshot.systemStatus !== "RESEARCH_ONLY") return UI_STATE.STALE;
   if (snapshot.dataQualityHardFail) return UI_STATE.DATA_QUALITY_HARD_FAIL;
   if (snapshot.systemStatus === "FAIL") return UI_STATE.FAIL;
   if (snapshot.systemStatus === "RESEARCH_ONLY") return UI_STATE.RESEARCH_ONLY;

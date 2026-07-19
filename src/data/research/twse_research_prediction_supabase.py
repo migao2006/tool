@@ -64,9 +64,7 @@ class TwseResearchPredictionSupabasePublisher:
                 "research prediction publishing requires a recognized environment"
             )
         if environment == "production" and not production_publish_enabled:
-            raise ValueError(
-                "RESEARCH_PREDICTION_PRODUCTION_PUBLISH_ENABLED is false"
-            )
+            raise ValueError("RESEARCH_PREDICTION_PRODUCTION_PUBLISH_ENABLED is false")
         self.writer = writer
         self.target_environment = environment
 
@@ -228,10 +226,9 @@ class TwseResearchPredictionSupabasePublisher:
                     "candidate_count": 0,
                     "watch_count": 0,
                     "no_trade_count": len(predictions),
-                    "hard_fail_count": sum(
-                        value.get("data_quality_status") != "PASS"
-                        for value in predictions
-                    ),
+                    # This publisher accepts PASS/WARN source rows only. WARN remains
+                    # auditable through reason_codes but is not a hard failure.
+                    "hard_fail_count": 0,
                 }
             ],
             on_conflict="decision_at,horizon,model_bundle_version",

@@ -192,7 +192,48 @@ Deno.test("a non-hard quality failure does not exclude the whole stock", async (
   assertEquals(response.status, 200);
   assertEquals(payload.predictions.length, 2);
   assertEquals(payload.excluded, []);
+  assertEquals(payload.predictions[1].data_quality_status, "WARN");
   assertEquals(payload.predictions[1].data_quality_hard_fail, false);
+});
+
+Deno.test("publisher compatibility markers restore a research warning", async () => {
+  const rows = snapshotRows();
+  rows.run.hard_fail_count = 0;
+  rows.audits = [];
+  rows.predictions[1].reason_codes = [
+    "RESEARCH_ONLY_NO_FORMAL_DECISION_POLICY",
+    "RESEARCH_DATA_QUALITY_WARN",
+  ];
+
+  const response = await handler(rows)(
+    new Request(
+      "https://api.example/functions/v1/prediction-snapshot?horizon=5",
+    ),
+  );
+  const payload = await response.json();
+  assertEquals(response.status, 200);
+  assertEquals(payload.predictions.length, 2);
+  assertEquals(payload.excluded, []);
+  assertEquals(payload.predictions[1].data_quality_status, "WARN");
+  assertEquals(payload.predictions[1].data_quality_hard_fail, false);
+  assertEquals(payload.predictions[1].decision, "NO_TRADE");
+});
+
+Deno.test("an unmarked database quality failure remains excluded", async () => {
+  const rows = snapshotRows();
+  rows.audits = [];
+
+  const response = await handler(rows)(
+    new Request(
+      "https://api.example/functions/v1/prediction-snapshot?horizon=5",
+    ),
+  );
+  const payload = await response.json();
+  assertEquals(response.status, 200);
+  assertEquals(payload.predictions.length, 1);
+  assertEquals(payload.excluded.length, 1);
+  assertEquals(payload.excluded[0].symbol, "9999");
+  assertEquals(payload.excluded[0].data_quality_hard_fail, true);
 });
 
 Deno.test("ambiguous validation history is not attached to a snapshot", async () => {

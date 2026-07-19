@@ -4,6 +4,7 @@ import {
   mapPrediction,
   mapValidation,
   marketName,
+  resolvePublicDataQuality,
 } from "./mappers.ts";
 import type { DecisionGateRow, JsonRecord, SnapshotRows } from "./types.ts";
 
@@ -145,7 +146,7 @@ export function buildSnapshot(
   const excludedSecurityIds = new Set(
     rows.predictions.filter((prediction) => {
       const audit = audits.get(prediction.security_id);
-      return audit?.hard_fail ?? prediction.data_quality_status === "FAIL";
+      return resolvePublicDataQuality(rows.run, prediction, audit).hardFail;
     }).map((prediction) => prediction.security_id),
   );
   const auditOnlyExcluded = rows.audits.filter((audit) =>

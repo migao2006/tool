@@ -151,6 +151,7 @@ def test_staging_publish_is_conservative_and_idempotent() -> None:
     assert run["system_validation_status"] == "RESEARCH_ONLY"
     assert run["candidate_count"] == 0
     assert run["no_trade_count"] == 1
+    assert run["hard_fail_count"] == 0
     assert stock["decision"] == "NO_TRADE"
     assert stock["data_quality_status"] == "FAIL"
     assert "RESEARCH_ONLY_NO_FORMAL_DECISION_POLICY" in cast(

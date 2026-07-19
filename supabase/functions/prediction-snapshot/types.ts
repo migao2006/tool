@@ -1,0 +1,144 @@
+export type JsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | JsonValue[]
+  | { [key: string]: JsonValue };
+
+export type JsonRecord = Record<string, JsonValue>;
+
+export interface PredictionRunRow extends JsonRecord {
+  prediction_run_id: number;
+  as_of_date: string;
+  decision_at: string;
+  horizon: number;
+  model_bundle_version: string;
+  feature_schema_hash: string;
+  cost_profile_version: string;
+  training_end_date: string;
+  system_validation_status: "PASS" | "RESEARCH_ONLY" | "FAIL";
+  source_dates: JsonRecord;
+  latest_available_at: string;
+  candidate_count: number;
+  watch_count: number;
+  no_trade_count: number;
+  hard_fail_count: number;
+  created_at: string;
+}
+
+export interface StockPredictionRow extends JsonRecord {
+  stock_prediction_id: number;
+  prediction_run_id: number;
+  security_id: number;
+  market: "TWSE" | "TPEX";
+  industry: string | null;
+  rank_score: number | string;
+  global_rank: number;
+  global_rank_percentile: number | string;
+  industry_rank: number | null;
+  industry_rank_percentile: number | string | null;
+  calibrated_p_up: number | string;
+  calibrated_p_neutral: number | string;
+  calibrated_p_down: number | string;
+  calibration_version: string;
+  gross_q10: number | string;
+  gross_q50: number | string;
+  gross_q90: number | string;
+  net_q10: number | string;
+  net_q50: number | string;
+  net_q90: number | string;
+  interval_width: number | string;
+  calibration_status: string;
+  forecast_volatility: number | string | null;
+  downside_risk: number | string | null;
+  adv20_ntd: number | string | null;
+  maximum_order_notional_ntd: number | string | null;
+  market_regime: string | null;
+  market_exposure_cap: number | string | null;
+  estimated_round_trip_cost: number | string;
+  data_quality_status: "PASS" | "FAIL";
+  decision: "CANDIDATE" | "WATCH" | "NO_TRADE";
+  reason_codes: string[];
+}
+
+export interface SecurityRow extends JsonRecord {
+  security_id: number;
+  symbol: string;
+  display_name: string;
+  market: "TWSE" | "TPEX";
+  asset_type: "COMMON_STOCK" | "ETF";
+}
+
+export interface DataQualityAuditRow extends JsonRecord {
+  security_id: number;
+  quality_status: "PASS" | "FAIL";
+  hard_fail: boolean;
+  reason_codes: string[];
+  source_dates: JsonRecord;
+  latest_available_at: string | null;
+}
+
+export interface DecisionGateRow extends JsonRecord {
+  stock_prediction_id: number;
+  gate_order: number;
+  gate_name: string;
+  passed: boolean;
+  actual_value: JsonValue;
+  threshold_value: JsonValue;
+  reason_code: string;
+}
+
+export interface MarketPredictionRow extends JsonRecord {
+  market: "TWSE" | "TPEX";
+  calibrated_p_up: number | string;
+  calibrated_p_neutral: number | string;
+  calibrated_p_down: number | string;
+  market_regime: string;
+  forecast_market_volatility: number | string;
+  market_exposure_cap: number | string;
+  model_version: string;
+  training_end_date: string;
+}
+
+export interface ValidationRunRow extends JsonRecord {
+  validation_run_id: number;
+  validation_status: "PASS" | "RESEARCH_ONLY" | "FAIL";
+  locked_holdout: boolean;
+  frozen_config_hash: string;
+  started_at: string;
+  completed_at: string | null;
+  limitations: string[];
+}
+
+export interface ValidationMetricRow extends JsonRecord {
+  fold_number: number;
+  metric_name: string;
+  metric_value: number | string | null;
+  metric_payload: JsonRecord;
+}
+
+export interface BacktestRunRow extends JsonRecord {
+  cost_scenario: string;
+  cost_multiplier: number | string;
+  status: "PASS" | "RESEARCH_ONLY" | "FAIL";
+  summary_metrics: JsonRecord;
+  completed_at: string | null;
+}
+
+export interface SnapshotRows {
+  run: PredictionRunRow;
+  predictions: StockPredictionRow[];
+  securities: SecurityRow[];
+  audits: DataQualityAuditRow[];
+  gates: DecisionGateRow[];
+  markets: MarketPredictionRow[];
+  validationRun: ValidationRunRow | null;
+  validationMetrics: ValidationMetricRow[];
+  backtests: BacktestRunRow[];
+  validationLinkStatus: "LINKED" | "MISSING" | "AMBIGUOUS";
+}
+
+export interface SnapshotRepositoryContract {
+  loadLatest(horizon: number): Promise<SnapshotRows | null>;
+}

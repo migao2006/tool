@@ -1,6 +1,6 @@
 # Alpha Lens 5 日預測 API 契約
 
-> 2026-07-19 現況：前端 `predictionApiBaseUrl` 為空，prediction／watchlist backend 與自選股持久化尚未上線。此文件是目標契約，不是已可呼叫的正式 API；UI 必須維持 `RESEARCH_ONLY`，不得使用示例資料冒充回應。
+> 2026-07-19 現況：`supabase/functions/prediction-snapshot` 已建立可部署的唯讀實作；在 GitHub Staging／Production workflow 實際發布且前端設定 base URL 前，`predictionApiBaseUrl` 仍為空。Watchlist 持久化尚未上線。UI 必須維持真實系統狀態，不得使用示例資料冒充回應。
 
 目前前端固定使用 `horizon=5`，契約版本為 `prediction-snapshot.v1`。後端應使用 `src.api.PredictionSnapshotOutput` 產生回應，避免自行拼接欄位。
 
@@ -23,6 +23,11 @@ X-Alpha-Lens-Contract: prediction-snapshot.v1
 
 用途：取得今日總覽、候選股、個股詳情與目前登入者的自選清單。未登入時不帶權杖並回傳公開資料；已登入時前端會自動加入 `Authorization: Bearer <Supabase access token>`，後端才可回傳該使用者的 `watchlist`。
 
+目前 Edge Function 先提供公開研究快照；`Authorization` header 只保留擴充點，
+`watchlist` 固定為空陣列，直到 user-owned watchlist table、RLS 與契約完成。
+Function 以 server-side `SUPABASE_SERVICE_ROLE_KEY` 讀取私有 schema，該 key
+不得出現在前端設定、請求 URL、API 回應或 log。
+
 必要 query：
 
 - `horizon=5`
@@ -38,6 +43,11 @@ X-Alpha-Lens-Contract: prediction-snapshot.v1
 - `max_industry_position`
 - `max_market_exposure`
 
+第一版唯讀 Function 不會在 request-time 重新計算模型或成本。若上述研究設定
+已帶入 query，會回 `422 RESEARCH_SETTINGS_NOT_AVAILABLE_FOR_STORED_SNAPSHOT`，
+不得靜默忽略後回傳基礎快照。後續只能在已保存對應設定的版本化 snapshot 後
+才可開放。
+
 回應 envelope：
 
 | 欄位 | 說明 |
@@ -48,7 +58,7 @@ X-Alpha-Lens-Contract: prediction-snapshot.v1
 | `horizon` | 第一版固定 `5` |
 | `system_status` | `PASS`、`RESEARCH_ONLY` 或 `FAIL` |
 | `stale` | 資料是否逾期 |
-| `data_quality_hard_fail` | 快照是否有關鍵資料失敗 |
+| `data_quality_hard_fail` | 整體快照是否有系統級關鍵資料失敗；個股 hard fail 僅列於 `excluded` |
 | `reason_codes` | 可稽核原因碼陣列 |
 | `market` | `MarketOutput.to_dict()` |
 | `predictions` | `StockPredictionOutput.to_dict()` 陣列 |
@@ -58,6 +68,17 @@ X-Alpha-Lens-Contract: prediction-snapshot.v1
 | `training_end_date` | 訓練資料截止日 |
 | `cost_profile_version` | 成本契約版本 |
 | `validation` | Walk-forward、holdout、排名、校準與成本敏感度摘要 |
+
+若資料庫尚無任何 `prediction_run`，端點回 `200` 與真實空快照：
+`system_status=RESEARCH_ONLY`、`reason_codes=["NO_PREDICTION_SNAPSHOT"]`、
+`predictions/watchlist/excluded=[]`，且未知日期與版本欄位為 `null`。不得以目前日期
+或 placeholder 代替。
+
+Validation 不以「同版本最新一筆」任意拼接。只有同一
+`model_bundle_version + horizon`、`completed_at <= prediction_run.created_at`，且查詢
+結果可唯一識別時才附加；缺少或有歧義時 `validation={}`，並加入
+`VALIDATION_SNAPSHOT_NOT_LINKED`。這不阻擋已保存的個股研究輸出，但不得將未連結的
+驗證結果當作該次預測之正式證據。
 
 正式 `PASS` 股票的 `gates` 必須依下列固定順序完整回傳：
 
@@ -108,6 +129,8 @@ X-Alpha-Lens-Contract: prediction-snapshot.v1
 - API 若回傳符合 `A-Z0-9_` 格式的 `code`，前端會保留該 reason code 供稽核；畫面仍使用固定的安全錯誤文案。
 - 若 API 與前端不同網域，CORS 只允許正式前端 origin、必要 method 與 `Authorization`、`Content-Type`、`X-Alpha-Lens-Contract` headers。
 - `prediction-snapshot` 應回傳 `Cache-Control: no-store`，或使用包含 `as_of_date`、設定與使用者身分的正確快取鍵。
+- Edge Function 使用 `PREDICTION_ALLOWED_ORIGINS` 的逗號分隔 exact-origin allowlist；不得使用 `*`。
+- 公開研究快照不要求登入，因此 Function gateway 設為 `verify_jwt=false`；這不會讓瀏覽器直接取得私有 schema，所有資料仍只經 server-side repository 整理後回傳。
 
 ## 接入檢查
 

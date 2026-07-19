@@ -382,6 +382,12 @@ inspector_port = 8083
 # The Deno major version to use.
 deno_version = 2
 
+[functions.prediction-snapshot]
+# Public market research snapshots can be read without a Supabase user session.
+# The function itself only uses the server-injected service-role key and never
+# returns that key to the caller.
+verify_jwt = false
+
 # [edge_runtime.secrets]
 # secret_key = "env(SECRET_VALUE)"
 

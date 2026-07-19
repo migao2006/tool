@@ -90,7 +90,13 @@ HISTORICAL_BACKFILL_MAX_ARCHIVE_OBJECTS_PER_RUN
 HISTORICAL_BACKFILL_MAX_ARCHIVE_OBJECT_BYTES
 HISTORICAL_BACKFILL_SEED_COMMON_TASKS
 HISTORICAL_BACKFILL_REFRESH_HOME_STATUS
+HISTORICAL_SUPPLEMENTAL_ALLOWED_DATASETS
 ```
+
+依 2026-07-19 免費 FinMind credential 的實際存取結果，預設值為
+`institutional_flows,margin_short`。`adjusted_bars` 任務不刪除、不記為成功，會以
+`ADJUSTED_BARS_PROVIDER_ACCESS_UNAVAILABLE` 延後；確認 credential 已取得
+`TaiwanStockPriceAdj` 權限後，才可在手動 workflow dispatch 明確加入 `adjusted_bars`。
 
 `.env.example` 只記錄名稱與空值；實際 secret 不得以明文保存或回傳。
 

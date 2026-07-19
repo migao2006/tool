@@ -67,6 +67,7 @@ class HistoricalSupplementalBackfillSummary:
     quarantined_rows: int
     quota_remaining_at_start: int
     request_budget: int
+    allowed_datasets: tuple[str, ...]
     remaining_adjusted_bars: int
     remaining_institutional_flows: int
     remaining_margin_short: int
@@ -77,5 +78,6 @@ class HistoricalSupplementalBackfillSummary:
 
     def to_dict(self) -> dict[str, object]:
         value = asdict(self)
+        value["allowed_datasets"] = list(self.allowed_datasets)
         value["reason_codes"] = list(self.reason_codes)
         return value

@@ -35,6 +35,9 @@ from src.data.ingestion.historical_supplemental_backfill_coordinator import (  #
 from src.data.ingestion.historical_supplemental_backfill_repository import (  # noqa: E402
     HistoricalSupplementalBackfillRepository,
 )
+from src.data.ingestion.historical_supplemental_backfill_settings import (  # noqa: E402
+    HistoricalSupplementalBackfillSettings,
+)
 from src.data.ingestion.historical_supplemental_landing_service import (  # noqa: E402
     HistoricalSupplementalLandingService,
 )
@@ -79,6 +82,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         provider_settings = ApiProviderSettings.from_env()
         runtime_settings = HistoricalBackfillSettings.from_env()
+        supplemental_settings = HistoricalSupplementalBackfillSettings.from_env()
         if runtime_settings.storage_target != "R2":
             raise ValueError("HISTORICAL_BACKFILL_STORAGE_TARGET must be R2")
         provider = FinMindClient(token=provider_settings.finmind_token)
@@ -100,6 +104,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 archive_service=archive_service,
             ),
             settings=runtime_settings,
+            supplemental_settings=supplemental_settings,
         ).run(
             start_date=cast(date, args.start_date),
             end_date=cast(date, args.end_date),

@@ -12,3 +12,9 @@ def test_security_snapshot_workflow_also_preserves_listing_identity_evidence() -
     assert "current-listing-identity-summary.json" in workflow
     assert workflow.count("SUPABASE_SERVICE_ROLE_KEY: ${{") == 2
     assert "args+=(--dry-run)" in workflow
+    assert "blank resolves a coherent date from both markets" in workflow
+    assert (
+        "- name: Import unresolved current listing identity evidence\n        if: always()"
+        in workflow
+    )
+    assert workflow.count("REQUESTED_SNAPSHOT_DATE: ${{ inputs.snapshot_date }}") == 1

@@ -24,6 +24,14 @@ class FakeWriter:
         return_rows: bool = False,
         preserve_existing: bool = False,
     ) -> list[dict[str, object]]:
+        _ = (
+            table,
+            rows,
+            on_conflict,
+            select,
+            return_rows,
+            preserve_existing,
+        )
         return []
 
     def rpc(self, function_name: str, parameters: Mapping[str, object]) -> object:
@@ -56,11 +64,16 @@ def test_repository_preserves_dataset_when_claiming_shared_queue() -> None:
         worker_id="worker",
         claim_token=UUID("11111111-1111-1111-1111-111111111111"),
         lease_seconds=1800,
+        allowed_datasets=("institutional_flows", "margin_short"),
     )
 
     assert task is not None
     assert task.source_dataset == "adjusted_bars"
     assert writer.calls[0][0] == "claim_historical_supplemental_backfill_task"
+    assert writer.calls[0][1]["p_allowed_datasets"] == [
+        "institutional_flows",
+        "margin_short",
+    ]
 
 
 def test_seed_and_snapshot_use_dataset_specific_rpc_contracts() -> None:

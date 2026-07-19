@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       snapshot_date:
-        description: Retrieval date in Asia/Taipei; blank means today
+        description: Profile observation date; blank resolves a coherent date from both markets
         required: false
         default: ""
         type: string
@@ -57,18 +57,15 @@ jobs:
             | tee security-snapshot-summary.json
 
       - name: Import unresolved current listing identity evidence
+        if: always()
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           API_HTTP_TIMEOUT_SECONDS: "30"
-          REQUESTED_SNAPSHOT_DATE: ${{ inputs.snapshot_date }}
           DRY_RUN: ${{ inputs.dry_run }}
         shell: bash
         run: |
           args=()
-          if [[ -n "$REQUESTED_SNAPSHOT_DATE" ]]; then
-            args+=(--snapshot-date "$REQUESTED_SNAPSHOT_DATE")
-          fi
           if [[ "${{ github.event_name }}" == "workflow_dispatch" && "$DRY_RUN" == "true" ]]; then
             args+=(--dry-run)
           fi

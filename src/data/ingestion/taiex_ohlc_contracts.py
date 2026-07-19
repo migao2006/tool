@@ -120,6 +120,8 @@ class NormalizedTaiexOhlcBatch:
         trade_dates = [row.trade_date for row in self.rows]
         if len(trade_dates) != len(set(trade_dates)):
             raise ValueError("TAIEX monthly OHLC batch contains duplicate trade dates")
+        if trade_dates != sorted(trade_dates):
+            raise ValueError("TAIEX monthly OHLC trade dates must be strictly ascending")
         if any(
             (trade_date.year, trade_date.month)
             != (self.requested_month.year, self.requested_month.month)

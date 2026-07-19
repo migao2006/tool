@@ -256,6 +256,11 @@ def normalize_taiex_monthly_ohlc(payload: ProviderPayload) -> NormalizedTaiexOhl
             "TAIEX_OHLC_DUPLICATE_TRADE_DATE",
             "TAIEX response contains duplicate trade dates",
         )
+    if dates != sorted(dates):
+        raise _fail(
+            "TAIEX_OHLC_TRADE_DATES_NOT_ASCENDING",
+            "TAIEX response trade dates must be strictly ascending",
+        )
     return NormalizedTaiexOhlcBatch(
         requested_month=requested_month,
         response_date=response_date,

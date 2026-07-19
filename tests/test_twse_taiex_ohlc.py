@@ -148,6 +148,10 @@ def test_normalizer_rejects_non_official_source_url() -> None:
             "TAIEX_OHLC_DUPLICATE_TRADE_DATE",
         ),
         (
+            lambda body: body["data"].reverse(),
+            "TAIEX_OHLC_TRADE_DATES_NOT_ASCENDING",
+        ),
+        (
             lambda body: body["data"][0].__setitem__(1, "NaN"),
             "TAIEX_OHLC_VALUE_INVALID",
         ),

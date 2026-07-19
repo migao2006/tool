@@ -50,10 +50,15 @@ export function normalizePrediction(record, snapshotHorizon = CURRENT_HORIZON) {
   const horizon = normalizeHorizon(firstValue(record, ["horizon"], snapshotHorizon));
   if (horizon !== CURRENT_HORIZON) throw new RangeError("目前只接受 5 個交易日模型輸出。");
 
-  const dataQualityStatus = String(firstValue(record, ["data_quality_status", "dataQualityStatus"], "UNKNOWN")).toUpperCase();
+  const rawDataQualityStatus = firstValue(record, ["data_quality_status", "dataQualityStatus"]);
+  const dataQualityStatus = rawDataQualityStatus === null || rawDataQualityStatus === undefined
+    ? null
+    : String(rawDataQualityStatus).toUpperCase();
   const hardFail = Boolean(firstValue(record, ["data_quality_hard_fail", "hard_fail", "isHardFail"], false))
     || ["FAIL", "HARD_FAIL"].includes(dataQualityStatus);
-  const decisionValue = String(firstValue(record, ["decision"], "NO_TRADE")).toUpperCase();
+  const rawDecision = firstValue(record, ["decision"]);
+  const decisionValue = rawDecision === null || rawDecision === undefined ? "" : String(rawDecision).toUpperCase();
+  const rawAssetType = firstValue(record, ["asset_type", "assetType"]);
 
   return Object.freeze({
     as_of_date: nullableString(firstValue(record, ["as_of_date", "asOfDate"])),
@@ -62,7 +67,7 @@ export function normalizePrediction(record, snapshotHorizon = CURRENT_HORIZON) {
     name: nullableString(firstValue(record, ["name", "security_name"])),
     market: normalizeMarket(firstValue(record, ["market"])),
     industry: nullableString(firstValue(record, ["industry"])),
-    asset_type: String(firstValue(record, ["asset_type", "assetType"], "STOCK")).toUpperCase(),
+    asset_type: rawAssetType === null || rawAssetType === undefined ? null : String(rawAssetType).toUpperCase(),
     liquidity_bucket: nullableString(firstValue(record, ["liquidity_bucket", "liquidityBucket"])),
     horizon,
     rank_score: nullableNumber(firstValue(record, ["rank_score", "Rank Score", "rankScore"])),

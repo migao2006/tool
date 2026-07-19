@@ -11,17 +11,17 @@ import {
   applyUiState,
   resolveHomeDataState,
   resolveSnapshotUiState,
-} from "./src/core/ui-state.js?v=home-data-1";
+} from "./src/core/ui-state.js?v=research-ui-1";
 import { renderHomeDataStatus } from "./src/components/home-data-status.js?v=home-data-1";
 import { loadHomeDataStatus } from "./src/data/home-data-status-api.js?v=home-data-1";
-import { loadPredictionSnapshot } from "./src/data/prediction-api.js?v=api-6";
-import { createUnavailableSnapshot } from "./src/data/prediction-contract.js?v=api-4";
+import { loadPredictionSnapshot } from "./src/data/prediction-api.js?v=research-ui-1";
+import { createUnavailableSnapshot } from "./src/data/prediction-contract.js?v=research-ui-1";
 import { setWatchlistMembership } from "./src/data/watchlist-api.js?v=api-5";
 import { isSupabaseSdkLoadError } from "./src/data/supabase-sdk-loader.js?v=auth-1";
-import { createCandidatesPage, renderCandidatesPage } from "./src/pages/candidates-page.js?v=ui-3";
-import { createOverviewPage, renderOverviewPage } from "./src/pages/overview-page.js?v=ui-4";
-import { createStockDetailPage, renderStockDetailPage } from "./src/pages/stock-detail-page.js?v=ui-3";
-import { createWatchlistPage, renderWatchlistPage } from "./src/pages/watchlist-page.js?v=ui-3";
+import { createCandidatesPage, renderCandidatesPage } from "./src/pages/candidates-page.js?v=research-ui-1";
+import { createOverviewPage, renderOverviewPage } from "./src/pages/overview-page.js?v=research-ui-1";
+import { createStockDetailPage, renderStockDetailPage } from "./src/pages/stock-detail-page.js?v=research-ui-1";
+import { createWatchlistPage, renderWatchlistPage } from "./src/pages/watchlist-page.js?v=research-ui-1";
 
 const appRoot = document.querySelector("#app-content");
 const navigationRoot = document.querySelector("#navigation-root");

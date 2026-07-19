@@ -99,6 +99,8 @@ body[data-system-status="FAIL"] .top-status {
   color: var(--red);
 }
 
+body[data-ui-state="research_only"] [data-traceability-status] { display: none; }
+
 body[data-ui-state="loading"] [data-candidate-list],
 body[data-ui-state="loading"] [data-overview-candidates],
 body[data-ui-state="loading"] [data-watchlist-results] {

@@ -1,7 +1,13 @@
 const STOCK_MARKETS = new Set(["TWSE", "TPEX"]);
 
 export function isOrdinaryStock(record) {
-  return STOCK_MARKETS.has(record?.market) && record.asset_type !== "ETF";
+  return Boolean(record?.symbol) && STOCK_MARKETS.has(record.market) && record.asset_type !== "ETF";
+}
+
+export function canDisplaySnapshotRecords(snapshot) {
+  return ["PASS", "RESEARCH_ONLY"].includes(snapshot?.systemStatus)
+    && !snapshot.stale
+    && !snapshot.dataQualityHardFail;
 }
 
 export function compareRankOnly(left, right) {
@@ -27,4 +33,15 @@ export function eligibleStockRecords(snapshot) {
 export function formalCandidateRecords(snapshot) {
   if (snapshot?.systemStatus !== "PASS" || snapshot.stale || snapshot.dataQualityHardFail) return [];
   return eligibleStockRecords(snapshot).filter((record) => record.decision === "CANDIDATE");
+}
+
+export function displayableStockRecords(snapshot) {
+  return canDisplaySnapshotRecords(snapshot) ? eligibleStockRecords(snapshot) : [];
+}
+
+export function overviewStockRecords(snapshot) {
+  if (snapshot?.systemStatus === "PASS") return formalCandidateRecords(snapshot);
+  const records = displayableStockRecords(snapshot);
+  const researchCandidates = records.filter((record) => record.decision === "CANDIDATE");
+  return researchCandidates.length ? researchCandidates : records;
 }

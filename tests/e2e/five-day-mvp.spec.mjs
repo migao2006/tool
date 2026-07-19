@@ -126,6 +126,44 @@ test("API 契約錯誤時顯示 FAIL，且不把 fixture 當成候選", async ({
   await expect(page.locator("[data-candidate-list]")).toContainText("無正式候選股");
 });
 
+test("研究快照顯示已完成欄位，缺值維持破折號", async ({ page }) => {
+  await page.goto("/?api_mode=research", { waitUntil: "domcontentloaded" });
+
+  await expect(page.locator("body")).toHaveAttribute("data-ui-state", "research_only");
+  const banner = page.locator('[data-page="home"] .system-banner').first();
+  await expect(banner).toHaveClass(/is-badge-only/u);
+  await expect(banner.locator("[data-system-status-label]")).toHaveText("RESEARCH_ONLY");
+  await expect(banner.locator("[data-status-copy]")).toBeHidden();
+
+  await expect(page.locator('[data-overview-field="market_p_up"]')).toHaveText("62.0%");
+  await expect(page.locator('[data-overview-field="market_p_neutral"]')).toHaveText("—");
+  await expect(page.locator("[data-market-state]")).toHaveText("部分更新");
+  await expect(page.locator('[data-overview-count="CANDIDATE"]')).toHaveText("—");
+  await expect(page.locator('[data-overview-candidates] .candidate-card[data-symbol="RESEARCH1"]')).toBeVisible();
+
+  const navigation = page.getByRole("navigation", { name: "主要導覽" });
+  await expect(navigation.getByRole("button")).toHaveCount(3);
+  await navigation.getByRole("button", { name: "5 日候選" }).click();
+  const researchCard = page.locator('[data-candidate-list] .candidate-card[data-symbol="RESEARCH1"]');
+  await expect(researchCard).toBeVisible();
+  await expect(researchCard).toContainText("94.0");
+  await expect(researchCard.locator(".decision-badge")).toHaveText("—");
+
+  await researchCard.getByRole("button", { name: "查看決策詳情" }).click();
+  await expect(page.getByRole("heading", { name: "RESEARCH1" })).toBeVisible();
+  await expect(page.locator('[data-stock-field="decision"]')).toHaveText("—");
+  await expect(page.locator('[data-stock-field="rank_score"]')).toHaveText("94.0");
+  await expect(page.locator('[data-stock-field="net_q10"]')).toHaveText("—");
+  await expect(page.locator('[data-stock-field="net_q50"]')).toHaveText("1.2%");
+
+  await page.evaluate(() => { document.body.dataset.authState = "authenticated"; });
+  await navigation.getByRole("button", { name: "自選" }).click();
+  const watchCard = page.locator('[data-watchlist-results] .watchlist-card');
+  await expect(watchCard).toBeVisible();
+  await expect(watchCard).toContainText("RESEARCH1");
+  await expect(watchCard.locator(".decision-badge")).toHaveText("—");
+});
+
 test("首頁只把資料庫真實摘要顯示為 RAW／RESEARCH_ONLY", async ({ page }) => {
   await page.goto("/?api_mode=contract-error", { waitUntil: "domcontentloaded" });
 

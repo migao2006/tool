@@ -131,6 +131,52 @@ def build_snapshot() -> dict[str, object]:
     ).to_dict()
 
 
+def build_research_snapshot() -> dict[str, object]:
+    payload = build_snapshot()
+    prediction = dict(payload["predictions"][0])
+    prediction["symbol"] = "RESEARCH1"
+    prediction["rank_score"] = 94.0
+    prediction["global_rank"] = 2
+    prediction["global_rank_percentile"] = 0.98
+    prediction["calibrated_p_up"] = 0.62
+    prediction["calibrated_p_neutral"] = 0.26
+    prediction["calibrated_p_down"] = 0.12
+    prediction["net_q50"] = 0.012
+    prediction["net_q90"] = 0.04
+    prediction["reason_codes"] = ["RESEARCH_OUTPUT"]
+    for missing_field in (
+        "name",
+        "industry",
+        "asset_type",
+        "decision",
+        "data_quality_status",
+        "gross_q10",
+        "net_q10",
+        "liquidity_bucket",
+        "max_single_position",
+        "max_industry_position",
+        "cost_profile",
+        "previous_global_rank",
+        "previous_decision",
+        "gates",
+    ):
+        prediction.pop(missing_field, None)
+
+    payload["system_status"] = "RESEARCH_ONLY"
+    payload["predictions"] = [prediction]
+    payload["watchlist"] = [dict(prediction)]
+    payload["excluded"] = []
+    payload["reason_codes"] = ["RESEARCH_OUTPUT"]
+    payload["market"] = {
+        "as_of_date": payload["as_of_date"],
+        "decision_at": payload["decision_at"],
+        "horizon": 5,
+        "market_direction": {"p_up": 0.62},
+        "market_regime": "SIDEWAYS",
+    }
+    return payload
+
+
 class FixtureHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args: object, **kwargs: object) -> None:
         super().__init__(*args, directory=str(ROOT), **kwargs)
@@ -152,6 +198,10 @@ class FixtureHandler(SimpleHTTPRequestHandler):
             payload = build_snapshot()
             payload["predictions"][0]["global_rank"] = 0
             body = json.dumps(payload, ensure_ascii=False, allow_nan=False).encode()
+            self._send(200, body, "application/json; charset=utf-8")
+            return
+        if parsed.path == "/api-research/prediction-snapshot":
+            body = json.dumps(build_research_snapshot(), ensure_ascii=False, allow_nan=False).encode()
             self._send(200, body, "application/json; charset=utf-8")
             return
         if parsed.path == "/api-conflict/prediction-snapshot":
@@ -185,6 +235,7 @@ try {
                 "invalid-json": "api-invalid",
                 "contract-error": "api-contract-error",
                 "conflict": "api-conflict",
+                "research": "api-research",
             }.get(mode, "api")
             html = (ROOT / "index.html").read_text(encoding="utf-8").replace(
                 '<html lang="zh-Hant">',

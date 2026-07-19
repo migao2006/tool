@@ -14,7 +14,8 @@ export function createStockDetailPage({ horizon }) {
       <p class="inline-feedback" data-watchlist-feedback role="status" aria-live="polite"></p>
 
       <section class="decision-hero" aria-label="決策摘要">
-        <div><span>決策 <small>decision</small></span><strong data-stock-field="decision">未評估</strong></div>
+        <div><span>資料狀態</span><span class="system-badge" data-system-status-label>RESEARCH_ONLY</span></div>
+        <div><span>決策 <small>decision</small></span><strong data-stock-field="decision">—</strong></div>
         <div><span>主要原因 <small>reason_codes</small></span><code data-stock-field="reason_codes">NO_STOCK_SELECTED</code></div>
         <dl><div><dt>資料日期 <small>as_of_date</small></dt><dd data-stock-field="as_of_date">—</dd></div><div><dt>決策時間 <small>decision_at</small></dt><dd data-stock-field="decision_at">—</dd></div><div><dt>期間 <small>horizon</small></dt><dd data-stock-field="horizon">${horizon}</dd></div></dl>
       </section>
@@ -73,14 +74,18 @@ export function renderStockDetailPage(prediction, { isWatchlisted = false } = {}
   }
   const feedback = root.querySelector("[data-watchlist-feedback]");
   if (feedback) feedback.textContent = "";
-  setText(root, "[data-stock-gate-state]", prediction.gates?.length ? "已評估" : "未提供決策稽核");
+  setText(root, "[data-stock-gate-state]", prediction.gates?.length ? "已評估" : "—");
   const directFields = ["decision", "as_of_date", "decision_at", "horizon", "calibration_version", "calibration_status", "cost_profile"];
-  directFields.forEach((field) => setText(root, `[data-stock-field="${field}"]`, prediction[field]));
+  directFields.forEach((field) => {
+    setText(root, `[data-stock-field="${field}"]`, prediction[field]);
+  });
   setText(root, '[data-stock-field="reason_codes"]', prediction.reason_codes?.join(" · ") || "—");
   setText(root, '[data-stock-field="rank_score"]', formatRankScore(prediction.rank_score));
   setText(root, '[data-stock-field="global_rank"]', formatRank(prediction.global_rank));
   setText(root, '[data-stock-field="industry_rank"]', formatRank(prediction.industry_rank));
-  PERCENT_FIELDS.forEach((field) => setText(root, `[data-stock-field="${field}"]`, formatPercent(prediction[field])));
+  PERCENT_FIELDS.forEach((field) => {
+    setText(root, `[data-stock-field="${field}"]`, formatPercent(prediction[field]));
+  });
   setText(root, '[data-stock-field="adv20"]', formatCurrency(prediction.adv20));
   setText(root, '[data-stock-field="max_order_notional_ntd"]', formatCurrency(prediction.max_order_notional_ntd));
   renderDecisionGates(prediction.gates);
@@ -95,5 +100,7 @@ export function renderStockDetailPage(prediction, { isWatchlisted = false } = {}
     data_quality_status: prediction.data_quality_status,
     reason_codes: prediction.reason_codes?.join(" · "),
   };
-  Object.entries(auditValues).forEach(([field, value]) => setText(root, `[data-audit-field="${field}"]`, value));
+  Object.entries(auditValues).forEach(([field, value]) => {
+    setText(root, `[data-audit-field="${field}"]`, value);
+  });
 }

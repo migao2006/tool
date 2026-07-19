@@ -20,6 +20,7 @@ Python：
 
 其他：
 
+- Docker Desktop（含 Docker Engine 與 Docker Compose）
 - SQLFluff
 - actionlint
 - Gitleaks
@@ -32,7 +33,20 @@ Python：
 
 不得加入功能重疊工具，除非有明確必要。
 
-目前 Supabase CLI 為 `2.109.1`。Biome 已全域安裝，但專案尚無 `biome.json`；pre-commit 也尚無專案設定檔。這兩者不得描述為已完整接入專案。
+2026-07-19 已實際確認 Docker Engine `29.6.1`、Docker Compose
+`5.3.0`、Docker Desktop 與 Supabase 本機容器可正常運作；目前 Supabase
+CLI 為 `2.109.1`。Biome 已全域安裝，但專案尚無 `biome.json`；
+pre-commit 也尚無專案設定檔。這兩者不得描述為已完整接入專案。
+
+### Docker 使用原則
+
+- 涉及 Supabase schema、migration 或 rollback 時，優先使用 Docker Desktop
+  啟動的 Supabase Local 完成隔離驗證，再操作 Staging。
+- 開始前使用 `docker info` 確認 CLI 與 Engine 均可連線；只有安裝 CLI
+  但 Engine 未啟動，不得標示 Docker 可用。
+- 本機服務已啟動時應共用既有容器，不得為每個測試重複建立環境。
+- Docker 驗證不能取代 Staging、migration history、RLS、rollback 與
+  Production 發布閘門。
 
 ## 二、CI 已強制的驗證
 
@@ -109,11 +123,12 @@ $env:NODE_OPTIONS = "--use-system-ca"
 
 2026-07-19 的具體狀態：
 
-- 本機共有 25 個 migration 檔案；本機完整 reset 與 lint 已通過。
-- 遠端 Production history 共 13 筆，截止 `20260718191828`。
-- 本機另有 11 筆較新 migration 尚未套用。
-- 遠端 history 沒有 baseline `20260717180000`，且本機 CLI 尚未連結遠端 project。
-- 在 Staging、rollback 與 history 對齊完成前，禁止 Production `db push`。
+- 本機共有 28 個 migration 檔案；Docker Supabase 完整 reset 與 lint 已通過。
+- Staging history 已對齊 28 筆，截止
+  `20260719090300_allow_late_retrieval_for_current_security_snapshot.sql`。
+- Production history 已對齊 27 筆，截止
+  `20260719081157_defer_unavailable_supplemental_datasets.sql`。
+- `20260719090300` 尚未套用至 Production；必須先通過 GitHub 發布閘門。
 
 ## 六、發布閘門
 

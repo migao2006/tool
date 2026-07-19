@@ -19,6 +19,9 @@ from src.data.ingestion.historical_daily_bar_archive_service import (
 from src.data.ingestion.historical_daily_bar_normalizer import (
     normalize_historical_daily_bars,
 )
+from src.data.ingestion.historical_supplemental_normalizer import (
+    normalize_historical_supplemental,
+)
 from src.data.object_storage.r2_client import ObjectMetadata
 from src.data.providers.contracts import ProviderPayload
 
@@ -61,6 +64,47 @@ def _payload(
         retrieved_at=retrieved_at,
         payload_sha256=sha256(encoded).hexdigest(),
         payload=body,
+    )
+
+
+def _fugle_adjusted_payload() -> ProviderPayload:
+    body = {
+        "symbol": "2330",
+        "timeframe": "D",
+        "data": [
+            {
+                "date": "2020-01-02",
+                "open": 33.25,
+                "high": 33.9,
+                "low": 33.25,
+                "close": 33.9,
+                "volume": 34_000_000,
+            }
+        ],
+    }
+    encoded = json.dumps(
+        body,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    return ProviderPayload(
+        provider="FUGLE",
+        dataset="adjusted_bars",
+        source_version="marketdata.v1.0",
+        source_url=(
+            "https://api.fugle.tw/marketdata/v1.0/stock/"
+            "historical/candles/2330?adjusted=true"
+        ),
+        retrieved_at=datetime(2026, 7, 19, tzinfo=timezone.utc),
+        payload_sha256=sha256(encoded).hexdigest(),
+        payload=body,
+        request_metadata={
+            "symbol": "2330",
+            "adjusted": "true",
+            "logical_dataset": "adjusted_bars",
+            "remote_dataset": "historical_candles",
+        },
     )
 
 
@@ -208,6 +252,37 @@ def test_upload_and_head_verification_save_compact_manifest() -> None:
     assert manifest["backfill_task_id"] == 41
     assert manifest["system_status"] == "RESEARCH_ONLY"
     assert "source_row" not in manifest
+
+
+def test_fugle_adjusted_archive_records_provider_without_changing_daily_keys() -> None:
+    store = MemoryArchiveStore()
+    writer = RecordingManifestWriter()
+    payload = _fugle_adjusted_payload()
+    batch = normalize_historical_supplemental(payload)
+
+    result = _service(store, writer).archive(
+        rows=batch.landing_rows,
+        quarantine_rows=batch.quarantine_rows,
+        payload=payload,
+        scheduled_market="TWSE",
+        asset_type="COMMON_STOCK",
+        symbol="2330",
+        start_date=START_DATE,
+        end_date=END_DATE,
+        backfill_task_id=None,
+    )
+
+    assert result.object_key.startswith("raw/v1/provider=fugle/dataset=adjusted_bars/")
+    assert store.objects[result.object_key].metadata["provider-code"] == "FUGLE"
+    manifest_rows = writer.calls[0]["rows"]
+    assert isinstance(manifest_rows, list)
+    manifest = manifest_rows[0]
+    assert isinstance(manifest, dict)
+    assert manifest["provider_code"] == "FUGLE"
+    assert manifest["source_dataset"] == "adjusted_bars"
+    assert manifest["usage_scope"] == "RAW_LANDING_ONLY"
+    daily_key = _seed(MemoryArchiveStore()).object_key
+    assert daily_key.startswith("raw/v1/provider=finmind/dataset=daily_bars/")
 
 
 def test_existing_object_is_downloaded_and_hash_verified_before_manifest() -> None:

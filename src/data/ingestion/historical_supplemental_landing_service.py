@@ -1,4 +1,4 @@
-"""Fetch and archive one FinMind supplemental dataset for one TWSE symbol."""
+"""Fetch and archive one supplemental dataset for one TWSE symbol."""
 
 from __future__ import annotations
 
@@ -54,7 +54,7 @@ def _latest_trade_date(
     if not rows:
         raise IngestionError(
             "HISTORICAL_SUPPLEMENTAL_EMPTY_RESPONSE",
-            f"FinMind returned no supplemental rows for {symbol}",
+            f"The provider returned no supplemental rows for {symbol}",
         )
     latest: date | None = None
     for row in rows:
@@ -65,19 +65,19 @@ def _latest_trade_date(
         if row_symbol != symbol:
             raise IngestionError(
                 "HISTORICAL_SUPPLEMENTAL_SYMBOL_MISMATCH",
-                "FinMind returned a row for another symbol",
+                "The provider returned a row for another symbol",
             )
         trade_date = date.fromisoformat(raw_trade_date)
         if not start_date <= trade_date <= end_date:
             raise IngestionError(
                 "HISTORICAL_SUPPLEMENTAL_DATE_OUTSIDE_REQUEST",
-                "FinMind returned a row outside the requested range",
+                "The provider returned a row outside the requested range",
             )
         latest = max(latest or trade_date, trade_date)
     if latest is None:
         raise IngestionError(
             "HISTORICAL_SUPPLEMENTAL_NO_PARSED_ROWS",
-            f"FinMind returned no valid supplemental rows for {symbol}",
+            f"The provider returned no valid supplemental rows for {symbol}",
         )
     return latest.isoformat()
 

@@ -1,4 +1,4 @@
-"""Preserve FinMind supplemental history as unresolved research-only rows."""
+"""Preserve provider supplemental history as unresolved research-only rows."""
 
 from __future__ import annotations
 
@@ -148,6 +148,12 @@ def _parse_row(
 def normalize_historical_supplemental(
     payload: ProviderPayload,
 ) -> NormalizedHistoricalSupplementalBatch:
+    if payload.provider == "FUGLE":
+        from .historical_fugle_adjusted_normalizer import (
+            normalize_fugle_adjusted_bars,
+        )
+
+        return normalize_fugle_adjusted_bars(payload)
     if payload.provider != "FINMIND" or payload.dataset not in SUPPLEMENTAL_DATASETS:
         raise IngestionError(
             "HISTORICAL_SUPPLEMENTAL_SOURCE_INVALID",

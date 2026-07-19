@@ -37,6 +37,7 @@ HISTORICAL_ARCHIVE_PROVIDER_DATASETS = {
         }
     ),
     "TWSE": frozenset({TAIEX_MONTHLY_OHLC_DATASET}),
+    "FUGLE": frozenset({"adjusted_bars"}),
 }
 
 _SCHEDULED_MARKETS = frozenset({"TWSE", "TPEX"})
@@ -74,7 +75,10 @@ class HistoricalArchiveRequest:
             self.source_dataset,
             field="source_dataset",
         )
-        provider_code = self.provider_code.strip().upper()
+        provider_code = require_path_segment(
+            self.provider_code,
+            field="provider_code",
+        ).upper()
         digest = self.source_payload_sha256.strip().lower()
         if scheduled_market not in _SCHEDULED_MARKETS:
             raise ValueError("scheduled_market must be TWSE or TPEX")

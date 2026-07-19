@@ -34,10 +34,10 @@ def test_backfill_workflow_isolates_three_finmind_credentials() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
     worker = WORKER.read_text(encoding="utf-8")
 
-    assert "default: 20" in workflow
+    assert "default: 100" in workflow
     assert (
         workflow.count(
-            "max_tasks: ${{ fromJSON(github.event.inputs.max_tasks || '20') }}"
+            "max_tasks: ${{ fromJSON(github.event.inputs.max_tasks || '100') }}"
         )
         == 3
     )

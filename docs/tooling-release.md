@@ -1,6 +1,8 @@
 # 工具、Git 與發布規範
 
-## 一、工具
+> 2026-07-19 已依本機、專案設定與 GitHub Actions 核對。工具存在不等於 CI 已強制執行；發布與 migration 現況見 [`current-status.md`](current-status.md)。
+
+## 一、可用工具
 
 Python：
 
@@ -30,7 +32,21 @@ Python：
 
 不得加入功能重疊工具，除非有明確必要。
 
-## 二、Windows 憑證
+目前 Supabase CLI 為 `2.109.1`。Biome 已全域安裝，但專案尚無 `biome.json`；pre-commit 也尚無專案設定檔。這兩者不得描述為已完整接入專案。
+
+## 二、CI 已強制的驗證
+
+`Project tests` workflow 目前強制：
+
+- Python：`pytest`，pytest-xdist 最多 4 process，使用 `loadfile` 分配。
+- 前端：Playwright 2 workers，共用一次本機 web server。
+- PR：依受影響檔案選擇 Python／前端範圍。
+- 非 PR 與每週排程：完整 Python 與前端回歸。
+- 安裝：uv 與 pnpm lockfile／cache。
+
+Ruff、basedpyright、Biome、actionlint、Gitleaks、SQLFluff、pip-audit 與 pre-commit 是可用或發布前工具，但目前沒有全部納入 `Project tests` required check。只有實際執行過的項目才能在交付報告中標示通過。
+
+## 三、Windows 憑證
 
 uv 遇到憑證問題時使用：
 
@@ -46,7 +62,7 @@ $env:NODE_OPTIONS = "--use-system-ca"
 
 禁止關閉 TLS 或設定 `strict-ssl=false`。
 
-## 三、Git
+## 四、Git
 
 修改前檢查 Git 差異，提交前檢查：
 
@@ -58,9 +74,9 @@ $env:NODE_OPTIONS = "--use-system-ca"
 
 每次提交只包含本次任務相關內容。
 
-所有修改必須使用 Git 留下紀錄並推送至 GitHub。
+所有修改必須使用 Git 留下紀錄並推送至 GitHub。GitHub push／PR／merge 是唯一人工發布路徑；Vercel 的 GitHub 整合自動觸發可以接受，但不得直接以 Vercel CLI 執行 Production deploy 或 promote。
 
-## 四、Migration
+## 五、Migration
 
 以下視為高風險：
 
@@ -91,7 +107,15 @@ $env:NODE_OPTIONS = "--use-system-ca"
 - 正式推送前，migration 差異必須只包含經驗證、確實尚未套用的
   forward-only migration。
 
-## 五、發布閘門
+2026-07-19 的具體狀態：
+
+- 本機共有 25 個 migration 檔案；本機完整 reset 與 lint 已通過。
+- 遠端 Production history 共 13 筆，截止 `20260718191828`。
+- 本機另有 11 筆較新 migration 尚未套用。
+- 遠端 history 沒有 baseline `20260717180000`，且本機 CLI 尚未連結遠端 project。
+- 在 Staging、rollback 與 history 對齊完成前，禁止 Production `db push`。
+
+## 六、發布閘門
 
 部署 Production 前必須確認：
 
@@ -106,12 +130,12 @@ $env:NODE_OPTIONS = "--use-system-ca"
 
 無法完成必要驗證時，只能建立 PR 或 Preview，不得宣告正式發布完成。
 
-## 六、歷史回補發布閘門
+## 七、歷史回補發布閘門
 
 修改 FinMind、R2、Supabase queue／manifest 或歷史回補 workflow 時，合併前至少確認：
 
-- reusable workflow 的三個 credential slot 保持隔離，不使用 `secrets: inherit`。
-- 只有一個 worker 建立共用 task queue，只有一個 finalizer 更新首頁摘要。
+- reusable workflow 的 credential slot 保持隔離，不使用 `secrets: inherit`。
+- 日線流程只有一個 worker 建立共用 task queue，且只有一個 finalizer 更新首頁摘要；其他流程必須依自己的冪等契約驗證，不可套用錯誤的日線規則。
 - Ruff、basedpyright、pytest、actionlint 與 Gitleaks 通過。
 - Supabase migration 已 dry run，函式權限仍只授予 `service_role`。
 - 測試執行中 primary、secondary、tertiary 與 finalizer 全部成功。
@@ -120,3 +144,5 @@ $env:NODE_OPTIONS = "--use-system-ca"
 
 驗證失敗時可以保留已完成的 immutable R2 object 與 manifest，但必須修復 workflow 後重新執行；
 不得刪除成功資料、竄改統計或把部分成功宣稱為完整回補。
+
+TAIEX 歷史基準、補充資料、歷史事件證據與上市 feature dataset 是 dormant／feature-gated workflow。合併程式與正式啟用是兩個不同發布階段；未完成 migration 及隔離環境驗證前不得啟用。

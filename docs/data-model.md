@@ -1,5 +1,7 @@
 # 資料與模型規範
 
+> 2026-07-19 現況仍為 `RESEARCH_ONLY`。本規範同時列出正式目標與目前缺口；不得把研究管線已實作解讀為正式資料集已產生。詳見 [`current-status.md`](current-status.md)。
+
 ## 一、時間正確性
 
 所有特徵必須滿足：
@@ -62,6 +64,21 @@ available_at <= decision_at
 - 原始資料的取得時間不得回改成歷史日期。若資料在決策時間後才首次取得，該列只能維持 `RESEARCH_ONLY`。
 - 就緒度分成兩層：`canonicalization_ready` 只檢查建構前的 PIT 證據交集，不得要求先存在 canonical 成品；`dataset_build_ready` 另檢查建構後是否真的產生 model-eligible canonical rows。這可避免「必須先有成品才允許建構成品」的循環。
 - 即使兩層資料閘門全部通過，模型仍須完成 walk-forward、locked holdout 與成本後驗收，才可能標記為 `PASS`。
+- 掛牌身分必須使用穩定的 `listing_period_id`，每筆來源證據另以 `listing_evidence_id` 追蹤。VERIFIED 證據必須同時核對市場、資產類型、股票代號及 ISIN。
+- `OFFICIAL_PUBLICATION_AT` 可使用實際發布時間；`VERSIONED_SNAPSHOT` 只能從 `first_observed_at` 起使用；`FIRST_OBSERVED_AT_RETRIEVAL` 一律維持研究用途。
+- Archive integrity 與 dataset readiness 必須使用同一 manifest snapshot hash；該 hash 必須涵蓋來源、期間、使用範圍、狀態、reason codes 及所有會改變資料語意的欄位。
+- 就緒判斷必須驗證 archive symbol、掛牌身分、交易日曆、交易狀態、公司行動與 canonical row 的實際交集，不得只比較彼此無關的總筆數。交集 coverage 尚未持久化前狀態固定為 BLOCKED。
+
+目前上市研究 feature schema 固定為 17 個價量特徵，schema hash 為 `8e256243dbe0018a7a96a637b989e2338dcf06a8f2e9a9d42faf888c7f54cd53`。特徵包含 1／2／3／5／10／20／60 日報酬、隔夜跳空、日內報酬、ATR14、RV20、下行波動 20、最大回撤 20、ADV20、週轉率均值 20、量能異常 20 與 Amihud20。
+
+這個 feature／research runner 仍有下列限制：
+
+- 身分映射使用目前 security master，存在生存者偏誤，不能形成正式歷史股票池。
+- 研究組裝器目前從個股日線推導可用交易日，尚未綁定完整、經驗證的交易所日曆。
+- 正式 `label_factory` 尚未接入；研究列保留 `FORMAL_LABEL_FACTORY_NOT_USED`。
+- 個股路徑是 t+1 open 到第 5 個持有交易日 close，現有 TAIEX close-only 基準是 t close 到 exit close，路徑尚未對齊。
+- 部分 dataset／benchmark provenance 仍由 caller 傳入，尚未從 Parquet metadata、R2 hash 與 manifest snapshot 強制推導。
+- 正式 backtest、daily inference、真實 walk-forward 與 locked holdout 均未執行。
 
 ## 四、決策順序
 
@@ -123,22 +140,3 @@ available_at <= decision_at
 - 停牌及公司行動
 - 容量限制
 - Staggered cohorts
-
-## 歷史資料正式升級閘門
-
-- R2 Parquet 仍是不可變的原始封存層；完整性通過不等於可供模型訓練。
-- 掛牌身分必須使用穩定的 `listing_period_id`，每筆來源證據另以
-  `listing_evidence_id` 追蹤。VERIFIED 證據必須同時核對市場、資產類型、
-  股票代號及 ISIN。
-- `OFFICIAL_PUBLICATION_AT` 可使用實際發布時間；`VERSIONED_SNAPSHOT` 只能
-  從 `first_observed_at` 起使用；`FIRST_OBSERVED_AT_RETRIEVAL` 一律維持研究用途。
-- 特徵、security master、交易日曆與公司行動證據均須保存
-  `available_at`、`first_observed_at`、可用時間依據、修訂 hash 與使用範圍。
-- Archive integrity 與 dataset readiness 必須使用完全相同的 manifest
-  snapshot hash；LIMITED_SAMPLE 或稽核後發生變動時一律 FAIL。
-- Manifest snapshot hash 必須涵蓋所有會改變資料語意的欄位，包括來源、期間、
-  使用範圍、狀態與 reason codes，不得只雜湊 object key、byte size 或 row count。
-- 就緒判斷必須驗證 archive symbol、掛牌身分、交易日曆、交易狀態、公司行動
-  與 canonical row 的實際交集，不得只比較彼此無關的總筆數。
-- 在交集覆蓋 persistence 尚未完成前，就緒狀態固定為 BLOCKED，系統最多只能
-  顯示 `RESEARCH_ONLY`。

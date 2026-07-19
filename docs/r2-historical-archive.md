@@ -1,8 +1,10 @@
 # R2 歷史行情封存
 
+> 2026-07-19 核對：Production R2 manifest 目前只有 `daily_bars`；其他 dataset 只有程式支援，尚未執行對應 workflow。最新數量見 [`current-status.md`](current-status.md)。
+
 歷史日線 R2 封存只由 GitHub Actions 排程 worker 執行，不是瀏覽器、Vercel runtime 或公開 API 的功能。輸出維持 `RESEARCH_ONLY`，不得直接進入正式推薦。
 
-## 執行與憑證隔離
+## 日線流程與憑證隔離
 
 - 排程以三個獨立 job 執行，每個 job 只取得自己的 FinMind token：`FINMIND_TOKEN`、`FINMIND_TOKEN_SECONDARY` 或 `FINMIND_TOKEN_TERTIARY`。
 - 只有 primary job 設定 `HISTORICAL_BACKFILL_SEED_COMMON_TASKS=true`；secondary 與 tertiary 不重複建立共用 queue，但三者仍同時下載及認領不同任務。
@@ -11,6 +13,13 @@
 - `R2_ACCESS_KEY_ID`、`R2_SECRET_ACCESS_KEY`、FinMind token 及 `SUPABASE_SERVICE_ROLE_KEY` 只存於 GitHub Actions secrets。不得寫入 `.env.example` 的值、程式、artifact、log、commit、PR 或 Issue。
 - R2 worker credential 只授予該 private archive bucket 的 Object Read & Write；bucket 管理、CORS 或 lifecycle 使用另一組 admin credential，且不得注入 worker。
 - `R2_ACCOUNT_ID` 與 `R2_BUCKET_NAME` 可由 GitHub repository variables 傳入；它們不是存取憑證。worker 仍須同時取得完整的四項 R2 設定才會啟動。
+
+以上 primary seed、三個 worker 與單一 finalizer 規則只適用 `backfill-historical-daily-bars.yml`。其他 dormant workflow 不得套用錯誤的日線完成條件：
+
+- Supplemental：三個 credential worker 各自執行冪等 seed／claim，沒有首頁 finalizer。
+- Historical benchmark：單一 job、單一 FinMind request。
+- Feature dataset：讀取並驗證 raw R2 object，輸出 30 天 GitHub artifact；目前不寫入 R2。
+- Historical evidence：三個隔離 credential worker，但受 verified identity gate 阻擋。
 
 ## 儲存邊界
 
@@ -41,6 +50,11 @@ Repository variables：
 ```text
 R2_ACCOUNT_ID
 R2_BUCKET_NAME
+HISTORICAL_BACKFILL_SEED_DELISTED_TASKS
+HISTORICAL_BENCHMARK_BACKFILL_ENABLED
+HISTORICAL_SUPPLEMENTAL_BACKFILL_ENABLED
+FINMIND_HISTORICAL_EVIDENCE_ENABLED
+TWSE_RESEARCH_FEATURE_DATASET_ENABLED
 ```
 
 Repository secrets：
@@ -78,9 +92,12 @@ HISTORICAL_BACKFILL_REFRESH_HOME_STATUS
 
 ## 資料集邊界
 
-R2 object 依 `source_dataset` 使用獨立 schema 與 key prefix：
+2026-07-19 已實際出現在 Production R2 manifest 的 `source_dataset`：
 
 - `daily_bars`
+
+程式已支援、但 feature gate 未開且尚未執行的 raw dataset：
+
 - `adjusted_bars`
 - `institutional_flows`
 - `margin_short`
@@ -88,3 +105,5 @@ R2 object 依 `source_dataset` 使用獨立 schema 與 key prefix：
 
 每一類資料都必須以自己的 schema version、metadata 與 row validator 驗證；不得把 benchmark
 或籌碼資料套用日線 schema。研究 feature artifact 不是原始封存，也不得覆寫任何 raw object。
+
+目前歷史 campaign 的固定結束日為 2026-07-17；完成這批回補後不會自動把 R2 日線向後延伸。平日 current import 只保存 Supabase 近期資料。若要長期累積完整 R2 歷史，仍須新增可稽核、冪等的 daily delta archive 流程。

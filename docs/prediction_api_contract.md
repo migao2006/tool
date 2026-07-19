@@ -1,5 +1,7 @@
 # Alpha Lens 5 日預測 API 契約
 
+> 2026-07-19 現況：前端 `predictionApiBaseUrl` 為空，prediction／watchlist backend 與自選股持久化尚未上線。此文件是目標契約，不是已可呼叫的正式 API；UI 必須維持 `RESEARCH_ONLY`，不得使用示例資料冒充回應。
+
 目前前端固定使用 `horizon=5`，契約版本為 `prediction-snapshot.v1`。後端應使用 `src.api.PredictionSnapshotOutput` 產生回應，避免自行拼接欄位。
 
 ## 公開設定
@@ -7,10 +9,10 @@
 在 `src/core/public-config.js` 設定：
 
 ```js
-predictionApiBaseUrl: "https://api.example.com/v1/",
+predictionApiBaseUrl: "",
 ```
 
-也可以在部署時於 `<html>` 設定 `data-prediction-api-base-url` 覆寫。正式環境必須使用 HTTPS。前端逾時預設為 12 秒，所有請求都帶有：
+空值代表正式 API 尚未發布；部署後只能填入本專案實際的 HTTPS API base URL，不得保留 `example.com`。也可以在部署時於 `<html>` 設定 `data-prediction-api-base-url` 覆寫。前端逾時預設為 12 秒，所有請求都帶有：
 
 ```http
 Accept: application/json
@@ -70,11 +72,15 @@ X-Alpha-Lens-Contract: prediction-snapshot.v1
 
 每個 gate 必須包含 `gate`、`passed`、`actual`、`threshold` 及 `reason_code`。
 
+正式 `PASS` 契約還必須保留每個 gate 的 `source_date`。目前 Python／前端 gate adapter 尚未完整實作此欄位，屬正式接入前必修缺口。
+
 只有完整且通過 `PredictionSnapshotOutput` 驗證的 `PASS` 回應，才會在前端顯示正式候選。缺欄、錯誤 horizon、非單調分位數、錯誤機率、未知契約版本或缺少稽核欄位都會轉為 `FAIL`，不會以舊資料補上。
 
 ## PUT watchlist/{symbol}
 
 用途：將股票加入目前使用者的自選股。
+
+此端點目前尚未部署；前端按鈕不得在後端缺席時模擬儲存成功。
 
 ```json
 {"symbol":"股票代號"}
@@ -85,6 +91,10 @@ X-Alpha-Lens-Contract: prediction-snapshot.v1
 ## DELETE watchlist/{symbol}
 
 用途：將股票移出目前使用者的自選股。必須使用相同的 Supabase JWT 驗證與資料擁有者限制。成功可回傳 JSON，或使用 `204 No Content`。
+
+## Horizon 拒絕契約
+
+後端收到 2、3 或 10 等未發布 horizon 時必須回傳 `UNSUPPORTED_HORIZON`，不得靜默改成 5。現有前端內部錯誤碼仍使用 `MODEL_NOT_RELEASED`；正式接入前需統一成 `UNSUPPORTED_HORIZON`，並補前後端 contract test。
 
 ## HTTP、CORS 與快取
 

@@ -1,5 +1,7 @@
 # 公司行動預告匯入
 
+> 2026-07-19 核對：Production 現有 398 筆只是首次擷取後的當前預告觀測，不是歷史公司行動 coverage。FinMind 歷史 evidence workflow 已實作但 gate 關閉，且受 verified identity 阻擋。
+
 這個階段只保存「首次擷取日起」的 TWSE 與 TPEx 除權息預告版本。它不是歷史公司行動回補，也不能讓模型通過正式驗收；系統狀態固定為 `RESEARCH_ONLY`。
 
 ## 資料範圍
@@ -21,7 +23,7 @@
 先做只讀驗證：
 
 ```powershell
-.venv\Scripts\python.exe -m scripts.import_corporate_actions --dry-run
+uv run python -m scripts.import_corporate_actions --dry-run
 ```
 
 正式寫入需要 `SUPABASE_URL` 與 `SUPABASE_SERVICE_ROLE_KEY`。明確指定的 `snapshot_date` 必須等於所有來源在台北時區的實際擷取日期，避免把現在資料回填到歷史日期。
@@ -34,3 +36,4 @@ GitHub Actions 的手動執行預設為 dry-run；排程只累積當前預告快
 - 付款日與股票交付日未知，不能用於正式資金結算回測。
 - `daily_bars.company_action_complete` 仍為 `false`。
 - 預告事件不會直接當成 realized label；還需事後結果核對與 latest-revision selector。
+- FinMind 歷史事件與停復牌 normalizer 的存在不代表已形成完整 `security_state_snapshots`；完整狀態還需要處置、變更交易方法、全額交割、分盤與未知欄位為 0 的證據。

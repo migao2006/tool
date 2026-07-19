@@ -1,5 +1,7 @@
 # 官方下市事件登錄
 
+> 2026-07-19 核對：Production 共保存 843 筆觀測（TWSE 264、TPEX 579），全部仍為 `UNRESOLVED / RESEARCH_ONLY`。數量只代表官方名冊觀測，不代表歷史身分已建立。
+
 這個匯入器只保存 TWSE 與 TPEx 官方公布的終止上市／上櫃事件，不會把舊代號直接連到今天的股票主檔。
 
 ## 資料來源
@@ -33,13 +35,13 @@ TPEx 端點不在 OpenAPI Swagger 內，因此匯入器會嚴格檢查 `stat`、
 只抓取並驗證：
 
 ```powershell
-python -m scripts.import_delisting_registry --dry-run
+uv run python -m scripts.import_delisting_registry --dry-run
 ```
 
 寫入 Supabase：
 
 ```powershell
-python -m scripts.import_delisting_registry
+uv run python -m scripts.import_delisting_registry
 ```
 
 正式寫入要求 `snapshot_date` 等於兩個來源在台北時區的實際擷取日期。GitHub workflow 的手動執行預設為 dry run，每週排程才會正式保存新觀測版本。

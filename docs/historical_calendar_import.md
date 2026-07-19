@@ -1,5 +1,7 @@
 # 歷史交易日曆匯入
 
+> 2026-07-19 核對：Production 舊 `trading_calendar` 有 2,077 筆 TWSE 日期（2018-01-02～2026-07-17），但開盤、收盤與 decision cutoff 全部為空；新 append-only observation migration 尚未上 Production。
+
 這個模組只匯入來源實際回傳的交易日，不依星期幾推算交易或休市，也不猜測開收盤時間與資料截止時間。歷史上經交易所確認的週六交易日會保留。
 
 ## 目前契約
@@ -16,12 +18,14 @@ FinMind 只提供交易日期，因此 `opens_at`、`closes_at` 與
 目前資料表沒有逐列 `source_version`／payload hash，因此完整版本鏈仍待後續 migration；
 匯入摘要會先保留來源 URI、版本與 SHA-256，系統不會因此升級為正式預測。
 
+`20260719053500_trading_calendar_observations.sql` 目前要求任何 `is_trading_day=true` 列都具有完整開盤、收盤與 cutoff，因而也會阻擋只有日期的 `UNRESOLVED / SCHEDULING_HINT` FinMind 證據。正式套用前必須先在新 migration 修正這個契約，讓未解析日期證據可安全保存，同時維持 VERIFIED 列的完整時間要求。
+
 ## 本機驗證
 
 本機需要 `FINMIND_TOKEN`。只有正式寫入時才需要 Supabase 的伺服器端金鑰。
 
 ```powershell
-.venv\Scripts\python.exe -m scripts.import_trading_calendar `
+uv run python -m scripts.import_trading_calendar `
   --start-date 2018-01-01 `
   --dry-run
 ```

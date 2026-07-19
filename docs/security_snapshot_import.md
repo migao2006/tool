@@ -1,5 +1,7 @@
 # 當日證券狀態快照
 
+> 2026-07-19 核對：此流程只累積當日觀測，不能補出完整歷史交易狀態；Production schema 的唯一 source of truth 是 `supabase/migrations/`，不是 `supabase/schema/` 參考 SQL。
+
 這個匯入流程只保存「資料抓取當日可觀察的上市、上櫃普通股狀態」，不會把今日
 公司清單回填成歷史股票池，也不會猜測已下市公司、歷史產業分類或公告時間。
 
@@ -20,11 +22,18 @@
 
 ## 執行
 
-先依序套用 `supabase/schema/001` 至 `006`，再執行：
+本機先以 migration chain 重建及 lint，不得直接依序執行 `supabase/schema/001`～`006`：
 
 ```powershell
-python -m scripts.import_security_snapshot --dry-run
-python -m scripts.import_security_snapshot
+pnpm exec supabase db reset --local --no-seed
+pnpm exec supabase db lint --local --schema public,market_data --level warning --fail-on error
+```
+
+再執行匯入 dry-run 或隔離環境寫入：
+
+```powershell
+uv run python -m scripts.import_security_snapshot --dry-run
+uv run python -m scripts.import_security_snapshot
 ```
 
 GitHub Actions 的 `Import current security snapshot` 預設手動 dry-run；排程只在平日

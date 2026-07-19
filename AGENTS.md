@@ -1,5 +1,7 @@
 # 專案代理核心規範
 
+架構一定要分開，不可以把大量程式擠在同一個檔案裡；拆分必須降低耦合並提升可獨立測試性，不得用只有轉傳呼叫的碎片形成假分層。
+
 本專案是「台股 2～10 個交易日短波段預測系統」，目前唯一正式產品範圍為「5 個交易日短波段選股 MVP」。
 
 執行任何任務前，先閱讀本檔案，以及與任務相關的 `docs/` 規範。不得為與任務無關的內容載入或修改其他模組。
@@ -35,8 +37,8 @@
 - 執行格式化、lint、型別檢查及測試。
 - 建立分支、提交、推送及 PR。
 - 檢查並修復 CI。
-- 建立 Preview、部署及重新部署。
-- 建立並套用非破壞性 migration。
+- 透過 GitHub 建立 Preview；Vercel 因 GitHub 整合自動觸發可以接受。
+- 在本機或隔離環境建立並驗證非破壞性 migration。
 - 管理 RLS、Auth、Edge Functions。
 - 管理本專案 private R2 bucket 內的 object 與必要非破壞性設定。
 - 設定必要環境變數。
@@ -44,6 +46,8 @@
 - 修復失敗流程並重新驗證。
 
 可回復且位於本專案範圍內的操作應直接完成，並留下 Git、PR、migration、deployment 或 workflow 紀錄。
+
+GitHub 是唯一允許的人工作業發布入口。代理可以提交、推送、建立 PR 及在發布閘門通過後合併；不得直接以 Vercel CLI 執行 Production deploy／promote。Supabase Production migration 必須先完成 migration history 對齊、隔離環境驗證與 rollback 演練。R2 原始封存 object 預設不可變，只能新增；刪除或覆寫視為正式資料破壞性操作。
 
 只有以下情況需要使用者介入：
 
@@ -70,7 +74,7 @@
 代理可建立或更新本專案的：
 
 - 分支、提交、PR、Issue 及 workflow。
-- Preview 與 Production deployment。
+- 由 GitHub 觸發的 Preview 與 Production deployment；不得繞過 GitHub 直接發布。
 - Migration、RLS、Edge Functions。
 - 本專案 private R2 bucket 內的 object 與專案級設定。
 - Development、Preview、Production 環境變數。
@@ -94,6 +98,7 @@
 - 自動回補的多年歷史行情以壓縮 Parquet 保存於 private Cloudflare R2；Supabase 只保存任務控制、object manifest、稽核 metadata 與前端摘要。
 - 未完成 point-in-time 身分、公司行動及可交易性驗證的歷史資料必須維持 `RAW_LANDING_ONLY / RESEARCH_ONLY`，不得直接用於正式模型或推薦。
 - 前端不得直接存取 R2、`service_role` 或任何資料供應商憑證；資料必須經後端 service／repository 讀取。
+- 目前模型狀態固定為 `RESEARCH_ONLY`；即時完成度以 [`docs/current-status.md`](docs/current-status.md) 與 [`model_card.md`](model_card.md) 為準。
 
 ## 五、核心架構規則
 
@@ -128,19 +133,28 @@
 - 資料與模型：[`docs/data-model.md`](docs/data-model.md)
 - 資料匯入：[`docs/data_import.md`](docs/data_import.md)
 - R2 歷史封存：[`docs/r2-historical-archive.md`](docs/r2-historical-archive.md)
+- 預測 API：[`docs/prediction_api_contract.md`](docs/prediction_api_contract.md)
+- 目前實作與阻塞：[`docs/current-status.md`](docs/current-status.md)
+- 其餘資料匯入文件索引：[`README.md`](README.md)
 - Auth 與安全：[`docs/security.md`](docs/security.md)
 - 工具、Git 與發布：[`docs/tooling-release.md`](docs/tooling-release.md)
 
 ## 八、完成條件
 
-只有符合以下條件才能宣告完成：
+一般程式或文件任務只有符合以下條件才能宣告該次任務完成：
 
 - 沒有新增巨型檔案、假分層或循環依賴。
 - UI、資料、模型、決策、驗證及回測沒有混寫。
 - 缺漏資料有明確顯示。
 - Hard fail 不會進入正式推薦。
 - 輸出可追溯至資料日期、模型版本、成本版本及 Git commit。
-- 不存在已知 look-ahead bias、survivorship bias 或明顯資料洩漏。
 - 必要測試已實際執行。
 - Git 差異及機密已檢查。
-- 未通過正式驗收時，狀態為 `RESEARCH_ONLY` 或 `FAIL`。
+- 已知模型與資料限制已如實保留，未把該次任務完成誤稱為正式模型完成。
+
+模型或資料要升級為正式 `PASS`，另須同時滿足：
+
+- 不存在已知 look-ahead bias、survivorship bias 或明顯資料洩漏。
+- Point-in-time 身分、交易日曆、公司行動、交易狀態及 artifact provenance 已完整驗證。
+- Purged walk-forward、校準、locked holdout 與完整成本回測均通過設定門檻。
+- 未達上述條件時，系統狀態必須維持 `RESEARCH_ONLY` 或 `FAIL`。

@@ -5,9 +5,6 @@ from __future__ import annotations
 from .historical_archive_contracts import HistoricalArchiveRequest
 
 
-_ARCHIVE_PREFIX = ("raw", "v1", "provider=finmind")
-
-
 def build_historical_object_key(request: HistoricalArchiveRequest) -> str:
     """Build a stable key without asserting a resolved security market.
 
@@ -17,7 +14,9 @@ def build_historical_object_key(request: HistoricalArchiveRequest) -> str:
 
     return "/".join(
         (
-            *_ARCHIVE_PREFIX,
+            "raw",
+            "v1",
+            f"provider={request.provider_code.lower()}",
             f"dataset={request.source_dataset}",
             f"scheduled_market={request.scheduled_market}",
             f"asset_type={request.asset_type}",

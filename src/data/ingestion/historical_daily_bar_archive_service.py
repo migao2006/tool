@@ -242,6 +242,7 @@ class HistoricalDailyBarArchiveService:
         backfill_task_id: int | None,
     ) -> HistoricalArchiveWriteResult:
         request = HistoricalArchiveRequest(
+            provider_code=payload.provider,
             scheduled_market=scheduled_market,
             asset_type=asset_type,
             source_symbol=symbol,

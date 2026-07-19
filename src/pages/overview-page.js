@@ -6,7 +6,7 @@ import { createHomeDataStatusPanel } from "../components/home-data-status.js?v=h
 import { createValidationReportDrawer, renderValidationReport } from "../components/validation-report-drawer.js";
 import { formatDateTime, formatPercent } from "../core/formatters.js";
 import { setText } from "../core/html.js";
-import { formalCandidateRecords } from "../features/prediction-selection.js";
+import { canDisplaySnapshotRecords, overviewStockRecords } from "../features/prediction-selection.js";
 
 export function createOverviewPage({ horizon }) {
   return `
@@ -44,12 +44,12 @@ export function createOverviewPage({ horizon }) {
       </section>
 
       <section class="panel" aria-labelledby="top-candidate-title">
-        <div class="panel-heading"><div><span class="eyebrow">僅按 Rank Score 排序</span><h2 id="top-candidate-title">通過門檻的前 3～5 檔</h2></div><button class="text-button" type="button" data-route="opportunities">查看候選</button></div>
+        <div class="panel-heading"><div><span class="eyebrow">僅按 Rank Score 排序</span><h2 id="top-candidate-title" data-overview-list-title>通過門檻的前 3～5 檔</h2></div><button class="text-button" type="button" data-route="opportunities">查看候選</button></div>
         <div data-overview-candidates>${createEmptyState({ title: "正在讀取", description: "正在取得正式 5 日模型狀態。" })}</div>
       </section>
 
       <section class="panel traceability-panel" aria-labelledby="traceability-title">
-        <div class="panel-heading"><h2 id="traceability-title">模型追溯</h2><span class="system-badge" data-system-status-label>RESEARCH_ONLY</span></div>
+        <div class="panel-heading"><h2 id="traceability-title">模型追溯</h2><span class="system-badge" data-system-status-label data-traceability-status>RESEARCH_ONLY</span></div>
         <dl class="overview-facts"><div><dt>模型版本 <small>model_version</small></dt><dd data-overview-field="model_version">—</dd></div><div><dt>訓練資料截止日 <small>training_end_date</small></dt><dd data-overview-field="training_end_date">—</dd></div><div><dt>成本設定版本 <small>cost_profile_version</small></dt><dd data-overview-field="cost_profile_version">—</dd></div></dl>
         <button class="secondary-button full-width" type="button" data-open-drawer="validation-report">查看模型驗證報告</button>
       </section>
@@ -59,12 +59,13 @@ export function createOverviewPage({ horizon }) {
 }
 
 function decisionCounts(snapshot) {
-  const formal = snapshot?.systemStatus === "PASS" && !snapshot.stale && !snapshot.dataQualityHardFail;
+  const displayable = canDisplaySnapshotRecords(snapshot);
   const records = (snapshot?.predictions ?? []).filter((record) => !record.data_quality_hard_fail);
+  const hasDecisions = displayable && records.some((record) => Boolean(record.decision));
   return Object.freeze({
-    CANDIDATE: formal ? records.filter((record) => record.decision === "CANDIDATE").length : null,
-    WATCH: formal ? records.filter((record) => record.decision === "WATCH").length : null,
-    NO_TRADE: formal ? records.filter((record) => record.decision === "NO_TRADE").length : null,
+    CANDIDATE: hasDecisions ? records.filter((record) => record.decision === "CANDIDATE").length : null,
+    WATCH: hasDecisions ? records.filter((record) => record.decision === "WATCH").length : null,
+    NO_TRADE: hasDecisions ? records.filter((record) => record.decision === "NO_TRADE").length : null,
     HARD_FAIL: snapshot?.excluded?.length ?? 0,
   });
 }
@@ -83,26 +84,32 @@ export function renderOverviewPage(snapshot, uiState) {
   setText(root, '[data-overview-field="model_version"]', snapshot.modelVersion);
   setText(root, '[data-overview-field="training_end_date"]', snapshot.trainingEndDate);
   setText(root, '[data-overview-field="cost_profile_version"]', snapshot.costProfileVersion);
-  const hasMarketOutput = [
+  const marketValues = [
     snapshot.market.p_up,
     snapshot.market.p_neutral,
     snapshot.market.p_down,
     snapshot.market.forecast_volatility,
     snapshot.market.exposure_cap,
-  ].every(Number.isFinite) && Boolean(snapshot.market.regime);
-  setText(root, "[data-market-state]", hasMarketOutput ? "已更新" : "尚無資料");
+  ];
+  const hasCompleteMarketOutput = marketValues.every(Number.isFinite) && Boolean(snapshot.market.regime);
+  const hasAnyMarketOutput = marketValues.some(Number.isFinite) || Boolean(snapshot.market.regime);
+  setText(root, "[data-market-state]", hasCompleteMarketOutput ? "已更新" : hasAnyMarketOutput ? "部分更新" : "尚無資料");
   const counts = decisionCounts(snapshot);
-  Object.entries(counts).forEach(([key, value]) => setText(root, `[data-overview-count="${key}"]`, value));
+  Object.entries(counts).forEach(([key, value]) => {
+    setText(root, `[data-overview-count="${key}"]`, value);
+  });
 
   const list = root.querySelector("[data-overview-candidates]");
-  const candidates = formalCandidateRecords(snapshot).slice(0, 5);
+  const researchOnly = snapshot.systemStatus === "RESEARCH_ONLY";
+  setText(root, "[data-overview-list-title]", researchOnly ? "5 日研究排序" : "通過門檻的前 3～5 檔");
+  const candidates = overviewStockRecords(snapshot).slice(0, 5);
   if (list) {
     list.innerHTML = candidates.length
       ? candidates.map((record) => createCandidateCard(record, { horizon: snapshot.horizon, compact: true })).join("")
       : createEmptyState({
-        title: uiState === "no_candidates" ? "今日無正式候選" : "無正式候選股",
-        description: uiState === "no_candidates" ? "今日沒有股票通過全部決策門檻。" : "資料或模型尚未通過正式驗收。",
-        reasonCode: snapshot.reasonCodes?.[0] ?? "NO_FORMAL_CANDIDATES",
+        title: researchOnly ? "尚無研究結果" : uiState === "no_candidates" ? "今日無正式候選" : "無正式候選股",
+        description: researchOnly ? "目前快照沒有可顯示的股票資料。" : uiState === "no_candidates" ? "今日沒有股票通過全部決策門檻。" : "目前沒有可顯示的正式候選。",
+        reasonCode: snapshot.reasonCodes?.[0] ?? (researchOnly ? "NO_RESEARCH_RESULTS" : "NO_FORMAL_CANDIDATES"),
       });
   }
   renderValidationReport(snapshot);

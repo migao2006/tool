@@ -30,7 +30,7 @@ const STATE_COPY = Object.freeze({
   [UI_STATE.STALE]: ["RESEARCH_ONLY", "資料已過期", "目前資料日期已超過允許門檻，不提供正式候選。"],
   [UI_STATE.DATA_QUALITY_HARD_FAIL]: ["FAIL", "資料品質未通過", "關鍵行情、公司行動或交易狀態不完整。"],
   [UI_STATE.API_ERROR]: ["FAIL", "服務暫時無法使用", "無法取得預測資料，請稍後再試。"],
-  [UI_STATE.RESEARCH_ONLY]: ["RESEARCH_ONLY", "目前僅供研究", "尚未匯入可驗證的正式資料與模型輸出，不提供候選交易。"],
+  [UI_STATE.RESEARCH_ONLY]: ["RESEARCH_ONLY", "研究結果", "顯示目前已產生的真實 5 日研究輸出。"],
   [UI_STATE.FAIL]: ["FAIL", "系統驗收未通過", "目前不允許產生正式候選交易。"],
   [UI_STATE.MODEL_NOT_AVAILABLE]: ["RESEARCH_ONLY", "模型尚未完成", "指定 horizon 尚無正式模型，不會以其他期間代替。"],
   [UI_STATE.NO_CANDIDATES]: ["PASS", "今日無正式候選", "資料與模型可用，但沒有股票通過全部決策門檻。"],
@@ -50,9 +50,15 @@ export function applyUiState(state) {
   document.querySelectorAll("[data-ui-state-description]").forEach((node) => {
     node.textContent = description;
   });
+  const badgeOnly = state === UI_STATE.RESEARCH_ONLY;
+  document.querySelectorAll(".system-banner").forEach((banner) => {
+    banner.classList.toggle("is-badge-only", badgeOnly);
+    const copy = banner.querySelector("[data-status-copy]");
+    if (copy) copy.hidden = badgeOnly;
+  });
   const loading = state === UI_STATE.LOADING;
   document.querySelector("#app-content")?.setAttribute("aria-busy", String(loading));
-  const filtersEnabled = [UI_STATE.READY, UI_STATE.NO_CANDIDATES].includes(state);
+  const filtersEnabled = [UI_STATE.READY, UI_STATE.NO_CANDIDATES, UI_STATE.RESEARCH_ONLY].includes(state);
   document.querySelectorAll("[data-candidate-filters] button, [data-candidate-filters] input, [data-candidate-filters] select, [data-filter=\"watch-decision\"] button")
     .forEach((control) => { control.disabled = !filtersEnabled; });
 }

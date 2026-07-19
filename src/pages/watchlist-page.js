@@ -1,7 +1,7 @@
 import { createEmptyState } from "../components/empty-state.js";
 import { createStatusBanner } from "../components/status-banner.js";
 import { createWatchlistCard } from "../components/watchlist-card.js";
-import { isOrdinaryStock } from "../features/prediction-selection.js";
+import { canDisplaySnapshotRecords, isOrdinaryStock } from "../features/prediction-selection.js";
 
 export function createWatchlistPage({ horizon }) {
   return `
@@ -37,7 +37,7 @@ export function renderWatchlistPage(snapshot, decisionFilter = "") {
   const count = root.querySelector(".count-badge");
   if (!list) return;
 
-  const canShow = snapshot.systemStatus === "PASS" && !snapshot.stale && !snapshot.dataQualityHardFail;
+  const canShow = canDisplaySnapshotRecords(snapshot);
   const records = canShow
     ? (snapshot.watchlist ?? []).filter(isOrdinaryStock).filter((record) => !decisionFilter || record.decision === decisionFilter)
     : [];
@@ -45,8 +45,8 @@ export function renderWatchlistPage(snapshot, decisionFilter = "") {
   list.innerHTML = records.length
     ? records.map(createWatchlistCard).join("")
     : createEmptyState({
-      title: canShow ? "尚未加入自選股" : "尚無可追蹤的正式輸出",
-      description: canShow ? "可由正式候選股或個股詳情加入。" : "資料或模型尚未通過正式驗收。",
+      title: canShow ? "尚未加入自選股" : "尚無可追蹤資料",
+      description: canShow ? "可由候選股或個股詳情加入。" : "目前快照沒有可顯示的自選股資料。",
       reasonCode: snapshot.reasonCodes?.[0] ?? "NO_WATCHLIST_PREDICTIONS",
     });
 }

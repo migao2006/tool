@@ -6,7 +6,7 @@ export function createStatusBanner({
   return `
     <section class="system-banner" data-system-status="${status}" aria-label="系統驗證狀態">
       <span class="system-badge" data-system-status-label>${status}</span>
-      <div>
+      <div data-status-copy>
         <strong data-ui-state-title>${title}</strong>
         <p data-ui-state-description>${description}</p>
       </div>

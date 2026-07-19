@@ -3,7 +3,7 @@ import { createCandidateCard } from "../components/candidate-card.js";
 import { createExcludedSecuritiesDrawer, renderExcludedSecurities } from "../components/excluded-securities-drawer.js";
 import { createStatusBanner } from "../components/status-banner.js";
 import { filterCandidateRecords } from "../features/candidate-filters.js";
-import { eligibleStockRecords } from "../features/prediction-selection.js";
+import { canDisplaySnapshotRecords, displayableStockRecords } from "../features/prediction-selection.js";
 
 export function createCandidatesPage({ horizon }) {
   return `
@@ -36,7 +36,7 @@ export function createCandidatesPage({ horizon }) {
 
       <section class="panel candidate-list-panel" aria-labelledby="candidate-list-title">
         <div class="panel-heading">
-          <div><span class="eyebrow">Rank Score＝當日橫斷面排名百分位</span><h2 id="candidate-list-title">正式候選清單</h2></div>
+          <div><span class="eyebrow">Rank Score＝當日橫斷面排名百分位</span><h2 id="candidate-list-title" data-candidate-list-title>正式候選清單</h2></div>
           <button class="text-button" type="button" data-open-drawer="excluded-securities">資料排除 <small>Hard fail</small>：<span data-hard-fail-count>—</span></button>
         </div>
         <p class="quantile-note">P10／P50／P90 為條件報酬分位數，不是最低、平均、最高報酬或獲利保證。</p>
@@ -57,16 +57,19 @@ export function renderCandidatesPage(snapshot, uiState, filters = {}) {
 
   const list = root.querySelector("[data-candidate-list]");
   if (!list) return;
-  const canShow = snapshot.systemStatus === "PASS" && !snapshot.stale && !snapshot.dataQualityHardFail;
-  const records = canShow ? filterCandidateRecords(eligibleStockRecords(snapshot), filters) : [];
+  const canShow = canDisplaySnapshotRecords(snapshot);
+  const researchOnly = snapshot.systemStatus === "RESEARCH_ONLY";
+  const records = canShow ? filterCandidateRecords(displayableStockRecords(snapshot), filters) : [];
+  const heading = root.querySelector("[data-candidate-list-title]");
+  if (heading) heading.textContent = researchOnly ? "5 日研究結果" : "正式候選清單";
   if (records.length) {
     list.innerHTML = records.map((record) => createCandidateCard(record, { horizon: snapshot.horizon })).join("");
     return;
   }
-  const reasonCode = snapshot.reasonCodes?.[0] ?? (canShow ? "NO_MATCHING_ELIGIBLE_STOCKS" : "NO_FORMAL_CANDIDATES");
+  const reasonCode = snapshot.reasonCodes?.[0] ?? (canShow ? "NO_MATCHING_ELIGIBLE_STOCKS" : "NO_DISPLAYABLE_RESULTS");
   list.innerHTML = createEmptyState({
     title: canShow ? "沒有符合篩選的股票" : uiState === "no_candidates" ? "今日無正式候選" : "無正式候選股",
-    description: canShow ? "請調整市場或門檻；排序仍只使用 Rank Score。" : "資料或模型尚未通過正式驗收。",
+    description: canShow ? "請調整市場或門檻；排序仍只使用 Rank Score。" : "目前快照沒有可顯示的股票資料。",
     reasonCode,
   });
 }

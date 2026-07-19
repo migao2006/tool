@@ -10,6 +10,12 @@
 }
 
 .system-banner.compact { margin: 0; }
+.system-banner.is-badge-only {
+  width: fit-content;
+  align-items: center;
+  padding: 7px 9px;
+  border-radius: 999px;
+}
 .system-banner strong { display: block; font-size: 0.84rem; }
 .system-banner p { margin: 3px 0 0; color: var(--muted); font-size: 0.72rem; }
 

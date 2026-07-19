@@ -216,6 +216,27 @@ def test_formal_candidates_exclude_hard_fail_and_etf() -> None:
     assert '<option>FAIL</option>' not in candidates
 
 
+def test_research_results_are_not_hidden_and_missing_fields_are_not_fabricated() -> None:
+    contract = read("src/data/prediction-contract.js")
+    selection = read("src/features/prediction-selection.js")
+    pages = "\n".join(
+        read(path)
+        for path in (
+            "src/pages/overview-page.js",
+            "src/pages/candidates-page.js",
+            "src/pages/watchlist-page.js",
+        )
+    )
+
+    assert '["PASS", "RESEARCH_ONLY"].includes' in selection
+    assert "displayableStockRecords" in selection
+    assert "overviewStockRecords" in selection
+    assert 'firstValue(record, ["decision"])' in contract
+    assert 'firstValue(record, ["data_quality_status", "dataQualityStatus"])' in contract
+    assert "displayableStockRecords(snapshot)" in pages
+    assert "canDisplaySnapshotRecords(snapshot)" in pages
+
+
 def test_api_values_are_escaped_before_dynamic_markup() -> None:
     html = read("src/core/html.js")
     card = read("src/components/candidate-card.js")

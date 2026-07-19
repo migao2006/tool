@@ -221,6 +221,7 @@ def _feature_artifact(
         "feature_schema_hash": TWSE_PRICE_VOLUME_FEATURE_SCHEMA_HASH,
         "price_basis": TWSE_PRICE_VOLUME_PRICE_BASIS,
         "availability_mode": "RESEARCH_SCHEDULING_HINT",
+        "decision_close_price": 100.0,
         "latest_available_at": datetime(2024, 1, 2, 16, tzinfo=TAIPEI),
         "latest_observed_available_at": datetime(2026, 7, 19, tzinfo=timezone.utc),
         "point_in_time_audit_pass": False,

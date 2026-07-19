@@ -8,11 +8,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
-from hashlib import sha256
-import json
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
 
 from src.models.stock.rank_model import rank_cross_section
 
@@ -25,6 +22,7 @@ from .twse_research_prediction_contracts import (
     TwseOosResearchPrediction,
     TwseResearchPredictionSnapshot,
 )
+from .twse_research_snapshot_writer import persist_research_snapshot
 
 
 @dataclass(frozen=True)
@@ -232,29 +230,10 @@ class TwseResearchPredictionPublisher:
             validation=dict(validation),
             reason_codes=reason_codes,
         )
-        payload = snapshot.to_dict()
-        rendered = (
-            json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-        ).encode("utf-8")
-        path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = path.with_name(f".{path.name}.{uuid4().hex}.partial")
-        try:
-            _ = temporary.write_bytes(rendered)
-            read_back = temporary.read_bytes()
-            if read_back != rendered:
-                raise OSError("research prediction artifact read-back mismatch")
-            decoded = json.loads(read_back.decode("utf-8"))
-            if decoded.get("snapshot_sha256") != snapshot.snapshot_sha256:
-                raise OSError("research prediction snapshot hash mismatch")
-            _ = temporary.replace(path)
-        finally:
-            temporary.unlink(missing_ok=True)
-        artifact_bytes = path.read_bytes()
-        if artifact_bytes != rendered:
-            raise OSError("persisted research prediction artifact changed")
+        persisted = persist_research_snapshot(path, snapshot)
         return PublishedResearchSnapshot(
             path=path,
-            artifact_sha256=sha256(artifact_bytes).hexdigest(),
+            artifact_sha256=persisted.artifact_sha256,
             snapshot=snapshot,
         )
 

@@ -76,7 +76,7 @@ jobs:
         with:
           name: twse-oos-research-${{ github.run_id }}
           path: |
-            artifacts/**/*.json
+            artifacts/**/*
             twse-research-publish-report.json
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 90

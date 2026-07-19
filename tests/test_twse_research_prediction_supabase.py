@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from hashlib import sha256
 import json
-from typing import cast
+from typing import cast, override
 
 import pytest
 
@@ -16,8 +16,11 @@ from src.data.research.twse_research_prediction_supabase import (
 
 
 class _Writer:
-    def __init__(self) -> None:
+    def __init__(self, *, persist_cost_profiles: bool = True) -> None:
         self.upserts: list[tuple[str, list[dict[str, object]]]] = []
+        self.rpc_calls: list[tuple[str, dict[str, object]]] = []
+        self.cost_profiles: dict[str, dict[str, object]] = {}
+        self.persist_cost_profiles: bool = persist_cost_profiles
 
     def select_rows(
         self,
@@ -27,7 +30,13 @@ class _Writer:
         filters: Mapping[str, str] | None = None,
         limit: int = 1_000,
     ) -> list[dict[str, object]]:
-        del select, filters, limit
+        del select, limit
+        if table == "cost_profiles":
+            assert filters is not None
+            version_filter = filters["cost_profile_version"]
+            assert version_filter.startswith("eq.")
+            stored = self.cost_profiles.get(version_filter.removeprefix("eq."))
+            return [] if stored is None else [dict(stored)]
         assert table == "securities"
         return [
             {
@@ -48,15 +57,33 @@ class _Writer:
         return_rows: bool = False,
         preserve_existing: bool = False,
     ) -> list[dict[str, object]]:
-        del on_conflict, select, preserve_existing
+        del select, return_rows
         materialized = [dict(value) for value in rows]
         self.upserts.append((table, materialized))
-        if table == "prediction_runs" and return_rows:
-            return [{"prediction_run_id": 7}]
+        if table == "cost_profiles" and self.persist_cost_profiles:
+            assert on_conflict == "cost_profile_version"
+            assert preserve_existing
+            for row in materialized:
+                version = str(row["cost_profile_version"])
+                if version not in self.cost_profiles:
+                    self.cost_profiles[version] = dict(row)
         return []
 
+    def rpc(
+        self,
+        function_name: str,
+        parameters: Mapping[str, object],
+    ) -> object:
+        self.rpc_calls.append((function_name, dict(parameters)))
+        predictions = cast(list[object], parameters["p_stock_predictions"])
+        return {"prediction_run_id": 7, "prediction_count": len(predictions)}
 
-def _payload() -> dict[str, object]:
+
+def _payload(
+    *,
+    evaluation_scope: str = "OUT_OF_SAMPLE_TEST",
+    model_bundle_sha256: str | None = None,
+) -> dict[str, object]:
     prediction = {
         "symbol": "2330",
         "market": "TWSE",
@@ -64,7 +91,7 @@ def _payload() -> dict[str, object]:
         "decision_at": "2026-01-02T06:30:00+00:00",
         "horizon": 5,
         "fold_number": 0,
-        "evaluation_scope": "OUT_OF_SAMPLE_TEST",
+        "evaluation_scope": evaluation_scope,
         "model_raw_score": 0.8,
         "rank_score": 100.0,
         "global_rank": 1,
@@ -120,6 +147,10 @@ def _payload() -> dict[str, object]:
         "validation": {"fold_count": 1},
         "reason_codes": ["TWSE_PRICE_ONLY_RESEARCH"],
     }
+    if model_bundle_sha256 is not None:
+        cast(dict[str, object], payload["model_metadata"])["model_bundle_sha256"] = (
+            model_bundle_sha256
+        )
     payload["snapshot_sha256"] = sha256(
         json.dumps(
             payload,
@@ -141,22 +172,106 @@ def test_staging_publish_is_conservative_and_idempotent() -> None:
 
     assert result.prediction_run_id == 7
     assert result.prediction_count == 1
-    assert [value[0] for value in writer.upserts] == [
-        "cost_profiles",
-        "prediction_runs",
-        "stock_predictions",
-    ]
-    run = writer.upserts[1][1][0]
-    stock = writer.upserts[2][1][0]
+    assert [value[0] for value in writer.upserts] == ["cost_profiles"]
+    assert writer.cost_profiles["cost-v1"]["parameters"] == {}
+    assert len(writer.rpc_calls) == 1
+    function_name, parameters = writer.rpc_calls[0]
+    assert function_name == "publish_research_prediction_snapshot"
+    run = cast(dict[str, object], parameters["p_run"])
+    stock = cast(list[dict[str, object]], parameters["p_stock_predictions"])[0]
     assert run["system_validation_status"] == "RESEARCH_ONLY"
     assert run["candidate_count"] == 0
     assert run["no_trade_count"] == 1
     assert run["hard_fail_count"] == 0
+    assert run["model_bundle_version"] == ("twse-price-research-h5-v1:oos-research")
+    source_dates = cast(dict[str, object], run["source_dates"])
+    assert source_dates["prediction_scope"] == "OUT_OF_SAMPLE_TEST"
+    assert source_dates["feature_snapshot"] == "b" * 64
     assert stock["decision"] == "NO_TRADE"
     assert stock["data_quality_status"] == "FAIL"
     assert "RESEARCH_ONLY_NO_FORMAL_DECISION_POLICY" in cast(
         list[object], stock["reason_codes"]
     )
+
+
+def test_same_cost_profile_version_reuses_only_exact_immutable_parameters() -> None:
+    writer = _Writer()
+    publisher = TwseResearchPredictionSupabasePublisher(
+        writer,
+        target_environment="staging",
+        publish_enabled=True,
+    )
+    first = _payload()
+    _ = publisher.publish(first)
+
+    second = _payload()
+    second["reason_codes"] = ["TWSE_PRICE_ONLY_RESEARCH", "SECOND_SNAPSHOT"]
+    second["snapshot_sha256"] = sha256(
+        json.dumps(
+            {key: value for key, value in second.items() if key != "snapshot_sha256"},
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
+    _ = publisher.publish(second)
+
+    assert len(writer.rpc_calls) == 2
+    assert writer.cost_profiles["cost-v1"]["parameters"] == {}
+
+
+def test_legacy_snapshot_metadata_does_not_change_cost_profile_identity() -> None:
+    writer = _Writer()
+    publisher = TwseResearchPredictionSupabasePublisher(
+        writer,
+        target_environment="staging",
+        publish_enabled=True,
+    )
+    _ = publisher.publish(_payload())
+    writer.cost_profiles["cost-v1"]["parameters"] = {
+        "research_snapshot_sha256": "a" * 64
+    }
+
+    _ = publisher.publish(_payload())
+
+    assert len(writer.rpc_calls) == 2
+    assert writer.cost_profiles["cost-v1"]["parameters"] == {
+        "research_snapshot_sha256": "a" * 64
+    }
+
+
+def test_cost_profile_parameter_mismatch_fails_closed_before_snapshot_rpc() -> None:
+    writer = _Writer()
+    publisher = TwseResearchPredictionSupabasePublisher(
+        writer,
+        target_environment="staging",
+        publish_enabled=True,
+    )
+    _ = publisher.publish(_payload())
+    writer.rpc_calls.clear()
+    writer.cost_profiles["cost-v1"]["commission_rate"] = 0.001
+
+    with pytest.raises(
+        ValueError,
+        match="different immutable parameters: commission_rate",
+    ):
+        _ = publisher.publish(_payload())
+
+    assert writer.rpc_calls == []
+    assert writer.cost_profiles["cost-v1"]["commission_rate"] == 0.001
+
+
+def test_cost_profile_insert_without_verified_read_back_fails_closed() -> None:
+    writer = _Writer(persist_cost_profiles=False)
+
+    with pytest.raises(ValueError, match="did not return one row"):
+        _ = TwseResearchPredictionSupabasePublisher(
+            writer,
+            target_environment="staging",
+            publish_enabled=True,
+        ).publish(_payload())
+
+    assert writer.rpc_calls == []
 
 
 @pytest.mark.parametrize("environment", ["", "prod"])
@@ -188,8 +303,9 @@ def test_explicit_production_research_publish_remains_no_trade() -> None:
     ).publish(_payload())
 
     assert result.target_environment == "production"
-    run = writer.upserts[1][1][0]
-    stock = writer.upserts[2][1][0]
+    _, parameters = writer.rpc_calls[0]
+    run = cast(dict[str, object], parameters["p_run"])
+    stock = cast(list[dict[str, object]], parameters["p_stock_predictions"])[0]
     assert run["system_validation_status"] == "RESEARCH_ONLY"
     assert run["candidate_count"] == 0
     assert stock["decision"] == "NO_TRADE"
@@ -205,3 +321,81 @@ def test_publish_gate_is_disabled_by_default() -> None:
             target_environment="staging",
             publish_enabled=False,
         )
+
+
+@pytest.mark.parametrize(
+    ("scope", "version_part"),
+    [
+        ("OUT_OF_SAMPLE_TEST", "oos-research"),
+        ("DAILY_RESEARCH_INFERENCE", "daily-research"),
+        ("RETROSPECTIVE_RESEARCH_INFERENCE", "retrospective-research"),
+    ],
+)
+def test_supported_scopes_use_semantic_bundle_identity(
+    scope: str, version_part: str
+) -> None:
+    writer = _Writer()
+    bundle_hash = "c" * 64
+    payload = _payload(
+        evaluation_scope=scope,
+        model_bundle_sha256=bundle_hash,
+    )
+
+    _ = TwseResearchPredictionSupabasePublisher(
+        writer,
+        target_environment="staging",
+        publish_enabled=True,
+    ).publish(payload)
+
+    _, parameters = writer.rpc_calls[0]
+    run = cast(dict[str, object], parameters["p_run"])
+    assert run["model_bundle_version"] == (
+        f"twse-price-research-h5-v1:{version_part}:{bundle_hash}"
+    )
+    assert cast(dict[str, object], run["source_dates"])["prediction_scope"] == scope
+    assert str(payload["snapshot_sha256"]) not in str(run["model_bundle_version"])
+
+
+def test_invalid_snapshot_is_rejected_before_any_database_write() -> None:
+    writer = _Writer()
+    payload = _payload()
+    cast(list[dict[str, object]], payload["predictions"])[0]["decision_date"] = (
+        "2026-01-03"
+    )
+    payload["snapshot_sha256"] = sha256(
+        json.dumps(
+            {key: value for key, value in payload.items() if key != "snapshot_sha256"},
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
+
+    with pytest.raises(ValueError, match="does not match"):
+        _ = TwseResearchPredictionSupabasePublisher(
+            writer,
+            target_environment="staging",
+            publish_enabled=True,
+        ).publish(payload)
+
+    assert writer.upserts == []
+    assert writer.rpc_calls == []
+
+
+def test_publisher_rejects_an_unexpected_atomic_rpc_count() -> None:
+    class _WrongCountWriter(_Writer):
+        @override
+        def rpc(
+            self,
+            function_name: str,
+            parameters: Mapping[str, object],
+        ) -> object:
+            self.rpc_calls.append((function_name, dict(parameters)))
+            return {"prediction_run_id": 7, "prediction_count": 0}
+
+    with pytest.raises(ValueError, match="unexpected row count"):
+        _ = TwseResearchPredictionSupabasePublisher(
+            _WrongCountWriter(),
+            target_environment="staging",
+            publish_enabled=True,
+        ).publish(_payload())

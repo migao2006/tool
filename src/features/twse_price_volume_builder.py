@@ -83,6 +83,7 @@ def _build_feature_row(
         feature_schema_hash=TWSE_PRICE_VOLUME_FEATURE_SCHEMA_HASH,
         price_basis=TWSE_PRICE_VOLUME_PRICE_BASIS,
         availability_mode=availability_mode,
+        decision_close_price=current.values["close_price"],
         feature_values=feature_values,
         feature_audits=audits,
         latest_available_at=_latest_audit_timestamp(audits, observed=False),

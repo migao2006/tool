@@ -69,7 +69,7 @@ available_at <= decision_at
 - Archive integrity 與 dataset readiness 必須使用同一 manifest snapshot hash；該 hash 必須涵蓋來源、期間、使用範圍、狀態、reason codes 及所有會改變資料語意的欄位。
 - 就緒判斷必須驗證 archive symbol、掛牌身分、交易日曆、交易狀態、公司行動與 canonical row 的實際交集，不得只比較彼此無關的總筆數。交集 coverage 尚未持久化前狀態固定為 BLOCKED。
 
-目前上市研究 feature schema 固定為 17 個價量特徵，schema hash 為 `8e256243dbe0018a7a96a637b989e2338dcf06a8f2e9a9d42faf888c7f54cd53`。特徵包含 1／2／3／5／10／20／60 日報酬、隔夜跳空、日內報酬、ATR14、RV20、下行波動 20、最大回撤 20、ADV20、週轉率均值 20、量能異常 20 與 Amihud20。
+目前上市研究 feature schema 固定為 17 個價量特徵，schema hash 為 `8e256243dbe0018a7a96a637b989e2338dcf06a8f2e9a9d42faf888c7f54cd53`。特徵包含 1／2／3／5／10／20／60 日報酬、隔夜跳空、日內報酬、ATR14、RV20、下行波動 20、最大回撤 20、ADV20、週轉率均值 20、量能異常 20 與 Amihud20。Feature artifact dataset `twse-archive-price-volume-5d-v2` 另保留有限正值的 `decision_close_price` 作為交易成本與推論稽核欄位；該欄不是模型特徵，因此不改變上述 17 個特徵的 schema version 或 hash。
 
 這個 feature／research runner 仍有下列限制：
 

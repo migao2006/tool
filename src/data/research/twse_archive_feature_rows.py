@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, time
 import json
+from math import isfinite
 from typing import cast
 from zoneinfo import ZoneInfo
 
@@ -166,6 +167,16 @@ def output_row(
             "ELIGIBLE_FEATURE_VALUE_MISSING",
             "Hard-fail feature rows cannot be written",
         )
+    decision_close_price = feature.decision_close_price
+    if (
+        decision_close_price is None
+        or not isfinite(decision_close_price)
+        or decision_close_price <= 0
+    ):
+        raise TwseArchiveFeatureBuildError(
+            "ELIGIBLE_DECISION_CLOSE_INVALID",
+            "Eligible feature row is missing a finite positive decision close",
+        )
     reasons = tuple(
         dict.fromkeys(
             (
@@ -197,6 +208,7 @@ def output_row(
         "feature_schema_hash": feature.feature_schema_hash,
         "price_basis": feature.price_basis,
         "availability_mode": feature.availability_mode,
+        "decision_close_price": decision_close_price,
         "latest_available_at": feature.latest_available_at.astimezone(UTC),
         "latest_observed_available_at": feature.latest_observed_available_at.astimezone(
             UTC

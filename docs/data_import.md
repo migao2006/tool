@@ -70,7 +70,9 @@ gate 仍應保持關閉。
   `UNRESOLVED / FIRST_OBSERVED_AT_RETRIEVAL / IDENTITY_RESEARCH_ONLY`，不會冒充歷史 PIT 身分。
 - TWSE feature artifact contract：manifest 必須由實際 Parquet read-back 產生，並驗證 byte
   size、row count、Parquet SHA-256、schema hash、dataset snapshot、source archive snapshot
-  與 current identity snapshot。未通過驗證的 artifact 不得進入資料組裝器。
+  與 current identity snapshot。`twse-archive-price-volume-5d-v2` 另驗證每列有限正值的
+  `decision_close_price` 成本稽核欄；該欄不屬於 17 個模型特徵，不改變 feature schema
+  hash。未通過驗證的 artifact 不得進入資料組裝器。
 
 上述程式與測試尚未等於 Production artifact 或正式訓練資料。歷史基準與 feature artifact
 的產生程式已具備相容契約，但目前沒有 Production artifact。真實標籤組裝仍必須同時提供原始可執行 OHLC、公司行動／停牌區間與

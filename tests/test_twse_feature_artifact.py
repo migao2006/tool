@@ -13,7 +13,10 @@ from zoneinfo import ZoneInfo
 import pyarrow.parquet as pq
 import pytest
 
-from src.data.research.twse_archive_feature_contracts import dataset_snapshot_hash
+from src.data.research.twse_archive_feature_contracts import (
+    TWSE_ARCHIVE_FEATURE_DATASET_VERSION,
+    dataset_snapshot_hash,
+)
 from src.data.research.twse_archive_feature_parquet import (
     TwseArchiveFeatureParquetWriter,
 )
@@ -78,6 +81,7 @@ def _feature_row(
         "feature_schema_hash": TWSE_PRICE_VOLUME_FEATURE_SCHEMA_HASH,
         "price_basis": TWSE_PRICE_VOLUME_PRICE_BASIS,
         "availability_mode": "RESEARCH_SCHEDULING_HINT",
+        "decision_close_price": 171.0,
         "latest_available_at": datetime(2026, 7, 17, 8, tzinfo=timezone.utc),
         "latest_observed_available_at": datetime(
             2026,
@@ -144,7 +148,13 @@ def test_manifest_is_derived_from_parquet_bytes_and_read_back_verified(
     assert manifest.parquet_sha256 == sha256(output.read_bytes()).hexdigest()
     assert manifest.byte_size == output.stat().st_size
     assert manifest.row_count == 1
+    assert manifest.dataset_version == "twse-archive-price-volume-5d-v2"
+    assert TWSE_ARCHIVE_FEATURE_DATASET_VERSION == ("twse-archive-price-volume-5d-v2")
     assert manifest.dataset_snapshot_sha256 == DATASET_SNAPSHOT
+    assert (
+        manifest.feature_schema_hash
+        == "8e256243dbe0018a7a96a637b989e2338dcf06a8f2e9a9d42faf888c7f54cd53"
+    )
     assert manifest.parquet_schema_sha256 != manifest.feature_schema_hash
     assert manifest.point_in_time_status == "UNVERIFIED"
     assert verified.point_in_time_verified is False
@@ -215,6 +225,23 @@ def test_invalid_row_lineage_is_rejected(tmp_path: Path) -> None:
         _ = TwseFeatureArtifactReader().manifest_from_parquet(output)
 
     assert captured.value.reason_code == "TWSE_FEATURE_ARTIFACT_LINEAGE_INVALID"
+
+
+def test_invalid_decision_close_is_rejected(tmp_path: Path) -> None:
+    output = tmp_path / "invalid-decision-close.parquet"
+    writer = TwseArchiveFeatureParquetWriter(
+        output,
+        dataset_snapshot_sha256=DATASET_SNAPSHOT,
+        source_archive_snapshot_sha256=SOURCE_SNAPSHOT,
+        current_identity_snapshot_sha256=IDENTITY_SNAPSHOT,
+    )
+    writer.write_rows([{**_feature_row(), "decision_close_price": 0.0}])
+    writer.finish()
+
+    with pytest.raises(TwseFeatureArtifactReadError) as captured:
+        _ = TwseFeatureArtifactReader().manifest_from_parquet(output)
+
+    assert captured.value.reason_code == "TWSE_FEATURE_ARTIFACT_DECISION_CLOSE_INVALID"
 
 
 def test_only_reader_can_construct_verified_artifact(tmp_path: Path) -> None:

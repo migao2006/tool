@@ -1,4 +1,4 @@
-"""Versioned, fail-closed contract for TWSE out-of-sample research outputs."""
+"""Versioned, fail-closed contracts for TWSE research model outputs."""
 
 # pyright: reportAny=false, reportExplicitAny=false, reportUnknownArgumentType=false
 # pyright: reportUnknownVariableType=false, reportUnusedCallResult=false
@@ -20,6 +20,13 @@ from src.core.research_prediction_contract import (
 )
 
 
+RESEARCH_EVALUATION_SCOPES = (
+    "OUT_OF_SAMPLE_TEST",
+    "DAILY_RESEARCH_INFERENCE",
+    "RETROSPECTIVE_RESEARCH_INFERENCE",
+)
+
+
 def _require_text(value: str, field_name: str) -> None:
     if not value.strip():
         raise ValueError(f"{field_name} is required")
@@ -34,6 +41,12 @@ def _require_sha256(value: str, field_name: str) -> None:
 
 @dataclass(frozen=True)
 class TwseOosResearchPrediction:
+    """One research-only prediction row.
+
+    The legacy class name is retained for compatibility.  ``evaluation_scope``
+    distinguishes untouched OOS evaluation from bundle-backed inference and is
+    always serialized for downstream auditing.
+    """
     symbol: str
     decision_date: date
     decision_at: datetime
@@ -60,6 +73,9 @@ class TwseOosResearchPrediction:
     latest_available_at: datetime
     data_quality_status: str
     reason_codes: tuple[str, ...]
+    industry: str | None = None
+    adv20_ntd: float | None = None
+    maximum_order_notional_ntd: float | None = None
     market: str = "TWSE"
     evaluation_scope: str = "OUT_OF_SAMPLE_TEST"
 
@@ -70,8 +86,8 @@ class TwseOosResearchPrediction:
         require_aware_datetime(self.latest_available_at, "latest_available_at")
         if self.market != "TWSE":
             raise ValueError("the first research publisher accepts TWSE rows only")
-        if self.evaluation_scope != "OUT_OF_SAMPLE_TEST":
-            raise ValueError("research predictions must be out-of-sample test rows")
+        if self.evaluation_scope not in RESEARCH_EVALUATION_SCOPES:
+            raise ValueError("research prediction evaluation_scope is unsupported")
         if self.decision_at.date() != self.decision_date:
             raise ValueError("decision_at date must match decision_date")
         if self.latest_available_at > self.decision_at:
@@ -115,6 +131,17 @@ class TwseOosResearchPrediction:
             self.estimated_round_trip_cost < 0
         ):
             raise ValueError("estimated_round_trip_cost must be non-negative")
+        if self.adv20_ntd is not None and (
+            not isfinite(self.adv20_ntd) or self.adv20_ntd <= 0
+        ):
+            raise ValueError("adv20_ntd must be positive when present")
+        if self.maximum_order_notional_ntd is not None and (
+            not isfinite(self.maximum_order_notional_ntd)
+            or self.maximum_order_notional_ntd <= 0
+        ):
+            raise ValueError(
+                "maximum_order_notional_ntd must be positive when present"
+            )
         if self.data_quality_status not in {"PASS", "WARN"}:
             raise ValueError("research data quality must be PASS or WARN")
         _require_text(self.calibration_version, "calibration_version")
@@ -127,6 +154,7 @@ class TwseOosResearchPrediction:
             {
                 "symbol": self.symbol,
                 "market": self.market,
+                "industry": self.industry,
                 "decision_date": self.decision_date,
                 "decision_at": self.decision_at,
                 "horizon": self.horizon,
@@ -152,6 +180,8 @@ class TwseOosResearchPrediction:
                     self.quantile_crossing_before_calibration
                 ),
                 "estimated_round_trip_cost": self.estimated_round_trip_cost,
+                "adv20_ntd": self.adv20_ntd,
+                "maximum_order_notional_ntd": self.maximum_order_notional_ntd,
                 "latest_available_at": self.latest_available_at,
                 "data_quality_status": self.data_quality_status,
                 "reason_codes": self.reason_codes,
@@ -193,7 +223,7 @@ class TwseResearchPredictionSnapshot:
         if not self.predictions:
             raise ValueError("research prediction snapshot cannot be empty")
         if self.training_end_date >= self.as_of_date:
-            raise ValueError("training_end_date must precede the OOS as_of_date")
+            raise ValueError("training_end_date must precede the research as_of_date")
         required_text = {
             "model_version": self.model_version,
             "label_version": self.label_version,
@@ -219,6 +249,7 @@ class TwseResearchPredictionSnapshot:
             raise ValueError("research snapshot limitations must be explicit")
         symbols: set[str] = set()
         ranks: set[int] = set()
+        evaluation_scopes: set[str] = set()
         for prediction in self.predictions:
             if prediction.horizon != self.horizon:
                 raise ValueError("prediction horizon does not match snapshot")
@@ -230,6 +261,9 @@ class TwseResearchPredictionSnapshot:
                 raise ValueError("snapshot symbols and global ranks must be unique")
             symbols.add(prediction.symbol)
             ranks.add(prediction.global_rank)
+            evaluation_scopes.add(prediction.evaluation_scope)
+        if len(evaluation_scopes) != 1:
+            raise ValueError("one snapshot cannot mix research evaluation scopes")
 
     def _content(self) -> dict[str, Any]:
         return to_json_safe(
@@ -273,6 +307,7 @@ class TwseResearchPredictionSnapshot:
 
 
 __all__ = [
+    "RESEARCH_EVALUATION_SCOPES",
     "RESEARCH_PREDICTION_CONTRACT_VERSION",
     "TwseOosResearchPrediction",
     "TwseResearchPredictionSnapshot",

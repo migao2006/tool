@@ -137,6 +137,7 @@ def evaluate_rank(
     return RankEvaluation(
         metrics={"model": primary, "baselines": baselines},
         model_scores=tuple(model_scores),
+        fitted_model=ranker,
     )
 
 
@@ -187,6 +188,8 @@ def evaluate_direction(
             (float(row[0]), float(row[1]), float(row[2])) for row in probabilities
         ),
         calibration_version=calibrator.version,
+        fitted_model=model,
+        fitted_calibrator=calibrator,
     )
 
 
@@ -260,4 +263,6 @@ def evaluate_quantiles(
         net_quantiles=net_quantiles,
         raw_crossed=tuple(bool(row[3]) for row in calibrated),
         calibration_version=calibrator.version,
+        fitted_model=model,
+        fitted_calibrator=calibrator,
     )

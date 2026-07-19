@@ -1,4 +1,4 @@
-import { createDecisionGates, renderDecisionGates } from "../components/decision-gates.js?v=api-3";
+import { createDecisionGates, renderDecisionGates } from "../components/decision-gates.js?v=api-4";
 import { createStockAuditSection } from "../components/stock-audit-section.js";
 import { formatCurrency, formatPercent, formatRank, formatRankScore, formatReasonCodeSummary } from "../core/formatters.js";
 import { setText } from "../core/html.js";
@@ -74,7 +74,12 @@ export function renderStockDetailPage(prediction, { isWatchlisted = false } = {}
   }
   const feedback = root.querySelector("[data-watchlist-feedback]");
   if (feedback) feedback.textContent = "";
-  setText(root, "[data-stock-gate-state]", prediction.gates?.length ? "已評估" : "—");
+  const noFormalDecisionPolicy = prediction.reason_codes?.includes("RESEARCH_ONLY_NO_FORMAL_DECISION_POLICY");
+  setText(
+    root,
+    "[data-stock-gate-state]",
+    prediction.gates?.length ? "已評估" : noFormalDecisionPolicy ? "正式決策政策尚未執行" : "未評估",
+  );
   const directFields = ["decision", "as_of_date", "decision_at", "horizon", "calibration_version", "calibration_status", "cost_profile"];
   directFields.forEach((field) => {
     setText(root, `[data-stock-field="${field}"]`, prediction[field]);
@@ -88,7 +93,10 @@ export function renderStockDetailPage(prediction, { isWatchlisted = false } = {}
   });
   setText(root, '[data-stock-field="adv20"]', formatCurrency(prediction.adv20));
   setText(root, '[data-stock-field="max_order_notional_ntd"]', formatCurrency(prediction.max_order_notional_ntd));
-  renderDecisionGates(prediction.gates);
+  const fallbackGateReasonCode = noFormalDecisionPolicy
+    ? "RESEARCH_ONLY_NO_FORMAL_DECISION_POLICY"
+    : "GATE_NOT_EVALUATED";
+  renderDecisionGates(prediction.gates, { fallbackReasonCode: fallbackGateReasonCode });
 
   const auditValues = {
     model_version: prediction.model_version,

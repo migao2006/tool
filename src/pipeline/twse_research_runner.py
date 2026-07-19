@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import date
+from importlib.metadata import version
 import json
 from pathlib import Path
 from typing import cast
@@ -26,11 +27,10 @@ from .contracts import (
 )
 from .research_dataset import PreparedResearchDataset, ResearchDatasetError
 from .research_fold_metrics import mean_scalar_metrics
-from .twse_research_fold_preparation import prepare_fold
-from .twse_research_model_evaluation import (
-    direction_metrics,
-    quantile_metrics,
-    rank_metrics,
+from .twse_research_fold_runner import evaluate_research_fold
+from .twse_research_prediction_publisher import (
+    FoldResearchPredictionBatch,
+    TwseResearchPredictionPublisher,
 )
 
 
@@ -52,6 +52,12 @@ class TwsePriceResearchRunner:
                 batch,
                 context,
                 reason_codes=("TWSE_RESEARCH_DATASET_INVALID",),
+            )
+        if batch.source_hash is None:
+            return self._result(
+                batch,
+                context,
+                reason_codes=("INPUT_ARTIFACT_HASH_MISSING",),
             )
         observations = dataset.observations()
         holdout_dates = (
@@ -99,50 +105,11 @@ class TwsePriceResearchRunner:
             )
 
         reports: list[dict[str, object]] = []
+        fold_prediction_batches: list[FoldResearchPredictionBatch] = []
         for fold in folds:
-            matrices = prepare_fold(
-                development,
-                train_indices=fold.train_indices,
-                calibration_indices=fold.calibration_indices,
-                test_indices=fold.test_indices,
-                fold_number=fold.fold_number,
-            )
-            reports.append(
-                {
-                    "fold_number": fold.fold_number,
-                    "train_dates": [value.isoformat() for value in fold.train_dates],
-                    "calibration_dates": [
-                        value.isoformat() for value in fold.calibration_dates
-                    ],
-                    "test_dates": [value.isoformat() for value in fold.test_dates],
-                    "train_rows": len(fold.train_indices),
-                    "calibration_rows": len(fold.calibration_indices),
-                    "test_rows": len(fold.test_indices),
-                    "ranking": rank_metrics(
-                        frame=development.frame,
-                        train_indices=fold.train_indices,
-                        test_indices=fold.test_indices,
-                        matrices=matrices,
-                        context=context,
-                    ),
-                    "direction": direction_metrics(
-                        frame=development.frame,
-                        train_indices=fold.train_indices,
-                        calibration_indices=fold.calibration_indices,
-                        test_indices=fold.test_indices,
-                        matrices=matrices,
-                        context=context,
-                    ),
-                    "quantile": quantile_metrics(
-                        frame=development.frame,
-                        train_indices=fold.train_indices,
-                        calibration_indices=fold.calibration_indices,
-                        test_indices=fold.test_indices,
-                        matrices=matrices,
-                        context=context,
-                    ),
-                }
-            )
+            evaluated = evaluate_research_fold(development, fold, context)
+            reports.append(evaluated.report)
+            fold_prediction_batches.append(evaluated.prediction_batch)
 
         ranking_primary: list[Mapping[str, object]] = []
         for report in reports:
@@ -164,6 +131,55 @@ class TwsePriceResearchRunner:
             "locked_holdout_rows": len(holdout_indices),
             "locked_holdout_reason": "FROZEN_UNTIL_RESEARCH_DESIGN_IS_LOCKED",
         }
+        model_version = "twse-price-research-h5-v1"
+        prediction_path = self._prediction_path(batch, context)
+        published = TwseResearchPredictionPublisher().publish(
+            prediction_path,
+            fold_batches=fold_prediction_batches,
+            horizon=context.horizon,
+            model_version=model_version,
+            feature_schema_hash=TWSE_PRICE_VOLUME_FEATURE_SCHEMA_HASH,
+            input_artifact_sha256=batch.source_hash,
+            provenance=dataset.provenance,
+            model_metadata={
+                "rank_model": "LightGBM LGBMRanker lambdarank",
+                "direction_model": "LightGBM multiclass",
+                "quantile_model": "LightGBM quantile 0.10/0.50/0.90",
+                "random_seed": context.config.rank.seed,
+                "library_versions": {
+                    "lightgbm": version("lightgbm"),
+                    "scikit-learn": version("scikit-learn"),
+                },
+            },
+            cost_metadata={
+                "asset_type": context.config.cost.asset_type,
+                "commission_rate": context.config.cost.commission_rate,
+                "commission_discount": context.config.cost.commission_discount,
+                "minimum_fee": context.config.cost.minimum_fee,
+                "sell_tax_rate": context.config.cost.sell_tax_rate,
+                "estimated_order_notional_ntd": (
+                    context.config.cost.estimated_order_notional_ntd
+                ),
+                "spread_model": context.config.cost.spread_model,
+                "slippage_scenario": context.config.cost.slippage_scenario,
+                "market_impact_parameter": (
+                    context.config.cost.market_impact_parameter
+                ),
+                "max_adv_participation": (context.config.cost.max_adv_participation),
+            },
+            validation=metrics,
+            reason_codes=(
+                "TWSE_PRICE_ONLY_RESEARCH",
+                "LATEST_COMPLETED_OOS_TEST_CROSS_SECTION",
+                "LOCKED_HOLDOUT_NOT_EXECUTED",
+                "FORMAL_DECISION_POLICY_NOT_EXECUTED",
+            ),
+        )
+        metrics["research_prediction_snapshot_sha256"] = published.artifact_sha256
+        metrics["research_prediction_as_of_date"] = (
+            published.snapshot.as_of_date.isoformat()
+        )
+        metrics["research_prediction_count"] = len(published.snapshot.predictions)
         report_path = self._write_report(batch, context, dataset, metrics)
         return self._result(
             batch,
@@ -173,10 +189,11 @@ class TwsePriceResearchRunner:
                 "LOCKED_HOLDOUT_NOT_EXECUTED",
             ),
             metrics=metrics,
-            artifacts={"walk_forward_report": report_path.resolve().as_uri()},
-            training_end_date=max(
-                development.frame.iloc[list(folds[-1].test_indices)]["decision_date"]
-            ),
+            artifacts={
+                "walk_forward_report": report_path.resolve().as_uri(),
+                "research_prediction_snapshot": prediction_path.resolve().as_uri(),
+            },
+            training_end_date=published.snapshot.training_end_date,
         )
 
     def backtest(
@@ -224,6 +241,16 @@ class TwsePriceResearchRunner:
             encoding="utf-8",
         )
         return target
+
+    @staticmethod
+    def _prediction_path(batch: PipelineBatch, context: PipelineContext) -> Path:
+        source_hash = batch.source_hash or "unhashed"
+        return (
+            context.artifact_root
+            / f"horizon_{context.horizon}"
+            / "research"
+            / f"twse-oos-predictions-{source_hash[:12]}.json"
+        )
 
     @staticmethod
     def _result(

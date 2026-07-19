@@ -10,6 +10,39 @@ import type {
   StockPredictionRow,
 } from "./types.ts";
 
+const RESEARCH_WARNING_REASON_CODES = [
+  "RESEARCH_ONLY_NO_FORMAL_DECISION_POLICY",
+  "RESEARCH_DATA_QUALITY_WARN",
+] as const;
+
+export interface PublicDataQuality {
+  status: "PASS" | "WARN" | "HARD_FAIL";
+  hardFail: boolean;
+}
+
+export function resolvePublicDataQuality(
+  run: PredictionRunRow,
+  prediction: StockPredictionRow,
+  audit: DataQualityAuditRow | undefined,
+): PublicDataQuality {
+  if (audit) {
+    if (audit.hard_fail) return { status: "HARD_FAIL", hardFail: true };
+    return audit.quality_status === "FAIL"
+      ? { status: "WARN", hardFail: false }
+      : { status: "PASS", hardFail: false };
+  }
+
+  const researchWarning = run.system_validation_status === "RESEARCH_ONLY" &&
+    prediction.data_quality_status === "FAIL" &&
+    RESEARCH_WARNING_REASON_CODES.every((reason) =>
+      prediction.reason_codes.includes(reason)
+    );
+  if (researchWarning) return { status: "WARN", hardFail: false };
+  return prediction.data_quality_status === "FAIL"
+    ? { status: "HARD_FAIL", hardFail: true }
+    : { status: "PASS", hardFail: false };
+}
+
 function numberValue(value: JsonValue): number | null {
   if (value === null || value === "") return null;
   const parsed = Number(value);
@@ -59,6 +92,7 @@ export function mapPrediction(
   audit: DataQualityAuditRow | undefined,
   gates: DecisionGateRow[],
 ): JsonRecord {
+  const quality = resolvePublicDataQuality(run, prediction, audit);
   return {
     as_of_date: run.as_of_date,
     decision_at: run.decision_at,
@@ -92,10 +126,8 @@ export function mapPrediction(
     estimated_round_trip_cost: numberValue(
       prediction.estimated_round_trip_cost,
     ),
-    data_quality_status: audit?.quality_status ??
-      prediction.data_quality_status,
-    data_quality_hard_fail: audit?.hard_fail ??
-      prediction.data_quality_status === "FAIL",
+    data_quality_status: quality.status,
+    data_quality_hard_fail: quality.hardFail,
     decision: prediction.decision,
     reason_codes: [
       ...new Set([

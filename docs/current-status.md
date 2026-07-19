@@ -106,7 +106,9 @@ GitHub Actions run `29678861850`：
 
 - Workflow 技術狀態為 success。
 - 本輪 archived objects／rows 為 0；不得把 workflow success 解讀為資料回補成功。
-- `adjusted_bars` 因 FinMind free tier 回傳 HTTP 400，未取得可封存資料。
+- `adjusted_bars` 因 FinMind free tier 回傳 HTTP 400，未取得可封存資料。Fugle capability
+  probe 已確認 `adjusted=true` 可取得不同於 raw 的序列；正式 backfill 仍須先部署獨立
+  migration 並明確開啟兩道 feature gate，目前 Production manifest 仍為 0。
 - 對 unavailable dataset 的 defer／分類程式修正已在分支完成，但尚未正式發布。
 - 法人資料與融資券資料尚待修正發布後重新執行及驗證。
 

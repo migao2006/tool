@@ -38,6 +38,9 @@ Python：
 CLI 為 `2.109.1`。Biome 已全域安裝，但專案尚無 `biome.json`；
 pre-commit 也尚無專案設定檔。這兩者不得描述為已完整接入專案。
 
+Docker 工具狀態：`AVAILABLE`。可直接使用 `docker` 與 `docker compose`；
+本次已用 `docker info` 確認 CLI 可連線至 Docker Desktop Engine。
+
 ### Docker 使用原則
 
 - 涉及 Supabase schema、migration 或 rollback 時，優先使用 Docker Desktop

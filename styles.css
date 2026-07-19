@@ -751,7 +751,7 @@ h2 {
   display: grid;
   place-items: center;
   overflow: hidden;
-  font-size: 1.35rem;
+  font-size: 22px;
   line-height: 1;
 }
 

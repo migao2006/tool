@@ -11,6 +11,7 @@ body:not([data-auth-state="authenticated"]) [data-auth-protected] {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 14px;
   padding: 13px 14px;
   border: 0.5px solid var(--separator-soft);
@@ -18,17 +19,17 @@ body:not([data-auth-state="authenticated"]) [data-auth-protected] {
   background: rgba(28, 28, 30, 0.91);
 }
 
-.auth-entry-copy { min-width: 0; }
+.auth-entry-copy { min-width: 0; flex: 1 1 8rem; }
 .auth-entry-copy strong,
 .auth-entry-copy small { display: block; }
 .auth-entry-copy strong { font-size: 0.9rem; }
 .auth-entry-copy small {
   margin-top: 3px;
-  overflow: hidden;
+  overflow: visible;
   color: var(--muted);
   font-size: 0.7rem;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  text-overflow: clip;
+  white-space: normal;
 }
 
 .auth-account-button,
@@ -48,6 +49,8 @@ body:not([data-auth-state="authenticated"]) [data-auth-protected] {
   display: inline-flex;
   align-items: center;
   gap: 7px;
+  min-width: min(100%, 5rem);
+  margin-left: auto;
   padding: 7px 13px;
   border: 0.5px solid var(--separator);
   border-radius: 999px;
@@ -55,6 +58,8 @@ body:not([data-auth-state="authenticated"]) [data-auth-protected] {
   color: var(--text);
   font-size: 0.78rem;
   font-weight: 650;
+  justify-content: center;
+  white-space: nowrap;
 }
 
 .auth-account-icon,

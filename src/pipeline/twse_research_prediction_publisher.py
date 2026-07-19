@@ -82,7 +82,17 @@ def build_fold_research_predictions(
     if fold_number < 0 or not train_indices:
         raise ValueError("non-negative fold_number and train_indices are required")
 
-    rows = frame.iloc[positions]
+    source_columns = [
+        "symbol",
+        "decision_date",
+        "decision_at",
+        "available_at",
+        "horizon",
+        "round_trip_cost_rate",
+        "data_quality_status",
+        "reason_codes",
+    ]
+    rows = frame[source_columns].iloc[positions]
     rank_inputs = [
         {
             "position": offset,
@@ -135,7 +145,7 @@ def build_fold_research_predictions(
                 reason_codes=tuple(str(value) for value in reasons),
             )
         )
-    training_end_date = max(frame.iloc[list(train_indices)]["decision_date"])
+    training_end_date = max(frame["decision_date"].iloc[list(train_indices)])
     return FoldResearchPredictionBatch(
         fold_number=fold_number,
         training_end_date=training_end_date,

@@ -1,7 +1,7 @@
 .contract-meta,
 .decision-counts {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 8rem), 1fr));
   gap: 8px;
 }
 
@@ -9,6 +9,18 @@
 .date-badge small,
 .date-badge > span { display: block; }
 .date-badge > span { margin-top: 2px; color: var(--text); font-weight: 620; }
+.app-page > .page-heading:not(.action-heading) { flex-wrap: wrap; }
+.app-page > .page-heading:not(.action-heading) > :first-child {
+  min-width: 0;
+  flex: 1 1 10rem;
+}
+.page-heading > .date-badge {
+  max-width: 100%;
+  flex: 1 1 8rem;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+}
 
 .candidate-filters { padding: 0; overflow: hidden; }
 .candidate-filters summary {
@@ -29,6 +41,9 @@
 .candidate-filters summary small { margin-left: auto; }
 .candidate-filter-content { padding: 0 14px 14px; border-top: 0.5px solid var(--separator-soft); }
 .candidate-filter-content > .segmented { margin-top: 14px; }
+.segmented.watch-filters {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 4.5rem), 1fr));
+}
 
 .candidate-list-pagination {
   display: flex;
@@ -70,11 +85,12 @@
   display: block;
   margin-top: 3px;
   font-size: 0.88rem;
+  overflow-wrap: anywhere;
 }
 
 .market-probabilities {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 5rem), 1fr));
   gap: 7px;
   margin-top: 14px;
 }
@@ -86,7 +102,10 @@
   text-align: center;
 }
 
-.decision-counts { grid-template-columns: repeat(4, 1fr); margin-top: 12px; }
+.decision-counts {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 4rem), 1fr));
+  margin-top: 12px;
+}
 
 .decision-hero {
   padding: 16px;
@@ -95,10 +114,11 @@
   background: var(--surface);
 }
 
-.decision-hero > div { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.decision-hero > div { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
 .decision-hero > div > * { min-width: 0; }
 .decision-hero > div + div { margin-top: 8px; }
 .decision-hero span { color: var(--muted); font-size: 0.7rem; }
+.decision-hero strong { max-width: 100%; overflow-wrap: anywhere; word-break: break-word; }
 .decision-hero code { max-width: 100%; color: var(--amber); font-size: 0.67rem; overflow-wrap: anywhere; word-break: break-word; }
 .decision-hero dl { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; margin: 14px 0 0; }
 .decision-hero dl div { padding: 9px; border-radius: 10px; background: var(--surface-2); }
@@ -120,7 +140,7 @@
 .detail-section-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 10px; }
 .detail-section-grid > .panel { min-width: 0; }
 .detail-wide { grid-column: 1 / -1; }
-.quantile-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; margin: 13px 0 0; }
+.quantile-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 5rem), 1fr)); gap: 7px; margin: 13px 0 0; }
 .quantile-fields div { min-width: 0; min-height: 68px; display: flex; flex-direction: column; justify-content: center; padding: 10px; border-radius: 11px; background: var(--surface-2); }
 .quantile-fields small { overflow-wrap: anywhere; word-break: break-word; }
 .quantile-fields dd { margin-top: 3px; text-align: left; }
@@ -132,9 +152,16 @@
 .audit-details[open] summary::after { content: "−"; }
 .audit-list { padding-bottom: 12px; border-top: 0.5px solid var(--separator-soft); }
 
+.candidate-list-panel > .panel-heading { flex-wrap: wrap; align-items: flex-start; }
+.candidate-list-panel > .panel-heading > div { min-width: 0; flex: 1 1 7rem; }
+.candidate-list-panel > .panel-heading > .text-button {
+  max-width: 100%;
+  flex: 0 1 auto;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
 @media (max-width: 600px) {
-  .contract-meta,
-  .decision-counts { grid-template-columns: repeat(2, 1fr); }
   .detail-section-grid { grid-template-columns: minmax(0, 1fr); }
   .detail-wide { grid-column: auto; }
   .wide-filter-grid { grid-template-columns: 1fr; }
@@ -148,9 +175,4 @@
   .inline-fields { grid-template-columns: 1fr; }
   .watch-filters { display: grid; overflow: visible; }
   .watch-filters button { min-width: 0; }
-  .date-badge { max-width: 48%; white-space: nowrap; }
-}
-
-@media (max-width: 360px) {
-  .quantile-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }

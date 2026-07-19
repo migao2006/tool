@@ -98,6 +98,30 @@ async function verifyDialogViewport(page) {
   await verifyMobileViewport(page, { includeNavigation: false });
 }
 
+async function verifyLastContentClearsNavigation(page) {
+  await page.evaluate(() => window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "auto" }));
+  await expect.poll(() => page.evaluate(() => Math.round(
+    window.scrollY + window.innerHeight - document.documentElement.scrollHeight,
+  ))).toBe(0);
+  const layout = await page.evaluate(() => {
+    const activePage = document.querySelector(".app-page.is-active");
+    const navigation = document.querySelector(".bottom-nav");
+    const shell = document.querySelector(".app-shell");
+    const pageBox = activePage?.getBoundingClientRect();
+    const navigationBox = navigation?.getBoundingClientRect();
+    return {
+      navigationHeight: navigationBox?.height ?? null,
+      navigationTop: navigationBox?.top ?? null,
+      pageBottom: pageBox?.bottom ?? null,
+      shellPaddingBottom: shell ? Number.parseFloat(getComputedStyle(shell).paddingBottom) : null,
+    };
+  });
+  expect(layout.pageBottom).not.toBeNull();
+  expect(layout.navigationTop).not.toBeNull();
+  expect(layout.pageBottom).toBeLessThanOrEqual(layout.navigationTop + 1);
+  expect(layout.shellPaddingBottom).toBeGreaterThanOrEqual(layout.navigationHeight + 12);
+}
+
 async function captureViewport(page, testInfo, name, options) {
   await verifyMobileViewport(page, options);
   const auditDirectory = join(process.cwd(), "artifacts", "mobile-ui-audit");
@@ -299,6 +323,68 @@ test("320px 放大至 150% 時個股詳情不會被裁切", async ({ page }, tes
   await captureViewport(page, testInfo, "12-stock-detail-large-text-150");
   await page.locator(".quantile-fields").scrollIntoViewIfNeeded();
   await captureViewport(page, testInfo, "13-stock-detail-quantiles-large-text-150");
+});
+
+test("320px 放大至 200% 時四個頁面與登入仍可操作", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 320, height: 568 });
+  await page.goto("/?api_mode=stale-oos-research", { waitUntil: "domcontentloaded" });
+  await expect(page.locator("body")).toHaveAttribute("data-ui-state", "research_only");
+  await page.evaluate(() => {
+    document.documentElement.style.fontSize = "32px";
+    document.documentElement.style.scrollBehavior = "auto";
+  });
+
+  const navigation = page.getByRole("navigation", { name: "主要導覽" });
+  await captureViewport(page, testInfo, "14-overview-large-text-200");
+  await page.locator("[data-home-data-status]").evaluate((panel) => {
+    panel.scrollIntoView({ block: "start", behavior: "auto" });
+  });
+  await captureViewport(page, testInfo, "14b-home-data-large-text-200");
+  await page.evaluate(() => window.scrollTo({ top: 0, behavior: "auto" }));
+
+  await navigation.getByRole("button", { name: "5 日候選" }).click();
+  await expect(page.getByRole("heading", { name: "5 日候選股" })).toBeVisible();
+  await captureViewport(page, testInfo, "15-candidates-large-text-200");
+
+  await page.locator('[data-candidate-list] .candidate-card[data-symbol="OOS1"]')
+    .getByRole("button", { name: "查看決策詳情" })
+    .click();
+  await expect(page.getByRole("heading", { name: /OOS1/u })).toBeVisible();
+  const decisionLayout = await page.locator('[data-stock-field="decision"]').evaluate((decision) => {
+    const value = decision.getBoundingClientRect();
+    const container = decision.closest(".decision-hero")?.getBoundingClientRect();
+    return {
+      clientWidth: decision.clientWidth,
+      containerRight: container?.right ?? null,
+      right: value.right,
+      scrollWidth: decision.scrollWidth,
+    };
+  });
+  expect(decisionLayout.containerRight).not.toBeNull();
+  expect(decisionLayout.scrollWidth).toBeLessThanOrEqual(decisionLayout.clientWidth + 1);
+  expect(decisionLayout.right).toBeLessThanOrEqual(decisionLayout.containerRight + 1);
+  await captureViewport(page, testInfo, "16-stock-detail-large-text-200");
+  await page.locator(".quantile-fields").scrollIntoViewIfNeeded();
+  await captureViewport(page, testInfo, "17-stock-detail-quantiles-large-text-200");
+
+  await page.evaluate(() => { document.body.dataset.authState = "authenticated"; });
+  await navigation.getByRole("button", { name: "自選" }).click();
+  await expect(page.getByRole("heading", { name: "自選股" })).toBeVisible();
+  await captureViewport(page, testInfo, "18-watchlist-large-text-200");
+  const watchlistIcon = await page.locator(".tab-icon-watchlist").evaluate((icon) => ({
+    clientWidth: icon.clientWidth,
+    scrollWidth: icon.scrollWidth,
+  }));
+  expect(watchlistIcon.scrollWidth).toBeLessThanOrEqual(watchlistIcon.clientWidth + 1);
+  await verifyLastContentClearsNavigation(page);
+
+  await page.evaluate(() => { document.body.dataset.authState = "anonymous"; });
+  const authOpener = page.getByRole("button", { name: "開啟登入" });
+  await authOpener.click();
+  await verifyDialogViewport(page);
+  await captureViewport(page, testInfo, "19-signin-large-text-200", {
+    includeNavigation: false,
+  });
 });
 
 test("320px 長文字不會造成頁面水平溢位", async ({ page }, testInfo) => {

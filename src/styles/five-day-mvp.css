@@ -8,7 +8,8 @@
   text-transform: uppercase;
 }
 
-.action-heading { align-items: flex-end; }
+.action-heading { align-items: flex-end; flex-wrap: wrap; }
+.action-heading > :first-child { min-width: 0; flex: 1 1 12rem; }
 
 .icon-text-button,
 .drawer-close {

@@ -48,8 +48,9 @@ def _parser() -> argparse.ArgumentParser:
         "--publish-supabase",
         action="store_true",
         help=(
-            "Publish to development/staging only; also requires the explicit "
-            "RESEARCH_PREDICTION_SUPABASE_PUBLISH_ENABLED feature gate."
+            "Publish a conservative RESEARCH_ONLY snapshot; requires the explicit "
+            "RESEARCH_PREDICTION_SUPABASE_PUBLISH_ENABLED feature gate. Production "
+            "also requires RESEARCH_PREDICTION_PRODUCTION_PUBLISH_ENABLED."
         ),
     )
     return parser
@@ -113,6 +114,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 publish_enabled=(
                     os.environ.get(
                         "RESEARCH_PREDICTION_SUPABASE_PUBLISH_ENABLED", ""
+                    ).lower()
+                    == "true"
+                ),
+                production_publish_enabled=(
+                    os.environ.get(
+                        "RESEARCH_PREDICTION_PRODUCTION_PUBLISH_ENABLED", ""
                     ).lower()
                     == "true"
                 ),

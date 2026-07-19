@@ -1,0 +1,81 @@
+name: Publish TWSE OOS research snapshot
+
+on:
+  workflow_dispatch:
+    inputs:
+      prepared_run_id:
+        description: Successful prepared research dataset workflow run ID
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: twse-oos-research-publish
+  cancel-in-progress: false
+
+jobs:
+  train-and-publish:
+    if: ${{ vars.TWSE_RESEARCH_PREDICTION_ENABLED == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    environment: production
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      ALPHA_LENS_TARGET_ENVIRONMENT: production
+      RESEARCH_PREDICTION_SUPABASE_PUBLISH_ENABLED: "true"
+      RESEARCH_PREDICTION_PRODUCTION_PUBLISH_ENABLED: "true"
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install uv with dependency caching
+        uses: astral-sh/setup-uv@v8.3.2
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Synchronize locked environment
+        run: uv sync --frozen
+
+      - name: Require main and explicit Production credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/main"
+          test -n "$SUPABASE_URL"
+          test -n "$SUPABASE_SERVICE_ROLE_KEY"
+
+      - name: Download verified prepared research dataset
+        uses: actions/download-artifact@v7
+        with:
+          name: twse-prepared-research-${{ inputs.prepared_run_id }}
+          path: inputs/prepared
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.prepared_run_id }}
+
+      - name: Train OOS models and publish conservative research rows
+        run: >-
+          uv run python -m scripts.publish_twse_research_snapshot
+          --input inputs/prepared/twse-prepared-research.parquet
+          --artifact-root artifacts
+          --report twse-research-publish-report.json
+          --horizon 5
+          --publish-supabase
+
+      - name: Preserve OOS research artifacts and publish audit
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: twse-oos-research-${{ github.run_id }}
+          path: |
+            artifacts/**/*.json
+            twse-research-publish-report.json
+          if-no-files-found: error
+          retention-days: 30

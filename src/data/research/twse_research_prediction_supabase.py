@@ -54,13 +54,18 @@ class TwseResearchPredictionSupabasePublisher:
         *,
         target_environment: str,
         publish_enabled: bool,
+        production_publish_enabled: bool = False,
     ) -> None:
         environment = target_environment.strip().lower()
         if not publish_enabled:
             raise ValueError("RESEARCH_PREDICTION_SUPABASE_PUBLISH_ENABLED is false")
-        if environment not in {"development", "staging"}:
+        if environment not in {"development", "staging", "production"}:
             raise ValueError(
-                "research prediction publishing is limited to development/staging"
+                "research prediction publishing requires a recognized environment"
+            )
+        if environment == "production" and not production_publish_enabled:
+            raise ValueError(
+                "RESEARCH_PREDICTION_PRODUCTION_PUBLISH_ENABLED is false"
             )
         self.writer = writer
         self.target_environment = environment

@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date, datetime
 from math import isfinite
+from numbers import Real
 
 from .twse_price_volume_schema import (
     TWSE_PRICE_VOLUME_AVAILABILITY_MODES,
@@ -118,6 +119,7 @@ class TwsePriceVolumeFeatureRow:
     feature_schema_hash: str
     price_basis: str
     availability_mode: str
+    decision_close_price: float | None
     feature_values: Mapping[str, float | None]
     feature_audits: Mapping[str, FeatureValueAudit]
     latest_available_at: datetime | None
@@ -146,6 +148,15 @@ class TwsePriceVolumeFeatureRow:
             raise ValueError("unexpected feature price basis")
         if self.availability_mode not in TWSE_PRICE_VOLUME_AVAILABILITY_MODES:
             raise ValueError("unsupported row availability mode")
+        if self.decision_close_price is not None:
+            close = self.decision_close_price
+            if (
+                isinstance(close, bool)
+                or not isinstance(close, Real)
+                or not isfinite(float(close))
+                or close <= 0
+            ):
+                raise ValueError("decision_close_price must be finite and positive")
         if tuple(self.feature_values) != TWSE_PRICE_VOLUME_FEATURE_NAMES:
             raise ValueError("feature_values do not match the frozen schema order")
         if tuple(self.feature_audits) != TWSE_PRICE_VOLUME_FEATURE_NAMES:
@@ -165,6 +176,8 @@ class TwsePriceVolumeFeatureRow:
         expected_hard_fail = bool(self.hard_fail_reason_codes or expected_missing)
         if self.hard_fail != expected_hard_fail:
             raise ValueError("hard_fail does not match feature audit results")
+        if not expected_hard_fail and self.decision_close_price is None:
+            raise ValueError("eligible feature rows require decision_close_price")
         if self.latest_available_at is not None:
             _require_aware(self.latest_available_at, "latest_available_at")
         if self.latest_observed_available_at is not None:

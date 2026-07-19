@@ -23,6 +23,7 @@ class FoldMatrices:
     train: Any
     calibration: Any
     test: Any
+    imputer: CrossSectionalMedianImputer
 
 
 def frame_rows(
@@ -123,4 +124,5 @@ def prepare_fold(
         train=transform(train_positions, train_features),
         calibration=transform(calibration_positions),
         test=transform(test_positions),
+        imputer=imputer,
     )

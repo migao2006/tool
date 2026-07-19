@@ -6,17 +6,18 @@ from __future__ import annotations
 # pyright: reportUnknownArgumentType=false
 
 from collections.abc import Mapping, Sequence
-from hashlib import sha256
-import json
+from decimal import Decimal, InvalidOperation
 import re
 from typing import cast, final
 
-from src.core.research_prediction_contract import (
-    RESEARCH_PREDICTION_CONTRACT_VERSION,
-)
 from src.data.research.twse_research_prediction_supabase_contracts import (
     ResearchSupabasePublishResult,
     SupabaseResearchWriter,
+)
+from src.data.research.twse_research_prediction_supabase_payload import (
+    ParsedResearchSnapshot,
+    parse_research_snapshot,
+    resolve_research_snapshot,
 )
 
 
@@ -27,21 +28,67 @@ def _required(payload: Mapping[str, object], name: str) -> object:
     return value
 
 
-def _verify_snapshot_hash(payload: Mapping[str, object]) -> str:
-    expected = str(_required(payload, "snapshot_sha256"))
-    content = dict(payload)
-    _ = content.pop("snapshot_sha256", None)
-    actual = sha256(
-        json.dumps(
-            content,
-            ensure_ascii=False,
-            separators=(",", ":"),
-            sort_keys=True,
-        ).encode("utf-8")
-    ).hexdigest()
-    if expected != actual:
-        raise ValueError("research prediction snapshot hash mismatch")
-    return actual
+_COST_PROFILE_CORE_FIELDS = (
+    "cost_profile_version",
+    "asset_type",
+    "commission_rate",
+    "commission_discount",
+    "minimum_fee",
+    "sell_tax_rate",
+    "estimated_order_notional_ntd",
+    "spread_model",
+    "slippage_scenario",
+    "market_impact_parameter",
+    "max_adv_participation",
+)
+_COST_PROFILE_NUMERIC_FIELDS = frozenset(
+    {
+        "commission_rate",
+        "commission_discount",
+        "minimum_fee",
+        "sell_tax_rate",
+        "estimated_order_notional_ntd",
+        "market_impact_parameter",
+        "max_adv_participation",
+    }
+)
+
+
+def _decimal(value: object, field_name: str) -> Decimal:
+    if isinstance(value, bool):
+        raise ValueError(f"cost profile {field_name} must be numeric")
+    try:
+        parsed = Decimal(str(value))
+    except (InvalidOperation, ValueError) as error:
+        raise ValueError(f"cost profile {field_name} must be numeric") from error
+    if not parsed.is_finite():
+        raise ValueError(f"cost profile {field_name} must be finite")
+    return parsed
+
+
+def _cost_profile_mismatches(
+    expected: Mapping[str, object], actual: Mapping[str, object]
+) -> tuple[str, ...]:
+    mismatches: list[str] = []
+    for field_name in _COST_PROFILE_CORE_FIELDS:
+        expected_value = expected[field_name]
+        actual_value = actual.get(field_name)
+        if field_name in _COST_PROFILE_NUMERIC_FIELDS:
+            try:
+                values_match = _decimal(expected_value, field_name) == _decimal(
+                    actual_value, field_name
+                )
+            except ValueError:
+                values_match = False
+        else:
+            values_match = (
+                isinstance(expected_value, str)
+                and isinstance(actual_value, str)
+                and actual_value == expected_value
+            )
+        if not values_match:
+            mismatches.append(field_name)
+    return tuple(mismatches)
 
 
 @final
@@ -72,57 +119,23 @@ class TwseResearchPredictionSupabasePublisher:
         self,
         payload: Mapping[str, object],
     ) -> ResearchSupabasePublishResult:
-        snapshot_hash = _verify_snapshot_hash(payload)
-        if payload.get("artifact_contract_version") != (
-            RESEARCH_PREDICTION_CONTRACT_VERSION
-        ):
-            raise ValueError("unsupported research prediction artifact version")
-        if payload.get("system_status") != "RESEARCH_ONLY":
-            raise ValueError("only RESEARCH_ONLY snapshots can use this publisher")
-        if payload.get("horizon") != 5:
-            raise ValueError("UNSUPPORTED_HORIZON")
-        for name in ("model_metadata", "cost_metadata", "validation"):
-            if not isinstance(payload.get(name), Mapping):
-                raise ValueError(f"research prediction {name} must be an object")
-        raw_predictions_value = payload.get("predictions")
-        if not isinstance(raw_predictions_value, list) or not raw_predictions_value:
-            raise ValueError("research prediction artifact has no predictions")
-        raw_predictions = raw_predictions_value
-        predictions = [
-            cast(Mapping[str, object], value)
-            for value in raw_predictions
-            if isinstance(value, Mapping)
-        ]
-        if len(predictions) != len(raw_predictions):
-            raise ValueError("research prediction rows must be JSON objects")
-        snapshot_date = _required(payload, "as_of_date")
-        snapshot_decision_at = _required(payload, "decision_at")
-        for prediction in predictions:
-            if (
-                prediction.get("horizon") != 5
-                or prediction.get("market") != "TWSE"
-                or prediction.get("evaluation_scope") != "OUT_OF_SAMPLE_TEST"
-                or prediction.get("decision_date") != snapshot_date
-                or prediction.get("decision_at") != snapshot_decision_at
-                or prediction.get("data_quality_status") not in {"PASS", "WARN"}
-            ):
-                raise ValueError("research prediction row does not match the snapshot")
-
-        security_ids = self._security_ids(predictions)
+        parsed = parse_research_snapshot(payload)
+        security_ids = self._security_ids(parsed.predictions)
+        resolved = resolve_research_snapshot(parsed, security_ids)
         self._ensure_cost_profile(payload)
-        run_id = self._upsert_run(payload, predictions, snapshot_hash)
-        rows = [
-            self._stock_row(run_id, prediction, security_ids)
-            for prediction in predictions
-        ]
-        _ = self.writer.upsert(
-            "stock_predictions",
-            rows,
-            on_conflict="prediction_run_id,security_id",
+        response = self.writer.rpc(
+            "publish_research_prediction_snapshot",
+            {
+                "p_run": dict(resolved.run),
+                "p_stock_predictions": [
+                    dict(value) for value in resolved.stock_predictions
+                ],
+            },
         )
+        run_id, prediction_count = self._parse_rpc_result(response, parsed)
         return ResearchSupabasePublishResult(
             prediction_run_id=run_id,
-            prediction_count=len(rows),
+            prediction_count=prediction_count,
             target_environment=self.target_environment,
         )
 
@@ -181,109 +194,55 @@ class TwseResearchPredictionSupabasePublisher:
             "max_adv_participation",
         )
         row = {name: _required(metadata, name) for name in fields}
-        row["cost_profile_version"] = _required(payload, "cost_profile_version")
-        row["parameters"] = {
-            "research_snapshot_sha256": _required(payload, "snapshot_sha256")
-        }
+        version = str(_required(payload, "cost_profile_version"))
+        if not version.strip():
+            raise ValueError("cost_profile_version must not be blank")
+        row["cost_profile_version"] = version
+        # Snapshot identity belongs on prediction_runs. New profiles keep the
+        # generic legacy metadata object empty; cost identity is verified from the
+        # typed execution columns above.
+        row["parameters"] = {}
         _ = self.writer.upsert(
             "cost_profiles",
             [row],
             on_conflict="cost_profile_version",
             preserve_existing=True,
         )
-
-    def _upsert_run(
-        self,
-        payload: Mapping[str, object],
-        predictions: Sequence[Mapping[str, object]],
-        snapshot_hash: str,
-    ) -> int:
-        latest_available_at = max(
-            str(_required(value, "latest_available_at")) for value in predictions
+        stored = self.writer.select_rows(
+            "cost_profiles",
+            select=",".join(_COST_PROFILE_CORE_FIELDS),
+            filters={"cost_profile_version": f"eq.{version}"},
+            limit=2,
         )
-        model_version = str(_required(payload, "model_version"))
-        returned = self.writer.upsert(
-            "prediction_runs",
-            [
-                {
-                    "as_of_date": _required(payload, "as_of_date"),
-                    "decision_at": _required(payload, "decision_at"),
-                    "horizon": 5,
-                    "model_bundle_version": (
-                        f"{model_version}:oos-research:{snapshot_hash[:12]}"
-                    ),
-                    "feature_schema_hash": _required(payload, "feature_schema_hash"),
-                    "benchmark_versions": {
-                        "TWSE": _required(payload, "benchmark_version")
-                    },
-                    "cost_profile_version": _required(payload, "cost_profile_version"),
-                    "training_end_date": _required(payload, "training_end_date"),
-                    "system_validation_status": "RESEARCH_ONLY",
-                    "source_dates": {
-                        "prepared_dataset": _required(payload, "as_of_date")
-                    },
-                    "latest_available_at": latest_available_at,
-                    "candidate_count": 0,
-                    "watch_count": 0,
-                    "no_trade_count": len(predictions),
-                    # This publisher accepts PASS/WARN source rows only. WARN remains
-                    # auditable through reason_codes but is not a hard failure.
-                    "hard_fail_count": 0,
-                }
-            ],
-            on_conflict="decision_at,horizon,model_bundle_version",
-            select="prediction_run_id",
-            return_rows=True,
-        )
-        if len(returned) != 1 or "prediction_run_id" not in returned[0]:
-            raise ValueError("Supabase did not return one prediction_run_id")
-        return int(cast(int | str, returned[0]["prediction_run_id"]))
+        if len(stored) != 1:
+            raise ValueError(
+                "cost profile insert-or-read verification did not return one row"
+            )
+        mismatches = _cost_profile_mismatches(row, stored[0])
+        if mismatches:
+            raise ValueError(
+                "cost profile version has different immutable parameters: "
+                + ", ".join(mismatches)
+            )
 
     @staticmethod
-    def _stock_row(
-        run_id: int,
-        prediction: Mapping[str, object],
-        security_ids: Mapping[str, int],
-    ) -> dict[str, object]:
-        symbol = str(_required(prediction, "symbol"))
-        original_quality = str(_required(prediction, "data_quality_status"))
-        reasons = prediction.get("reason_codes")
-        if not isinstance(reasons, list):
-            raise ValueError("research prediction reason_codes must be an array")
-        reason_codes = [str(value) for value in cast(list[object], reasons)]
-        reason_codes.append("RESEARCH_ONLY_NO_FORMAL_DECISION_POLICY")
-        if original_quality == "WARN":
-            reason_codes.append("RESEARCH_DATA_QUALITY_WARN")
-        return {
-            "prediction_run_id": run_id,
-            "security_id": security_ids[symbol],
-            "market": "TWSE",
-            "model_raw_score": _required(prediction, "model_raw_score"),
-            "rank_score": _required(prediction, "rank_score"),
-            "global_rank": _required(prediction, "global_rank"),
-            "global_rank_percentile": _required(prediction, "global_rank_percentile"),
-            "calibrated_p_up": _required(prediction, "calibrated_p_up"),
-            "calibrated_p_neutral": _required(prediction, "calibrated_p_neutral"),
-            "calibrated_p_down": _required(prediction, "calibrated_p_down"),
-            "calibration_version": _required(prediction, "calibration_version"),
-            "gross_q10": _required(prediction, "gross_q10"),
-            "gross_q50": _required(prediction, "gross_q50"),
-            "gross_q90": _required(prediction, "gross_q90"),
-            "net_q10": _required(prediction, "net_q10"),
-            "net_q50": _required(prediction, "net_q50"),
-            "net_q90": _required(prediction, "net_q90"),
-            "interval_width": _required(prediction, "interval_width"),
-            "quantile_crossing_before_calibration": _required(
-                prediction, "quantile_crossing_before_calibration"
-            ),
-            "calibration_status": _required(prediction, "calibration_status"),
-            "estimated_round_trip_cost": _required(
-                prediction, "estimated_round_trip_cost"
-            ),
-            "data_quality_status": ("PASS" if original_quality == "PASS" else "FAIL"),
-            "decision": "NO_TRADE",
-            "reason_codes": list(dict.fromkeys(reason_codes)),
-        }
+    def _parse_rpc_result(
+        response: object, parsed: ParsedResearchSnapshot
+    ) -> tuple[int, int]:
+        if not isinstance(response, Mapping):
+            raise ValueError("Supabase atomic publisher returned an invalid response")
+        try:
+            run_id = int(cast(int | str, response["prediction_run_id"]))
+            prediction_count = int(cast(int | str, response["prediction_count"]))
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError(
+                "Supabase atomic publisher returned an invalid response"
+            ) from error
+        if run_id < 1 or prediction_count != len(parsed.predictions):
+            raise ValueError(
+                "Supabase atomic publisher returned an unexpected row count"
+            )
+        return run_id, prediction_count
 
 
 __all__ = [

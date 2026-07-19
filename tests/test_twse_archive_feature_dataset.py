@@ -24,6 +24,7 @@ from src.data.research.twse_archive_feature_builder import (
     TwseArchiveFeatureDatasetBuilder,
 )
 from src.data.research.twse_archive_feature_contracts import (
+    TWSE_ARCHIVE_FEATURE_DATASET_VERSION,
     TwseCurrentSecurityIdentity,
     TwseIdentitySnapshot,
     dataset_snapshot_hash,
@@ -214,6 +215,7 @@ def test_builder_streams_eligible_rows_and_preserves_research_limits(
     assert audit.excluded_row_count == 62
     assert audit.exclusion_reason_counts["TRADE_DATE_BEFORE_CURRENT_LISTING_DATE"] == 2
     assert table.num_rows == 10
+    assert table["decision_close_price"][-1].as_py() == 171.0
     assert "net_return" not in table.column_names
     assert "alpha" not in table.column_names
     assert set(table["label_status"].to_pylist()) == {"LABELS_NOT_ASSEMBLED"}
@@ -227,6 +229,9 @@ def test_builder_streams_eligible_rows_and_preserves_research_limits(
     assert "LABELS_NOT_ASSEMBLED" in reasons
     assert "IDENTITY_UNRESOLVED" in reasons
     assert parquet.schema_arrow.metadata[b"system.status"] == b"RESEARCH_ONLY"
+    assert parquet.schema_arrow.metadata[b"dataset.version"] == (
+        TWSE_ARCHIVE_FEATURE_DATASET_VERSION.encode("ascii")
+    )
     assert parquet.schema_arrow.metadata[b"labels.status"] == b"LABELS_NOT_ASSEMBLED"
     assert {
         parquet.metadata.row_group(group).column(column).compression

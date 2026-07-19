@@ -213,6 +213,8 @@ def test_prepare_fold_bypasses_record_materialization(
     assert matrices.train.shape == (4, 4)
     assert matrices.calibration.shape == (2, 4)
     assert matrices.test.shape == (2, 4)
+    assert matrices.imputer.fit_scope is not None
+    assert matrices.imputer.fit_scope.fold_id == "twse-research-fold-1"
     assert matrices.test.dtypes.eq(np.dtype("float32")).all()
     assert matrices.calibration["y"].tolist() == [6.0, 6.0]
     assert matrices.calibration["y__missing"].tolist() == [1.0, 1.0]

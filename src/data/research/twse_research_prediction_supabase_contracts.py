@@ -28,6 +28,12 @@ class SupabaseResearchWriter(Protocol):
         preserve_existing: bool = False,
     ) -> list[dict[str, object]]: ...
 
+    def rpc(
+        self,
+        function_name: str,
+        parameters: Mapping[str, object],
+    ) -> object: ...
+
 
 @dataclass(frozen=True)
 class ResearchSupabasePublishResult:

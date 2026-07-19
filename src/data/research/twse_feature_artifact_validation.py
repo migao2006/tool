@@ -7,6 +7,7 @@ from __future__ import annotations
 from collections.abc import Iterator, Mapping
 from hashlib import sha256
 import json
+from math import isfinite
 from typing import Any, cast
 
 from src.features.twse_price_volume_schema import (
@@ -172,6 +173,7 @@ def validate_rows(parquet: Any, metadata: Mapping[str, str]) -> None:
         "current_identity_snapshot_sha256",
         *_ROW_CONSTANTS,
         *_LINEAGE_COLUMNS,
+        "decision_close_price",
     ]
     missing = sorted(set(columns).difference(names))
     if missing:
@@ -221,6 +223,17 @@ def validate_rows(parquet: Any, metadata: Mapping[str, str]) -> None:
                 raise TwseFeatureArtifactReadError(
                     "TWSE_FEATURE_ARTIFACT_LINEAGE_INVALID",
                     "A TWSE feature row has incomplete archive lineage",
+                )
+            decision_close = row.get("decision_close_price")
+            if (
+                isinstance(decision_close, bool)
+                or not isinstance(decision_close, (int, float))
+                or not isfinite(float(decision_close))
+                or float(decision_close) <= 0
+            ):
+                raise TwseFeatureArtifactReadError(
+                    "TWSE_FEATURE_ARTIFACT_DECISION_CLOSE_INVALID",
+                    "A TWSE feature row has an invalid decision close",
                 )
     if seen != parquet.metadata.num_rows or seen <= 0:
         raise TwseFeatureArtifactReadError(

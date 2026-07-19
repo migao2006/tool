@@ -56,6 +56,7 @@ def twse_archive_feature_schema(
         pa.field("feature_schema_hash", pa.string(), nullable=False),
         pa.field("price_basis", pa.string(), nullable=False),
         pa.field("availability_mode", pa.string(), nullable=False),
+        pa.field("decision_close_price", pa.float64(), nullable=False),
         pa.field("latest_available_at", pa.timestamp("us", tz="UTC"), nullable=False),
         pa.field(
             "latest_observed_available_at",

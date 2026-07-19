@@ -144,7 +144,9 @@ def test_publisher_writes_versioned_read_back_verified_oos_snapshot(
     assert [row["symbol"] for row in payload["predictions"]] == ["2317", "2330"]
     assert "decision" not in payload["predictions"][0]
     assert "name" not in payload["predictions"][0]
-    assert "industry" not in payload["predictions"][0]
+    assert payload["predictions"][0]["industry"] is None
+    assert payload["predictions"][0]["adv20_ntd"] is None
+    assert payload["predictions"][0]["maximum_order_notional_ntd"] is None
 
 
 def test_contract_rejects_unreleased_horizon() -> None:

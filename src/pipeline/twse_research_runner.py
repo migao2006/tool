@@ -27,7 +27,8 @@ from .contracts import (
 )
 from .research_dataset import PreparedResearchDataset, ResearchDatasetError
 from .research_fold_metrics import mean_scalar_metrics
-from .twse_research_fold_runner import evaluate_research_fold
+from .twse_research_fold_runner import TwseFoldResearchResult, evaluate_research_fold
+from .twse_research_bundle_publisher import publish_last_fold_bundle
 from .twse_research_prediction_publisher import (
     FoldResearchPredictionBatch,
     TwseResearchPredictionPublisher,
@@ -106,10 +107,16 @@ class TwsePriceResearchRunner:
 
         reports: list[dict[str, object]] = []
         fold_prediction_batches: list[FoldResearchPredictionBatch] = []
-        for fold in folds:
+        last_fold_result: TwseFoldResearchResult | None = None
+        for position, fold in enumerate(folds):
             evaluated = evaluate_research_fold(development, fold, context)
             reports.append(evaluated.report)
             fold_prediction_batches.append(evaluated.prediction_batch)
+            if position == len(folds) - 1:
+                last_fold_result = evaluated
+        if last_fold_result is None:
+            raise RuntimeError("mechanical last walk-forward fold was not evaluated")
+        last_fold = folds[-1]
 
         ranking_primary: list[Mapping[str, object]] = []
         for report in reports:
@@ -132,6 +139,24 @@ class TwsePriceResearchRunner:
             "locked_holdout_reason": "FROZEN_UNTIL_RESEARCH_DESIGN_IS_LOCKED",
         }
         model_version = "twse-price-research-h5-v1"
+        library_versions = {
+            "lightgbm": version("lightgbm"),
+            "scikit-learn": version("scikit-learn"),
+        }
+        written_bundle = publish_last_fold_bundle(
+            batch=batch,
+            context=context,
+            dataset=dataset,
+            fold=last_fold,
+            result=last_fold_result,
+            model_version=model_version,
+            feature_schema_hash=TWSE_PRICE_VOLUME_FEATURE_SCHEMA_HASH,
+            library_versions=library_versions,
+        )
+        metrics["research_model_bundle_manifest_sha256"] = (
+            written_bundle.manifest.manifest_sha256
+        )
+        metrics["research_model_bundle_fold_number"] = last_fold.fold_number
         prediction_path = self._prediction_path(batch, context)
         published = TwseResearchPredictionPublisher().publish(
             prediction_path,
@@ -146,10 +171,7 @@ class TwsePriceResearchRunner:
                 "direction_model": "LightGBM multiclass",
                 "quantile_model": "LightGBM quantile 0.10/0.50/0.90",
                 "random_seed": context.config.rank.seed,
-                "library_versions": {
-                    "lightgbm": version("lightgbm"),
-                    "scikit-learn": version("scikit-learn"),
-                },
+                "library_versions": library_versions,
             },
             cost_metadata={
                 "asset_type": context.config.cost.asset_type,
@@ -192,6 +214,12 @@ class TwsePriceResearchRunner:
             artifacts={
                 "walk_forward_report": report_path.resolve().as_uri(),
                 "research_prediction_snapshot": prediction_path.resolve().as_uri(),
+                "research_model_bundle": (
+                    written_bundle.bundle_dir.resolve().as_uri()
+                ),
+                "research_model_bundle_manifest": (
+                    written_bundle.manifest_path.resolve().as_uri()
+                ),
             },
             training_end_date=published.snapshot.training_end_date,
         )

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date, datetime, timedelta
 from math import log, sqrt
 from statistics import fmean, median
@@ -88,12 +89,15 @@ def test_complete_strict_features_are_auditable_and_formula_correct() -> None:
     assert row.usage_scope == "FEATURE_RESEARCH_ONLY"
     assert row.feature_schema_hash == TWSE_PRICE_VOLUME_FEATURE_SCHEMA_HASH
     assert tuple(row.feature_values) == TWSE_PRICE_VOLUME_FEATURE_NAMES
+    assert len(TWSE_PRICE_VOLUME_FEATURE_NAMES) == 17
+    assert "decision_close_price" not in TWSE_PRICE_VOLUME_FEATURE_NAMES
     assert not any("total_return" in name for name in row.feature_values)
     assert row.hard_fail is False
     assert row.point_in_time_audit_pass is True
     assert row.research_limitation_reason_codes == ()
 
     closes = [float(record["close_price"]) for record in bars]
+    assert row.decision_close_price == closes[-1]
     volumes = [float(record["trading_volume"]) for record in bars]
     turnovers = [float(record["trading_value"]) for record in bars]
     for lag in (1, 2, 3, 5, 10, 20, 60):
@@ -135,6 +139,9 @@ def test_complete_strict_features_are_auditable_and_formula_correct() -> None:
         and audit.available_at == audit.observed_available_at
         for audit in row.feature_audits.values()
     )
+
+    with pytest.raises(ValueError, match="decision_close_price"):
+        _ = replace(row, decision_close_price=0.0)
 
 
 def test_strict_mode_does_not_downgrade_first_observed_evidence() -> None:

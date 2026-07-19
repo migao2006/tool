@@ -6,6 +6,7 @@ from __future__ import annotations
 # pyright: reportUnknownVariableType=false, reportUnknownMemberType=false
 # pyright: reportUnknownArgumentType=false
 
+from dataclasses import replace
 from datetime import datetime
 import json
 from math import isfinite
@@ -17,6 +18,10 @@ from src.trading.cost_contracts import TransactionCostConfig
 from src.trading.transaction_cost import TransactionCostModel
 
 from .twse_latest_feature_repository import LatestTwseFeatureCrossSection
+from .twse_research_decision_contracts import ResearchDecisionPolicyInputs
+from .twse_research_decision_policy_adapter import (
+    TwseResearchDecisionPolicyAdapter,
+)
 from .twse_research_loaded_bundle import LoadedTwseResearchBundle
 from .twse_research_prediction_contracts import (
     TwseOosResearchPrediction,
@@ -111,6 +116,7 @@ class TwseDailyResearchInference:
         )
         costs: list[float] = []
         capacity_reasons: list[tuple[str, ...]] = []
+        capacity_passes: list[bool] = []
         maximum_orders: list[float] = []
         for row in frame.itertuples(index=False):
             adv20 = float(row.adv20_ntd)
@@ -127,6 +133,7 @@ class TwseDailyResearchInference:
                 raise ValueError("inference transaction cost is invalid")
             costs.append(cost_rate)
             capacity_reasons.append(tuple(estimate.reason_codes))
+            capacity_passes.append(estimate.capacity_pass)
             maximum_orders.append(adv20 * config.cost.max_adv_participation)
 
         ranked = rank_cross_section(
@@ -139,6 +146,7 @@ class TwseDailyResearchInference:
             for position in range(len(frame))
         )
         predictions: list[TwseOosResearchPrediction] = []
+        policy_adapter = TwseResearchDecisionPolicyAdapter(config)
         for ranked_row in ranked:
             position = int(ranked_row["position"])
             source = frame.iloc[position]
@@ -158,47 +166,63 @@ class TwseDailyResearchInference:
                 capacity_reasons[position],
                 (
                     evaluation_scope,
-                    "RESEARCH_ONLY_NO_FORMAL_DECISION_POLICY",
                     "LOCKED_HOLDOUT_NOT_EXECUTED",
                 ),
             )
+            prediction = TwseOosResearchPrediction(
+                symbol=str(source["symbol"]),
+                decision_date=cross_section.as_of_date,
+                decision_at=decision_at,
+                horizon=5,
+                fold_number=manifest.fold_number,
+                model_raw_score=float(ranked_row["model_raw_score"]),
+                rank_score=float(ranked_row["rank_score"]),
+                global_rank=int(ranked_row["global_rank"]),
+                global_rank_percentile=float(ranked_row["global_rank_percentile"]),
+                calibrated_p_up=direction.up,
+                calibrated_p_neutral=direction.neutral,
+                calibrated_p_down=direction.down,
+                calibration_version=bundle.probability_calibrator.version,
+                gross_q10=gross[0],
+                gross_q50=gross[1],
+                gross_q90=gross[2],
+                net_q10=net[0],
+                net_q50=net[1],
+                net_q90=net[2],
+                interval_width=net[2] - net[0],
+                calibration_status=(f"CALIBRATED:{bundle.interval_calibrator.version}"),
+                quantile_crossing_before_calibration=quantile.raw_crossed,
+                estimated_round_trip_cost=cost,
+                latest_available_at=_aware(
+                    source["latest_available_at"], "latest_available_at"
+                ),
+                data_quality_status="PASS" if pit_pass else "WARN",
+                reason_codes=reasons,
+                adv20_ntd=float(source["adv20_ntd"]),
+                maximum_order_notional_ntd=maximum_orders[position],
+                evaluation_scope=evaluation_scope,
+            )
+            policy = policy_adapter.evaluate(
+                prediction,
+                ResearchDecisionPolicyInputs(
+                    data_quality_hard_fail=bool(source["hard_fail"]),
+                    liquidity_pass=capacity_passes[position],
+                    estimated_order_notional_ntd=(
+                        config.cost.estimated_order_notional_ntd
+                    ),
+                    gate_source_dates={
+                        "data_quality_hard_gate": cross_section.as_of_date,
+                        "liquidity_capacity_gate": cross_section.as_of_date,
+                    },
+                ),
+            )
             predictions.append(
-                TwseOosResearchPrediction(
-                    symbol=str(source["symbol"]),
-                    decision_date=cross_section.as_of_date,
-                    decision_at=decision_at,
-                    horizon=5,
-                    fold_number=manifest.fold_number,
-                    model_raw_score=float(ranked_row["model_raw_score"]),
-                    rank_score=float(ranked_row["rank_score"]),
-                    global_rank=int(ranked_row["global_rank"]),
-                    global_rank_percentile=float(
-                        ranked_row["global_rank_percentile"]
+                replace(
+                    prediction,
+                    gates=policy.gates,
+                    reason_codes=tuple(
+                        dict.fromkeys((*prediction.reason_codes, *policy.reason_codes))
                     ),
-                    calibrated_p_up=direction.up,
-                    calibrated_p_neutral=direction.neutral,
-                    calibrated_p_down=direction.down,
-                    calibration_version=bundle.probability_calibrator.version,
-                    gross_q10=gross[0],
-                    gross_q50=gross[1],
-                    gross_q90=gross[2],
-                    net_q10=net[0],
-                    net_q50=net[1],
-                    net_q90=net[2],
-                    interval_width=net[2] - net[0],
-                    calibration_status=(
-                        f"CALIBRATED:{bundle.interval_calibrator.version}"
-                    ),
-                    quantile_crossing_before_calibration=quantile.raw_crossed,
-                    estimated_round_trip_cost=cost,
-                    latest_available_at=_aware(
-                        source["latest_available_at"], "latest_available_at"
-                    ),
-                    data_quality_status="PASS" if pit_pass else "WARN",
-                    reason_codes=reasons,
-                    adv20_ntd=float(source["adv20_ntd"]),
-                    maximum_order_notional_ntd=maximum_orders[position],
-                    evaluation_scope=evaluation_scope,
                 )
             )
 
@@ -223,9 +247,7 @@ class TwseDailyResearchInference:
                 "selection_policy": manifest.selection_policy,
                 "fold_number": manifest.fold_number,
                 "training_start_date": manifest.training_start_date.isoformat(),
-                "calibration_start_date": (
-                    manifest.calibration_start_date.isoformat()
-                ),
+                "calibration_start_date": (manifest.calibration_start_date.isoformat()),
                 "calibration_end_date": manifest.calibration_end_date.isoformat(),
                 "evaluated_test_start_date": (
                     manifest.evaluated_test_start_date.isoformat()
@@ -241,6 +263,7 @@ class TwseDailyResearchInference:
                 "system_status": "RESEARCH_ONLY",
                 "evaluation_scope": evaluation_scope,
                 "locked_holdout_executed": False,
+                "research_decision_policy_executed": True,
                 "formal_decision_policy_executed": False,
                 "source_model_test_end_date": (
                     manifest.evaluated_test_end_date.isoformat()
@@ -252,7 +275,10 @@ class TwseDailyResearchInference:
                 "LATEST_VERIFIED_FEATURE_CROSS_SECTION",
                 "POINT_IN_TIME_UNVERIFIED",
                 "LOCKED_HOLDOUT_NOT_EXECUTED",
-                "FORMAL_DECISION_POLICY_NOT_EXECUTED",
+                "RESEARCH_DECISION_POLICY_EXECUTED_FAIL_CLOSED",
+                "FORMAL_TRADABILITY_INPUT_MISSING",
+                "FORMAL_MARKET_EXPOSURE_INPUT_MISSING",
+                "FORMAL_POSITION_LIMIT_INPUT_MISSING",
             ),
         )
 

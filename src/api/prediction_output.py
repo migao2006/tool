@@ -36,15 +36,26 @@ class DecisionGateOutput:
     actual: Any
     threshold: Any
     reason_code: str
+    source_date: date | str | None = None
 
     def __post_init__(self) -> None:
         _require_text(self.gate, "gate")
         _require_text(self.reason_code, "reason_code")
         if not isinstance(self.passed, bool):
             raise TypeError("gate passed must be boolean")
+        if isinstance(self.source_date, str):
+            try:
+                parsed_source_date = date.fromisoformat(self.source_date)
+            except ValueError as error:
+                raise ValueError("gate source_date must use YYYY-MM-DD") from error
+            if parsed_source_date.isoformat() != self.source_date:
+                raise ValueError("gate source_date must use YYYY-MM-DD")
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        payload = asdict(self)
+        if isinstance(self.source_date, date):
+            payload["source_date"] = self.source_date.isoformat()
+        return payload
 
 
 @dataclass(frozen=True)
@@ -122,7 +133,10 @@ class StockPredictionOutput:
             raise ValueError("Rank Score must be a 0-100 cross-sectional percentile")
         if self.global_rank < 1:
             raise ValueError("global_rank must be positive")
-        if not isfinite(self.global_rank_percentile) or not 0 <= self.global_rank_percentile <= 1:
+        if (
+            not isfinite(self.global_rank_percentile)
+            or not 0 <= self.global_rank_percentile <= 1
+        ):
             raise ValueError("global_rank_percentile must be within [0, 1]")
         if self.industry_rank is not None and self.industry_rank < 1:
             raise ValueError("industry_rank must be positive when provided")
@@ -136,7 +150,9 @@ class StockPredictionOutput:
             self.calibrated_p_neutral,
             self.calibrated_p_down,
         )
-        if any(not isfinite(value) or value < 0 or value > 1 for value in probabilities):
+        if any(
+            not isfinite(value) or value < 0 or value > 1 for value in probabilities
+        ):
             raise ValueError("calibrated probabilities must be within [0, 1]")
         if not isclose(sum(probabilities), 1.0, abs_tol=1e-6):
             raise ValueError("calibrated probabilities must sum to 1")
@@ -160,10 +176,18 @@ class StockPredictionOutput:
             abs_tol=1e-9,
         ):
             raise ValueError("interval_width must equal net_q90 - net_q10")
-        if not isfinite(self.market_exposure_cap) or not 0 <= self.market_exposure_cap <= 1:
+        if (
+            not isfinite(self.market_exposure_cap)
+            or not 0 <= self.market_exposure_cap <= 1
+        ):
             raise ValueError("market_exposure_cap must be within [0, 1]")
-        if not isfinite(self.estimated_round_trip_cost) or self.estimated_round_trip_cost < 0:
-            raise ValueError("estimated_round_trip_cost must be finite and non-negative")
+        if (
+            not isfinite(self.estimated_round_trip_cost)
+            or self.estimated_round_trip_cost < 0
+        ):
+            raise ValueError(
+                "estimated_round_trip_cost must be finite and non-negative"
+            )
         for field_name, value in (
             ("forecast_volatility", self.forecast_volatility),
             ("downside_risk", self.downside_risk),
@@ -180,16 +204,30 @@ class StockPredictionOutput:
                 raise ValueError(f"{field_name} must be within [0, 1]")
         if self.previous_global_rank is not None and self.previous_global_rank < 1:
             raise ValueError("previous_global_rank must be positive when provided")
-        if self.previous_decision is not None and self.previous_decision not in DECISIONS:
+        if (
+            self.previous_decision is not None
+            and self.previous_decision not in DECISIONS
+        ):
             raise ValueError("previous_decision is invalid")
         if any(not isinstance(gate, DecisionGateOutput) for gate in self.gates):
             raise TypeError("gates must contain DecisionGateOutput values")
-        if self.gates and tuple(gate.gate for gate in self.gates) != DECISION_GATE_ORDER:
+        if (
+            self.gates
+            and tuple(gate.gate for gate in self.gates) != DECISION_GATE_ORDER
+        ):
             raise ValueError("gates must follow the complete decision policy order")
-        if self.decision == "CANDIDATE" and self.gates and any(
-            not gate.passed for gate in self.gates
+        if (
+            self.decision == "CANDIDATE"
+            and self.gates
+            and any(not gate.passed for gate in self.gates)
         ):
             raise ValueError("CANDIDATE cannot contain a failed decision gate")
+        if (
+            self.decision == "CANDIDATE"
+            and self.gates
+            and any(gate.source_date is None for gate in self.gates)
+        ):
+            raise ValueError("CANDIDATE decision gates require source_date")
         if self.data_quality_status not in DATA_QUALITY_STATUSES:
             raise ValueError("data_quality_status must be PASS or FAIL")
         if self.latest_available_at > self.decision_at:
@@ -201,15 +239,21 @@ class StockPredictionOutput:
                 try:
                     parsed_source_date = date.fromisoformat(source_date)
                 except ValueError as error:
-                    raise ValueError(f"source date for {source_name} must use YYYY-MM-DD") from error
+                    raise ValueError(
+                        f"source date for {source_name} must use YYYY-MM-DD"
+                    ) from error
             else:
                 parsed_source_date = source_date
             if parsed_source_date > self.as_of_date:
-                raise ValueError(f"source date for {source_name} cannot exceed as_of_date")
+                raise ValueError(
+                    f"source date for {source_name} cannot exceed as_of_date"
+                )
 
         if self.decision == "CANDIDATE":
             if not has_valid_calibration_version(self.calibration_version):
-                raise ValueError("CANDIDATE requires an OOS direction calibration version")
+                raise ValueError(
+                    "CANDIDATE requires an OOS direction calibration version"
+                )
             if not has_calibrated_interval_status(self.calibration_status):
                 raise ValueError("CANDIDATE requires calibrated return intervals")
             for field_name, value in (
@@ -227,7 +271,12 @@ class StockPredictionOutput:
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
         payload["rank_score"] = payload.pop("rank_score")
-        for key in ("as_of_date", "decision_at", "training_end_date", "latest_available_at"):
+        for key in (
+            "as_of_date",
+            "decision_at",
+            "training_end_date",
+            "latest_available_at",
+        ):
             payload[key] = payload[key].isoformat()
         payload["reason_codes"] = list(self.reason_codes)
         payload["gates"] = [gate.to_dict() for gate in self.gates]

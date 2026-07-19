@@ -42,6 +42,7 @@ def build_snapshot() -> dict[str, object]:
             actual={"test_value": index + 1},
             threshold={"required": True},
             reason_code="PASS",
+            source_date=AS_OF_DATE,
         )
         for index, name in enumerate(GATE_NAMES)
     )
@@ -216,6 +217,81 @@ def build_stale_oos_research_snapshot() -> dict[str, object]:
     return payload
 
 
+def build_gated_research_snapshot() -> dict[str, object]:
+    """Expose a complete mixed gate set while remaining RESEARCH_ONLY."""
+
+    payload = build_snapshot()
+    prediction = dict(payload["predictions"][0])
+    prediction.update(
+        {
+            "symbol": "GATED1",
+            "name": "研究決策測試標的",
+            "decision": "NO_TRADE",
+            "data_quality_status": "WARN",
+            "reason_codes": [
+                "DATA_QUALITY_NOT_FORMALLY_VERIFIED",
+                "FORMAL_TRADABILITY_INPUT_MISSING",
+                "FORMAL_MARKET_EXPOSURE_INPUT_MISSING",
+            ],
+            "gates": [
+                {
+                    "gate": name,
+                    "passed": name
+                    in {
+                        "liquidity_capacity_gate",
+                        "calibrated_direction_probabilities",
+                        "net_quantile_thresholds",
+                        "rank_eligibility",
+                    },
+                    "actual": (
+                        {"adv20_ntd": 1_000_000_000, "order_notional": 100_000}
+                        if name == "liquidity_capacity_gate"
+                        else "MISSING"
+                        if name
+                        in {
+                            "tradability_gate",
+                            "market_exposure_cap",
+                            "position_capacity_limits",
+                        }
+                        else {"research_value": index + 1}
+                    ),
+                    "threshold": {"configured": True},
+                    "reason_code": (
+                        "PASS"
+                        if name
+                        in {
+                            "liquidity_capacity_gate",
+                            "calibrated_direction_probabilities",
+                            "net_quantile_thresholds",
+                            "rank_eligibility",
+                        }
+                        else "FORMAL_INPUT_MISSING"
+                    ),
+                    "source_date": (
+                        AS_OF_DATE.isoformat()
+                        if name
+                        in {
+                            "data_quality_hard_gate",
+                            "liquidity_capacity_gate",
+                            "calibrated_direction_probabilities",
+                            "net_quantile_thresholds",
+                            "rank_eligibility",
+                        }
+                        else None
+                    ),
+                }
+                for index, name in enumerate(GATE_NAMES)
+            ],
+        }
+    )
+    payload["system_status"] = "RESEARCH_ONLY"
+    payload["predictions"] = [prediction]
+    payload["watchlist"] = []
+    payload["excluded"] = []
+    payload["reason_codes"] = ["RESEARCH_DECISION_POLICY_EXECUTED_FAIL_CLOSED"]
+    return payload
+
+
 class FixtureHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args: object, **kwargs: object) -> None:
         super().__init__(*args, directory=str(ROOT), **kwargs)
@@ -240,7 +316,9 @@ class FixtureHandler(SimpleHTTPRequestHandler):
             self._send(200, body, "application/json; charset=utf-8")
             return
         if parsed.path == "/api-research/prediction-snapshot":
-            body = json.dumps(build_research_snapshot(), ensure_ascii=False, allow_nan=False).encode()
+            body = json.dumps(
+                build_research_snapshot(), ensure_ascii=False, allow_nan=False
+            ).encode()
             self._send(200, body, "application/json; charset=utf-8")
             return
         if parsed.path == "/api-stale-oos-research/prediction-snapshot":
@@ -251,6 +329,20 @@ class FixtureHandler(SimpleHTTPRequestHandler):
             ).encode()
             self._send(200, body, "application/json; charset=utf-8")
             return
+        if parsed.path == "/api-gated-research/prediction-snapshot":
+            body = json.dumps(
+                build_gated_research_snapshot(),
+                ensure_ascii=False,
+                allow_nan=False,
+            ).encode()
+            self._send(200, body, "application/json; charset=utf-8")
+            return
+        if parsed.path == "/api-partial-gates/prediction-snapshot":
+            payload = build_gated_research_snapshot()
+            payload["predictions"][0]["gates"].pop()
+            body = json.dumps(payload, ensure_ascii=False, allow_nan=False).encode()
+            self._send(200, body, "application/json; charset=utf-8")
+            return
         if parsed.path == "/api-conflict/prediction-snapshot":
             body = b'{"code":"MODEL_DATA_VERSION_CONFLICT"}'
             self._send(409, body, "application/json; charset=utf-8")
@@ -259,13 +351,15 @@ class FixtureHandler(SimpleHTTPRequestHandler):
             if parse_qs(parsed.query).get("horizon") != ["5"]:
                 self._send(422, b'{"code":"INVALID_HORIZON"}', "application/json")
                 return
-            body = json.dumps(build_snapshot(), ensure_ascii=False, allow_nan=False).encode()
+            body = json.dumps(
+                build_snapshot(), ensure_ascii=False, allow_nan=False
+            ).encode()
             self._send(200, body, "application/json; charset=utf-8")
             return
         if parsed.path == "/contract-test":
             html = """<!doctype html><meta charset=\"utf-8\"><body>running</body>
 <script type=\"module\">
-import { normalizePredictionSnapshot } from '/src/data/prediction-contract.js?v=contract-test-3';
+import { normalizePredictionSnapshot } from '/src/data/prediction-contract.js?v=contract-test-4';
 try {
   const response = await fetch('/api/prediction-snapshot?horizon=5');
   const snapshot = normalizePredictionSnapshot(await response.json(), 5);
@@ -284,10 +378,16 @@ try {
                 "conflict": "api-conflict",
                 "research": "api-research",
                 "stale-oos-research": "api-stale-oos-research",
+                "gated-research": "api-gated-research",
+                "partial-gates": "api-partial-gates",
             }.get(mode, "api")
-            html = (ROOT / "index.html").read_text(encoding="utf-8").replace(
-                '<html lang="zh-Hant">',
-                f'<html lang="zh-Hant" data-prediction-api-base-url="/{api_path}/">',
+            html = (
+                (ROOT / "index.html")
+                .read_text(encoding="utf-8")
+                .replace(
+                    '<html lang="zh-Hant">',
+                    f'<html lang="zh-Hant" data-prediction-api-base-url="/{api_path}/">',
+                )
             )
             self._send(200, html.encode(), "text/html; charset=utf-8")
             return

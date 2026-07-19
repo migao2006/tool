@@ -17,7 +17,7 @@ export function createDecisionGates() {
       <li data-gate="${key}">
         <span class="gate-step">${index + 1}</span>
         <div class="gate-main"><strong>${label}</strong><code>NO_STOCK_SELECTED</code></div>
-        <dl><div><dt>結果</dt><dd>未評估</dd></div><div><dt>實際值</dt><dd>—</dd></div><div><dt>門檻</dt><dd>—</dd></div></dl>
+        <dl><div><dt>結果</dt><dd>未評估</dd></div><div><dt>實際值</dt><dd>—</dd></div><div><dt>門檻</dt><dd>—</dd></div><div><dt>來源日期</dt><dd>—</dd></div></dl>
       </li>`,
   ).join("");
   return `<ol class="decision-gates">${rows}</ol>`;
@@ -46,5 +46,6 @@ export function renderDecisionGates(gates = [], { fallbackReasonCode = "GATE_NOT
     setText(row, "dd:nth-of-type(1)", gate?.passed === true ? "通過" : gate?.passed === false ? "未通過" : "未評估");
     setText(row, "dl > div:nth-child(2) dd", formatGateValue(gate?.actual));
     setText(row, "dl > div:nth-child(3) dd", formatGateValue(gate?.threshold));
+    setText(row, "dl > div:nth-child(4) dd", gate?.source_date);
   });
 }

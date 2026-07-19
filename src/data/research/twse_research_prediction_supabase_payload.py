@@ -19,6 +19,10 @@ from src.core.research_prediction_contract import (
 from src.data.research.twse_research_prediction_value_validation import (
     validate_prediction_numbers,
 )
+from src.data.research.twse_research_decision_gate_payload import (
+    GATE_ENVELOPE_VERSION,
+    resolve_gate_rows,
+)
 
 
 RESEARCH_EVALUATION_SCOPES = frozenset(
@@ -128,6 +132,7 @@ class ParsedResearchSnapshot:
 class ResolvedResearchSnapshot:
     run: Mapping[str, object]
     stock_predictions: tuple[Mapping[str, object], ...]
+    decision_gates: tuple[Mapping[str, object], ...]
 
 
 def parse_research_snapshot(
@@ -232,6 +237,15 @@ def resolve_research_snapshot(
         _aware_datetime(_required(value, "latest_available_at"), "latest_available_at")
         for value in parsed.predictions
     ).isoformat()
+    rows = tuple(
+        _stock_row(prediction, security_ids) for prediction in parsed.predictions
+    )
+    gates = resolve_gate_rows(
+        parsed.predictions,
+        security_ids,
+        snapshot_sha256=parsed.snapshot_sha256,
+        snapshot_date=_date(_required(payload, "as_of_date"), "as_of_date"),
+    )
     run = {
         "as_of_date": _required(payload, "as_of_date"),
         "decision_at": _required(payload, "decision_at"),
@@ -246,6 +260,8 @@ def resolve_research_snapshot(
             "prediction_scope": parsed.evaluation_scope,
             "feature_snapshot": parsed.feature_snapshot,
             "snapshot_sha256": parsed.snapshot_sha256,
+            "decision_gate_count": len(gates),
+            "decision_gate_attachment_contract": GATE_ENVELOPE_VERSION,
         },
         "latest_available_at": latest_available_at,
         "candidate_count": 0,
@@ -253,10 +269,11 @@ def resolve_research_snapshot(
         "no_trade_count": len(parsed.predictions),
         "hard_fail_count": 0,
     }
-    rows = tuple(
-        _stock_row(prediction, security_ids) for prediction in parsed.predictions
+    return ResolvedResearchSnapshot(
+        run=run,
+        stock_predictions=rows,
+        decision_gates=gates,
     )
-    return ResolvedResearchSnapshot(run=run, stock_predictions=rows)
 
 
 def _stock_row(

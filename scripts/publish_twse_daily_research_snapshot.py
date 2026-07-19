@@ -75,9 +75,7 @@ def _local_path(uri: str, *, directory: bool = False) -> Path:
 
 
 def _write_report(path: Path | None, payload: Mapping[str, object]) -> None:
-    rendered = json.dumps(
-        dict(payload), ensure_ascii=False, indent=2, sort_keys=True
-    )
+    rendered = json.dumps(dict(payload), ensure_ascii=False, indent=2, sort_keys=True)
     if path is not None:
         path.parent.mkdir(parents=True, exist_ok=True)
         _ = path.write_text(rendered + "\n", encoding="utf-8")
@@ -96,9 +94,7 @@ def _publish(payload: Mapping[str, object]) -> dict[str, object]:
             == "true"
         ),
         production_publish_enabled=(
-            os.environ.get(
-                "RESEARCH_PREDICTION_PRODUCTION_PUBLISH_ENABLED", ""
-            ).lower()
+            os.environ.get("RESEARCH_PREDICTION_PRODUCTION_PUBLISH_ENABLED", "").lower()
             == "true"
         ),
     ).publish(payload)
@@ -107,6 +103,7 @@ def _publish(payload: Mapping[str, object]) -> dict[str, object]:
         "target_environment": result.target_environment,
         "prediction_run_id": result.prediction_run_id,
         "prediction_count": result.prediction_count,
+        "decision_gate_count": result.decision_gate_count,
     }
 
 
@@ -117,7 +114,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     if horizon != 5:
         _write_report(
             report_path,
-            {"status": "FAIL", "horizon": horizon, "reason_codes": ["UNSUPPORTED_HORIZON"]},
+            {
+                "status": "FAIL",
+                "horizon": horizon,
+                "reason_codes": ["UNSUPPORTED_HORIZON"],
+            },
         )
         return 1
     try:
@@ -188,7 +189,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "status": "FAIL",
                 "horizon": 5,
                 "reason_codes": [
-                    str(getattr(error, "reason_code", "TWSE_DAILY_RESEARCH_INFERENCE_FAILED"))
+                    str(
+                        getattr(
+                            error, "reason_code", "TWSE_DAILY_RESEARCH_INFERENCE_FAILED"
+                        )
+                    )
                 ],
                 "message": str(error),
             },

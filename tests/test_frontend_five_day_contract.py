@@ -247,8 +247,24 @@ def test_api_values_are_escaped_before_dynamic_markup() -> None:
     excluded = read("src/components/excluded-securities-drawer.js")
     assert "escapeHtml" in html
     assert "escapeHtml(prediction.symbol" in card
-    assert "map(escapeHtml)" in card
+    assert "escapeHtml(formatReasonCodeSummary(prediction.reason_codes))" in card
     assert "map(escapeHtml)" in excluded
+
+
+def test_reason_codes_are_compact_in_summaries_and_complete_in_audit() -> None:
+    formatters = read("src/core/formatters.js")
+    card = read("src/components/candidate-card.js")
+    stock = read("src/pages/stock-detail-page.js")
+    audit = read("src/components/stock-audit-section.js")
+
+    assert "formatReasonCodeSummary" in formatters
+    assert "另 ${hiddenCount} 項稽核資訊" in formatters
+    assert "data-reason-summary" in card
+    assert "formatReasonCodeSummary(prediction.reason_codes)" in card
+    assert "formatReasonCodeSummary(prediction.reason_codes)" in stock
+    assert 'reason_codes: prediction.reason_codes?.join(" · ")' in stock
+    assert "reason_codes" in audit
+    assert '<details class="audit-details">' in audit
 
 
 def test_no_embedded_fake_stock_or_performance_data() -> None:

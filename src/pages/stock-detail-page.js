@@ -1,6 +1,6 @@
 import { createDecisionGates, renderDecisionGates } from "../components/decision-gates.js?v=api-3";
 import { createStockAuditSection } from "../components/stock-audit-section.js";
-import { formatCurrency, formatPercent, formatRank, formatRankScore } from "../core/formatters.js";
+import { formatCurrency, formatPercent, formatRank, formatRankScore, formatReasonCodeSummary } from "../core/formatters.js";
 import { setText } from "../core/html.js";
 
 export function createStockDetailPage({ horizon }) {
@@ -79,7 +79,7 @@ export function renderStockDetailPage(prediction, { isWatchlisted = false } = {}
   directFields.forEach((field) => {
     setText(root, `[data-stock-field="${field}"]`, prediction[field]);
   });
-  setText(root, '[data-stock-field="reason_codes"]', prediction.reason_codes?.join(" · ") || "—");
+  setText(root, '[data-stock-field="reason_codes"]', formatReasonCodeSummary(prediction.reason_codes));
   setText(root, '[data-stock-field="rank_score"]', formatRankScore(prediction.rank_score));
   setText(root, '[data-stock-field="global_rank"]', formatRank(prediction.global_rank));
   setText(root, '[data-stock-field="industry_rank"]', formatRank(prediction.industry_rank));

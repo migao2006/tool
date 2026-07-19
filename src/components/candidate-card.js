@@ -1,11 +1,11 @@
 import { normalizeHorizon } from "../core/five-day-contract.js";
+import { formatPercent, formatRank, formatRankScore, formatReasonCodeSummary } from "../core/formatters.js";
 import { escapeHtml } from "../core/html.js";
-import { formatPercent, formatRank, formatRankScore } from "../core/formatters.js";
 
 /** @param {import('../data/prediction-api.js').PredictionRecord} prediction */
 export function createCandidateCard(prediction, { horizon, compact = false } = {}) {
   const normalizedHorizon = normalizeHorizon(horizon);
-  const reasonCodes = prediction.reason_codes?.map(escapeHtml).join(" · ") || "—";
+  const reasonSummary = escapeHtml(formatReasonCodeSummary(prediction.reason_codes));
   const symbol = escapeHtml(prediction.symbol ?? "");
   const detailRows = compact ? "" : `
     <dl class="candidate-values">
@@ -16,7 +16,7 @@ export function createCandidateCard(prediction, { horizon, compact = false } = {
       <div><dt>估計來回成本</dt><dd>${formatPercent(prediction.estimated_round_trip_cost)}</dd></div>
       <div><dt>資料品質</dt><dd>${escapeHtml(prediction.data_quality_status ?? "—")}</dd></div>
     </dl>
-    <p class="reason-list">${reasonCodes}</p>`;
+    <p class="reason-list" data-reason-summary>${reasonSummary}</p>`;
   return `
     <article class="candidate-card${compact ? " compact" : ""}" data-symbol="${symbol}" data-horizon="${normalizedHorizon}">
       <header>

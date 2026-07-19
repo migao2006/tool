@@ -197,7 +197,13 @@ def build_stale_oos_research_snapshot() -> dict[str, object]:
             "net_q90": 0.046,
             "interval_width": 0.07,
             "decision": "NO_TRADE",
-            "reason_codes": ["RESEARCH_ONLY_NO_FORMAL_DECISION_POLICY"],
+            "reason_codes": [
+                "RESEARCH_ONLY_NO_FORMAL_DECISION_POLICY",
+                "UNADJUSTED_PRICE_RESEARCH_ONLY",
+                "FORMAL_LABEL_FACTORY_NOT_USED",
+                "POINT_IN_TIME_IDENTITY_UNVERIFIED",
+                "MARKET_EXPOSURE_NOT_AVAILABLE",
+            ],
             "gates": [],
         }
     )

@@ -155,6 +155,18 @@ jobs:
       - name: Run browser tests with configured workers
         run: pnpm run test:e2e
 
+      - name: Preserve mobile UI audit screenshots
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: mobile-ui-audit-${{ github.run_id }}
+          path: |
+            artifacts/mobile-ui-audit/**/*
+            artifacts/playwright-results/**/*
+            playwright-report/**/*
+          if-no-files-found: ignore
+          retention-days: 7
+
   test-gate:
     name: Test gate
     if: always()

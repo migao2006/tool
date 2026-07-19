@@ -12,15 +12,19 @@ import {
   resolveHomeDataState,
   resolveSnapshotUiState,
 } from "./src/core/ui-state.js?v=research-ui-1";
-import { renderHomeDataStatus } from "./src/components/home-data-status.js?v=home-data-1";
+import { renderHomeDataStatus } from "./src/components/home-data-status.js?v=mobile-ui-1";
 import { loadHomeDataStatus } from "./src/data/home-data-status-api.js?v=home-data-1";
 import { loadPredictionSnapshot } from "./src/data/prediction-api.js?v=stored-snapshot-1";
 import { createUnavailableSnapshot } from "./src/data/prediction-contract.js?v=research-ui-1";
 import { setWatchlistMembership } from "./src/data/watchlist-api.js?v=api-5";
 import { isSupabaseSdkLoadError } from "./src/data/supabase-sdk-loader.js?v=auth-1";
-import { createCandidatesPage, renderCandidatesPage } from "./src/pages/candidates-page.js?v=research-ui-1";
-import { createOverviewPage, renderOverviewPage } from "./src/pages/overview-page.js?v=research-ui-1";
-import { createStockDetailPage, renderStockDetailPage } from "./src/pages/stock-detail-page.js?v=research-ui-2";
+import {
+  createCandidatesPage,
+  initializeCandidatePagination,
+  renderCandidatesPage,
+} from "./src/pages/candidates-page.js?v=mobile-ui-1";
+import { createOverviewPage, renderOverviewPage } from "./src/pages/overview-page.js?v=mobile-ui-1";
+import { createStockDetailPage, renderStockDetailPage } from "./src/pages/stock-detail-page.js?v=mobile-ui-1";
 import { createWatchlistPage, renderWatchlistPage } from "./src/pages/watchlist-page.js?v=research-ui-1";
 
 const appRoot = document.querySelector("#app-content");
@@ -42,8 +46,16 @@ if (appRoot && navigationRoot) {
   const router = createRouter({
     canActivate: (route) => route !== "stock" || Boolean(selectedSymbol),
   });
+  const candidatePagination = initializeCandidatePagination({
+    onChange: () => {
+      if (currentSnapshot) {
+        renderCandidatesPage(currentSnapshot, resolveSnapshotUiState(currentSnapshot), candidateFilters.getFilters());
+      }
+    },
+  });
   const candidateFilters = initializeCandidateFilters({
     onChange: (filters) => {
+      candidatePagination.reset();
       if (currentSnapshot) renderCandidatesPage(currentSnapshot, resolveSnapshotUiState(currentSnapshot), filters);
     },
   });
@@ -57,6 +69,7 @@ if (appRoot && navigationRoot) {
     currentSnapshot = snapshot;
     watchlistSymbols = new Set((snapshot.watchlist ?? []).map((record) => record.symbol));
     candidateFilters.setRecords(snapshot.candidates ?? []);
+    candidatePagination.reset();
     renderOverviewPage(snapshot, uiState);
     renderCandidatesPage(snapshot, uiState, candidateFilters.getFilters());
     renderWatchlistPage(snapshot, watchlistFilters.getDecision());

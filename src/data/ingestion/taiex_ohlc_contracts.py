@@ -7,13 +7,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from decimal import Decimal
-from hashlib import sha256
 import re
 
 
 TAIEX_OHLC_SCHEMA_VERSION = "twse_taiex_price_index_ohlc.v1"
-TAIEX_OHLC_COMPRESSION = "ZSTD"
-TAIEX_OHLC_CONTENT_TYPE = "application/vnd.apache.parquet"
+TAIEX_OHLC_SYMBOL = "TAIEX"
 TAIEX_OHLC_FIELDS = (
     "Date",
     "Opening Index",
@@ -141,40 +139,3 @@ class NormalizedTaiexOhlcBatch:
             "retrieved_at",
             self.retrieved_at.astimezone(timezone.utc),
         )
-
-
-@dataclass(frozen=True)
-class TaiexOhlcParquetArtifact:
-    payload: bytes
-    content_sha256: str
-    byte_size: int
-    row_count: int
-    requested_month: date
-    source_payload_sha256: str
-    schema_version: str = TAIEX_OHLC_SCHEMA_VERSION
-    compression: str = TAIEX_OHLC_COMPRESSION
-    content_type: str = TAIEX_OHLC_CONTENT_TYPE
-
-    def __post_init__(self) -> None:
-        if (
-            not isinstance(self.payload, bytes)
-            or isinstance(self.byte_size, bool)
-            or not isinstance(self.byte_size, int)
-            or isinstance(self.row_count, bool)
-            or not isinstance(self.row_count, int)
-            or self.byte_size != len(self.payload)
-            or self.row_count <= 0
-        ):
-            raise ValueError("TAIEX Parquet size and row count must be valid")
-        if sha256(self.payload).hexdigest() != self.content_sha256:
-            raise ValueError("TAIEX Parquet content_sha256 does not match payload")
-        if not _SHA256_PATTERN.fullmatch(self.source_payload_sha256):
-            raise ValueError("source_payload_sha256 must be a SHA-256 hex digest")
-        if type(self.requested_month) is not date or self.requested_month.day != 1:
-            raise ValueError("requested_month must be the first calendar day")
-        if (
-            self.schema_version != TAIEX_OHLC_SCHEMA_VERSION
-            or self.compression != TAIEX_OHLC_COMPRESSION
-            or self.content_type != TAIEX_OHLC_CONTENT_TYPE
-        ):
-            raise ValueError("unsupported TAIEX Parquet artifact contract")

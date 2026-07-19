@@ -56,6 +56,8 @@ def _verify_head(
     }
     if manifest.source_dataset != "daily_bars":
         expected_metadata["source-dataset"] = manifest.source_dataset
+    if manifest.provider_code != "FINMIND":
+        expected_metadata["provider-code"] = manifest.provider_code
     if (
         head.content_length != manifest.byte_size
         or head.content_type != HISTORICAL_ARCHIVE_CONTENT_TYPE

@@ -13,9 +13,9 @@ import pyarrow.parquet as pq
 import pytest
 
 from src.data.ingestion.contracts import IngestionError
+from src.data.ingestion.taiex_ohlc_archive import build_taiex_ohlc_archive
 from src.data.ingestion.taiex_ohlc_contracts import TAIEX_OHLC_FIELDS
 from src.data.ingestion.taiex_ohlc_normalizer import normalize_taiex_monthly_ohlc
-from src.data.ingestion.taiex_ohlc_parquet import serialize_taiex_ohlc_parquet
 from src.data.providers.contracts import ProviderPayload
 from src.data.providers.http import JsonHttpClient, TransportResponse
 from src.data.providers.twse import (
@@ -180,7 +180,7 @@ def test_normalizer_fails_closed_on_contract_violations(
 def test_parquet_is_zstd_and_retains_provenance_and_research_semantics() -> None:
     batch = normalize_taiex_monthly_ohlc(_payload())
 
-    artifact = serialize_taiex_ohlc_parquet(batch)
+    artifact = build_taiex_ohlc_archive(batch)
 
     parquet = pq.ParquetFile(BytesIO(artifact.payload))
     table = parquet.read()
@@ -206,7 +206,7 @@ def test_parquet_is_zstd_and_retains_provenance_and_research_semantics() -> None
         batch.source_url,
         batch.source_url,
     ]
-    assert table.column("source_payload_sha256").to_pylist() == [
+    assert table.column("source_payload_hash").to_pylist() == [
         batch.source_payload_sha256,
         batch.source_payload_sha256,
     ]

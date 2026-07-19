@@ -135,8 +135,6 @@ class HistoricalArchiveManifest:
             self.source_dataset
         ):
             raise ValueError("unsupported historical archive schema version")
-        if self.provider_code != "FINMIND":
-            raise ValueError("unsupported historical archive source")
         if not self.source_version:
             raise ValueError("source_version must not be empty")
         if not _SHA256_PATTERN.fullmatch(self.parquet_sha256):
@@ -176,6 +174,7 @@ class HistoricalArchiveManifest:
             source_payload_sha256=self.source_payload_hash,
             retrieved_at=self.first_observed_at,
             source_dataset=self.source_dataset,
+            provider_code=self.provider_code,
         )
 
     @classmethod

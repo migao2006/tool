@@ -8,6 +8,9 @@ from hashlib import sha256
 import re
 
 from src.data.providers.validation import require_path_segment
+from src.data.providers.twse import TAIEX_MONTHLY_OHLC_DATASET
+
+from .taiex_ohlc_contracts import TAIEX_OHLC_SCHEMA_VERSION
 
 
 HISTORICAL_ARCHIVE_SCHEMA_VERSION = "historical_daily_bars.v1"
@@ -20,6 +23,20 @@ HISTORICAL_ARCHIVE_SCHEMA_VERSIONS = {
     "institutional_flows": "historical_institutional_flows.v1",
     "margin_short": "historical_margin_short.v1",
     "benchmark_total_return": "historical_benchmark_total_return.v1",
+    TAIEX_MONTHLY_OHLC_DATASET: TAIEX_OHLC_SCHEMA_VERSION,
+}
+
+HISTORICAL_ARCHIVE_PROVIDER_DATASETS = {
+    "FINMIND": frozenset(
+        {
+            "daily_bars",
+            "adjusted_bars",
+            "institutional_flows",
+            "margin_short",
+            "benchmark_total_return",
+        }
+    ),
+    "TWSE": frozenset({TAIEX_MONTHLY_OHLC_DATASET}),
 }
 
 _SCHEDULED_MARKETS = frozenset({"TWSE", "TPEX"})
@@ -44,6 +61,7 @@ class HistoricalArchiveRequest:
     source_payload_sha256: str
     retrieved_at: datetime
     source_dataset: str = "daily_bars"
+    provider_code: str = "FINMIND"
 
     def __post_init__(self) -> None:
         scheduled_market = self.scheduled_market.strip().upper()
@@ -56,13 +74,18 @@ class HistoricalArchiveRequest:
             self.source_dataset,
             field="source_dataset",
         )
+        provider_code = self.provider_code.strip().upper()
         digest = self.source_payload_sha256.strip().lower()
         if scheduled_market not in _SCHEDULED_MARKETS:
             raise ValueError("scheduled_market must be TWSE or TPEX")
         if asset_type not in _ASSET_TYPES:
             raise ValueError("asset_type must be COMMON_STOCK, ETF, or BENCHMARK")
-        if source_dataset not in HISTORICAL_ARCHIVE_SCHEMA_VERSIONS:
-            raise ValueError("source_dataset is not supported by the archive contract")
+        if provider_code not in HISTORICAL_ARCHIVE_PROVIDER_DATASETS:
+            raise ValueError("provider_code is not supported by the archive contract")
+        if source_dataset not in HISTORICAL_ARCHIVE_PROVIDER_DATASETS[provider_code]:
+            raise ValueError(
+                "provider_code and source_dataset are not an allowed archive pair"
+            )
         if (
             type(self.requested_start_date) is not date
             or type(self.requested_end_date) is not date
@@ -81,6 +104,7 @@ class HistoricalArchiveRequest:
         object.__setattr__(self, "asset_type", asset_type)
         object.__setattr__(self, "source_symbol", source_symbol)
         object.__setattr__(self, "source_dataset", source_dataset)
+        object.__setattr__(self, "provider_code", provider_code)
         object.__setattr__(self, "source_payload_sha256", digest)
         object.__setattr__(
             self,
@@ -144,4 +168,6 @@ class HistoricalArchiveArtifact:
         # the generic archive writer.
         if self.request.source_dataset != "daily_bars":
             metadata["source-dataset"] = self.request.source_dataset
+        if self.request.provider_code != "FINMIND":
+            metadata["provider-code"] = self.request.provider_code
         return metadata

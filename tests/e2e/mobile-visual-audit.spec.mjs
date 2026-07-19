@@ -387,6 +387,58 @@ test("320px 放大至 200% 時四個頁面與登入仍可操作", async ({ page 
   });
 });
 
+test("iPhone 橫向放大至 200% 時三個入口與登入仍可操作", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 568, height: 320 });
+  await page.goto("/?api_mode=stale-oos-research", { waitUntil: "domcontentloaded" });
+  await expect(page.locator("body")).toHaveAttribute("data-ui-state", "research_only");
+  await page.evaluate(() => {
+    document.documentElement.style.fontSize = "32px";
+    document.documentElement.style.scrollBehavior = "auto";
+  });
+
+  const navigation = page.getByRole("navigation", { name: "主要導覽" });
+  await captureViewport(page, testInfo, "20-overview-landscape-large-text-200");
+  const navigationBox = await navigation.boundingBox();
+  expect(navigationBox).not.toBeNull();
+  expect(navigationBox.height).toBeLessThanOrEqual(320 * 0.35);
+
+  await navigation.getByRole("button", { name: "5 日候選" }).click();
+  await expect(page.getByRole("heading", { name: "5 日候選股" })).toBeVisible();
+  await captureViewport(page, testInfo, "21-candidates-landscape-large-text-200");
+
+  await page.locator('[data-candidate-list] .candidate-card[data-symbol="OOS1"]')
+    .getByRole("button", { name: "查看決策詳情" })
+    .click();
+  await expect(page.getByRole("heading", { name: /OOS1/u })).toBeVisible();
+  await captureViewport(page, testInfo, "22-detail-landscape-large-text-200");
+  await verifyLastContentClearsNavigation(page);
+
+  await navigation.getByRole("button", { name: "自選" }).click();
+  await expect(page.getByRole("heading", { name: "自選股" })).toBeVisible();
+  await captureViewport(page, testInfo, "23-watchlist-landscape-large-text-200");
+  await verifyLastContentClearsNavigation(page);
+
+  const authOpener = page.getByRole("button", { name: "開啟登入" });
+  await authOpener.click();
+  await verifyDialogViewport(page);
+  const dialog = page.getByRole("dialog", { name: "登入" });
+  const dialogScroll = await dialog.evaluate((element) => ({
+    clientHeight: element.clientHeight,
+    scrollHeight: element.scrollHeight,
+  }));
+  expect(dialogScroll.scrollHeight).toBeGreaterThan(dialogScroll.clientHeight);
+  await captureViewport(page, testInfo, "24-signin-landscape-large-text-200", {
+    includeNavigation: false,
+  });
+  const submitButton = dialog.getByRole("button", { name: "登入", exact: true });
+  await submitButton.scrollIntoViewIfNeeded();
+  await expect(submitButton).toBeVisible();
+  await verifyTouchTarget(submitButton);
+  await page.keyboard.press("Escape");
+  await expect(dialog).not.toBeVisible();
+  await expect(authOpener).toBeFocused();
+});
+
 test("320px 長文字不會造成頁面水平溢位", async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 320, height: 568 });
   await page.route("**/prediction-snapshot**", async (route) => {

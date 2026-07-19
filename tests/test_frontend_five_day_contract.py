@@ -229,6 +229,8 @@ def test_research_results_are_not_hidden_and_missing_fields_are_not_fabricated()
     )
 
     assert '["PASS", "RESEARCH_ONLY"].includes' in selection
+    assert 'snapshot.systemStatus === "RESEARCH_ONLY" || !snapshot.stale' in selection
+    assert 'snapshot?.systemStatus === "RESEARCH_ONLY" && snapshot.stale === true' in selection
     assert "displayableStockRecords" in selection
     assert "overviewStockRecords" in selection
     assert 'firstValue(record, ["decision"])' in contract

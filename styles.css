@@ -400,7 +400,7 @@ h2 {
 
 .segmented button {
   min-width: 0;
-  min-height: 42px;
+  min-height: 44px;
   padding: 7px 5px;
   border: 0;
   border-radius: 9px;
@@ -770,7 +770,10 @@ h2 {
 
 @media (max-width: 600px) {
   .topbar { display: none; }
-  .app-shell { width: calc(100% - 32px); padding-top: 12px; }
+  .app-shell {
+    width: calc(100% - 32px);
+    padding-top: calc(12px + env(safe-area-inset-top));
+  }
   .page-heading { min-height: 50px; }
   .date-badge { max-width: 48%; overflow: hidden; text-overflow: ellipsis; }
   .filter-grid { grid-template-columns: 1fr; gap: 1px; overflow: hidden; border-radius: 13px; }

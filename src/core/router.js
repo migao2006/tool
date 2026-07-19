@@ -6,6 +6,14 @@ const ROUTE_TITLES = Object.freeze({
   watchlist: "自選股",
 });
 
+function setScrollPosition(top) {
+  const root = document.documentElement;
+  const previousBehavior = root.style.scrollBehavior;
+  root.style.scrollBehavior = "auto";
+  window.scrollTo({ top, left: 0, behavior: "auto" });
+  root.style.scrollBehavior = previousBehavior;
+}
+
 export function createRouter({ canActivate = () => true } = {}) {
   let currentRoute = "home";
   let previousMainRoute = "home";
@@ -43,7 +51,7 @@ export function createRouter({ canActivate = () => true } = {}) {
     }
 
     const nextScroll = restoreScroll ? scrollPositions.get(targetRoute) ?? 0 : 0;
-    window.scrollTo({ top: nextScroll, left: 0, behavior: "auto" });
+    setScrollPosition(nextScroll);
   }
 
   function handleClick(event) {

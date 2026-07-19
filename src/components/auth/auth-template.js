@@ -20,7 +20,7 @@ export function createAccountEntryMarkup() {
 
 export function createAuthDialogMarkup() {
   return `
-    <dialog class="auth-dialog" data-auth-dialog aria-labelledby="auth-dialog-title">
+    <dialog class="auth-dialog" data-auth-dialog aria-labelledby="auth-dialog-title" tabindex="-1">
       <div class="auth-sheet">
         <header class="auth-header">
           <div><small>Alpha Lens</small><h2 id="auth-dialog-title">登入</h2></div>

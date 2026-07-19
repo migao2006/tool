@@ -1,0 +1,67 @@
+name: Build TWSE research calendar snapshot
+
+on:
+  workflow_dispatch:
+    inputs:
+      start_date:
+        description: First research session date
+        required: true
+        default: "2018-01-01"
+        type: string
+      end_date:
+        description: Last completed research session date
+        required: true
+        default: "2026-06-30"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: twse-research-calendar-snapshot
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: ${{ vars.TWSE_RESEARCH_CALENDAR_SNAPSHOT_ENABLED == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install uv with dependency caching
+        uses: astral-sh/setup-uv@v8.3.2
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Synchronize locked environment
+        run: uv sync --frozen
+
+      - name: Build versioned calendar snapshot
+        env:
+          INPUT_START_DATE: ${{ inputs.start_date }}
+          INPUT_END_DATE: ${{ inputs.end_date }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: >-
+          uv run python -m scripts.build_twse_trading_calendar_snapshot
+          --start-date "$INPUT_START_DATE"
+          --end-date "$INPUT_END_DATE"
+          --output twse-trading-calendar-snapshot.json
+          --audit twse-trading-calendar-audit.json
+
+      - name: Preserve calendar snapshot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: twse-trading-calendar-${{ github.run_id }}
+          path: |
+            twse-trading-calendar-snapshot.json
+            twse-trading-calendar-audit.json
+          if-no-files-found: error
+          retention-days: 90

@@ -13,6 +13,9 @@ from src.pipeline.contracts import (
     PipelineStatus,
 )
 from src.pipeline.orchestrator import PipelineOrchestrator
+from src.pipeline.twse_prepared_research_repository import (
+    PreparedResearchArtifactSourceError,
+)
 from tests.pipeline_support import (
     CONFIG,
     RecordingRunner,
@@ -33,6 +36,25 @@ def test_pipeline_requires_real_data_source() -> None:
     assert result.reason_codes == ("DATA_SOURCE_NOT_CONFIGURED",)
     assert result.metrics == {}
     assert result.artifacts == {}
+
+
+def test_pipeline_preserves_stable_artifact_source_reason_code() -> None:
+    class InvalidPreparedArtifactRepository:
+        def load(self, **_: object) -> PipelineBatch:
+            raise PreparedResearchArtifactSourceError(
+                "PREPARED_RESEARCH_ARTIFACT_AUDIT_INVALID",
+                "invalid prepared artifact audit",
+            )
+
+    result = PipelineOrchestrator(config_path=CONFIG).run(
+        mode=PipelineMode.TRAIN,
+        horizon=5,
+        repository=InvalidPreparedArtifactRepository(),
+        runner=RecordingRunner(),
+    )
+
+    assert result.status is PipelineStatus.RESEARCH_ONLY
+    assert result.reason_codes == ("PREPARED_RESEARCH_ARTIFACT_AUDIT_INVALID",)
 
 
 def test_pipeline_rejects_point_in_time_violation_before_runner() -> None:

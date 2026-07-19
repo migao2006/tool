@@ -5,7 +5,7 @@ from __future__ import annotations
 from .historical_archive_contracts import HistoricalArchiveRequest
 
 
-_ARCHIVE_PREFIX = ("raw", "v1", "provider=finmind", "dataset=daily_bars")
+_ARCHIVE_PREFIX = ("raw", "v1", "provider=finmind")
 
 
 def build_historical_object_key(request: HistoricalArchiveRequest) -> str:
@@ -18,6 +18,7 @@ def build_historical_object_key(request: HistoricalArchiveRequest) -> str:
     return "/".join(
         (
             *_ARCHIVE_PREFIX,
+            f"dataset={request.source_dataset}",
             f"scheduled_market={request.scheduled_market}",
             f"asset_type={request.asset_type}",
             f"symbol={request.source_symbol}",

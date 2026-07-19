@@ -12,8 +12,16 @@ from typing import Any, cast
 from src.data.ingestion.historical_archive_contracts import (
     HISTORICAL_ARCHIVE_COMPRESSION,
 )
+from src.data.ingestion.historical_benchmark_contracts import BENCHMARK_DATASET
+from src.data.ingestion.historical_benchmark_parquet import (
+    historical_benchmark_schema,
+)
 from src.data.ingestion.historical_parquet_serializer import (
     historical_parquet_schema,
+)
+from src.data.ingestion.historical_supplemental_contracts import SUPPLEMENTAL_DATASETS
+from src.data.ingestion.historical_supplemental_parquet import (
+    historical_supplemental_schema,
 )
 
 from .contracts import (
@@ -95,7 +103,17 @@ def _read_table(payload: bytes, manifest: HistoricalArchiveManifest) -> Any:
             "HISTORICAL_ARCHIVE_PARQUET_INVALID",
             "Historical archive bytes are not a readable fixed-schema Parquet file",
         ) from error
-    expected_schema = historical_parquet_schema()
+    if manifest.source_dataset == "daily_bars":
+        expected_schema = historical_parquet_schema()
+    elif manifest.source_dataset in SUPPLEMENTAL_DATASETS:
+        expected_schema = historical_supplemental_schema(manifest.source_dataset)
+    elif manifest.source_dataset == BENCHMARK_DATASET:
+        expected_schema = historical_benchmark_schema()
+    else:
+        raise _fail(
+            "HISTORICAL_ARCHIVE_SCHEMA_UNSUPPORTED",
+            "Historical archive dataset is not supported",
+        )
     if not table.schema.equals(expected_schema, check_metadata=False):
         raise _fail(
             "HISTORICAL_ARCHIVE_SCHEMA_MISMATCH",

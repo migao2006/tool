@@ -20,10 +20,19 @@
     "unadjusted_ohlc_for_execution": true
   },
   "published_metrics": null,
+  "latest_raw_archive_audit": {
+    "as_of_date": "2026-07-19",
+    "integrity_status": "PASS",
+    "object_count": 1687,
+    "row_count": 1941388,
+    "twse_common_stock_symbols": 1080,
+    "tpex_common_stock_symbols": 607,
+    "production_eligible": false
+  },
   "limitations": [
-    "No real point-in-time market dataset has been imported",
+    "Raw archives are real but historical identity, actions, and tradability are not fully point-in-time verified",
+    "The TAIEX benchmark and feature dataset workflows have not yet been executed in Production",
     "Walk-forward and locked holdout have not been executed",
     "No production predictions or backtest performance are available"
   ]
 }
-

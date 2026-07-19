@@ -32,6 +32,7 @@ FINMIND_DATASETS = {
     "stock_splits": "TaiwanStockSplitPrice",
     "par_value_changes": "TaiwanStockParValueChange",
     "suspended": "TaiwanStockSuspended",
+    "benchmark_total_return": "TaiwanStockTotalReturnIndex",
 }
 
 
@@ -98,7 +99,9 @@ class FinMindClient(JsonProviderClient):
     ) -> ProviderPayload:
         token = self._require_token()
         name = require_dataset(dataset, FINMIND_DATASETS)
-        normalized_id = require_identifier(data_id, field="data_id") if data_id else None
+        normalized_id = (
+            require_identifier(data_id, field="data_id") if data_id else None
+        )
         normalized_start, normalized_end = iso_date_range(start_date, end_date)
         result = self._get(
             dataset=name,

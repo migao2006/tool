@@ -178,6 +178,7 @@ test("歷史 OOS 研究快照的 NO_TRADE 排序與已完成輸出仍可檢視",
   await expect(overviewCard).toContainText("Rank Score 97.0");
   await expect(overviewCard).toContainText("校準後 UP 61.0%");
   await expect(overviewCard).toContainText("條件 P50 1.3%");
+  await expect(overviewCard).not.toContainText("FORMAL_LABEL_FACTORY_NOT_USED");
   await expect(page.locator('[data-overview-count="NO_TRADE"]')).toHaveText("1");
 
   const navigation = page.getByRole("navigation", { name: "主要導覽" });
@@ -191,6 +192,10 @@ test("歷史 OOS 研究快照的 NO_TRADE 排序與已完成輸出仍可檢視",
   await expect(researchCard).toContainText("97.0");
   await expect(researchCard).toContainText("61.0%／27.0%／12.0%");
   await expect(researchCard).toContainText("-2.4%／1.3%／4.6%");
+  await expect(researchCard.locator("[data-reason-summary]")).toHaveText(
+    "RESEARCH_ONLY_NO_FORMAL_DECISION_POLICY · UNADJUSTED_PRICE_RESEARCH_ONLY · 另 3 項稽核資訊",
+  );
+  await expect(researchCard).not.toContainText("FORMAL_LABEL_FACTORY_NOT_USED");
 
   await researchCard.getByRole("button", { name: "查看決策詳情" }).click();
   await expect(page.getByRole("heading", { name: /OOS1/u })).toBeVisible();
@@ -200,6 +205,15 @@ test("歷史 OOS 研究快照的 NO_TRADE 排序與已完成輸出仍可檢視",
   await expect(page.locator('[data-stock-field="net_q10"]')).toHaveText("-2.4%");
   await expect(page.locator('[data-stock-field="net_q50"]')).toHaveText("1.3%");
   await expect(page.locator('[data-stock-field="net_q90"]')).toHaveText("4.6%");
+  await expect(page.locator('[data-stock-field="reason_codes"]')).toHaveText(
+    "RESEARCH_ONLY_NO_FORMAL_DECISION_POLICY · UNADJUSTED_PRICE_RESEARCH_ONLY · 另 3 項稽核資訊",
+  );
+  const auditDetails = page.locator(".audit-details");
+  await expect(auditDetails).not.toHaveAttribute("open", "");
+  await auditDetails.getByText("技術稽核資訊").click();
+  await expect(auditDetails.locator('[data-audit-field="reason_codes"]')).toHaveText(
+    "RESEARCH_ONLY_NO_FORMAL_DECISION_POLICY · UNADJUSTED_PRICE_RESEARCH_ONLY · FORMAL_LABEL_FACTORY_NOT_USED · POINT_IN_TIME_IDENTITY_UNVERIFIED · MARKET_EXPOSURE_NOT_AVAILABLE",
+  );
 });
 
 test("正式 PASS 快照若過期仍維持 fail-closed", async ({ page }) => {

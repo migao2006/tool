@@ -33,3 +33,15 @@ export function formatDateTime(value) {
     hour12: false,
   }).format(parsed);
 }
+
+export function formatReasonCodeSummary(reasonCodes, limit = 2) {
+  const codes = Array.isArray(reasonCodes)
+    ? reasonCodes.filter((code) => typeof code === "string" && code.length > 0)
+    : [];
+  if (!codes.length) return "—";
+
+  const visibleCodes = codes.slice(0, Math.max(1, limit));
+  const hiddenCount = codes.length - visibleCodes.length;
+  const summary = visibleCodes.join(" · ");
+  return hiddenCount > 0 ? `${summary} · 另 ${hiddenCount} 項稽核資訊` : summary;
+}

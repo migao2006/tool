@@ -158,14 +158,43 @@ def test_staging_publish_is_conservative_and_idempotent() -> None:
     )
 
 
-@pytest.mark.parametrize("environment", ["", "production", "prod"])
-def test_publish_gate_rejects_non_staging_environment(environment: str) -> None:
-    with pytest.raises(ValueError, match="development/staging"):
+@pytest.mark.parametrize("environment", ["", "prod"])
+def test_publish_gate_rejects_unknown_environment(environment: str) -> None:
+    with pytest.raises(ValueError, match="recognized environment"):
         _ = TwseResearchPredictionSupabasePublisher(
             _Writer(),
             target_environment=environment,
             publish_enabled=True,
         )
+
+
+def test_production_publish_requires_a_second_explicit_gate() -> None:
+    with pytest.raises(ValueError, match="PRODUCTION_PUBLISH_ENABLED"):
+        _ = TwseResearchPredictionSupabasePublisher(
+            _Writer(),
+            target_environment="production",
+            publish_enabled=True,
+        )
+
+
+def test_explicit_production_research_publish_remains_no_trade() -> None:
+    writer = _Writer()
+    result = TwseResearchPredictionSupabasePublisher(
+        writer,
+        target_environment="production",
+        publish_enabled=True,
+        production_publish_enabled=True,
+    ).publish(_payload())
+
+    assert result.target_environment == "production"
+    run = writer.upserts[1][1][0]
+    stock = writer.upserts[2][1][0]
+    assert run["system_validation_status"] == "RESEARCH_ONLY"
+    assert run["candidate_count"] == 0
+    assert stock["decision"] == "NO_TRADE"
+    assert "RESEARCH_ONLY_NO_FORMAL_DECISION_POLICY" in cast(
+        list[object], stock["reason_codes"]
+    )
 
 
 def test_publish_gate_is_disabled_by_default() -> None:

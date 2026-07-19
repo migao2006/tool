@@ -167,8 +167,11 @@ test("研究快照顯示已完成欄位，缺值維持破折號", async ({ page 
 test("歷史 OOS 研究快照的 NO_TRADE 排序與已完成輸出仍可檢視", async ({ page }) => {
   await page.goto("/?api_mode=stale-oos-research", { waitUntil: "domcontentloaded" });
 
-  await expect(page.locator("body")).toHaveAttribute("data-ui-state", "stale");
-  await expect(page.locator('[data-page="home"] [data-ui-state-title]')).toHaveText("資料已過期");
+  await expect(page.locator("body")).toHaveAttribute("data-ui-state", "research_only");
+  const banner = page.locator('[data-page="home"] .system-banner').first();
+  await expect(banner).toHaveClass(/is-badge-only/u);
+  await expect(banner.locator("[data-system-status-label]")).toHaveText("RESEARCH_ONLY");
+  await expect(banner.locator("[data-status-copy]")).toBeHidden();
   await expect(page.locator("[data-overview-list-title]")).toHaveText("5 日歷史研究排序");
   const overviewCard = page.locator('[data-overview-candidates] .candidate-card[data-symbol="OOS1"]');
   await expect(overviewCard).toBeVisible();
@@ -179,6 +182,8 @@ test("歷史 OOS 研究快照的 NO_TRADE 排序與已完成輸出仍可檢視",
 
   const navigation = page.getByRole("navigation", { name: "主要導覽" });
   await navigation.getByRole("button", { name: "5 日候選" }).click();
+  await expect(page.locator('[data-candidate-filters] select[name="decision"]')).toBeEnabled();
+  await expect(page.locator('[data-candidate-filters] button[data-value="TWSE"]')).toBeEnabled();
   await expect(page.locator("[data-candidate-list-title]")).toHaveText("5 日歷史研究結果");
   const researchCard = page.locator('[data-candidate-list] .candidate-card[data-symbol="OOS1"]');
   await expect(researchCard).toBeVisible();
@@ -195,6 +200,24 @@ test("歷史 OOS 研究快照的 NO_TRADE 排序與已完成輸出仍可檢視",
   await expect(page.locator('[data-stock-field="net_q10"]')).toHaveText("-2.4%");
   await expect(page.locator('[data-stock-field="net_q50"]')).toHaveText("1.3%");
   await expect(page.locator('[data-stock-field="net_q90"]')).toHaveText("4.6%");
+});
+
+test("正式 PASS 快照若過期仍維持 fail-closed", async ({ page }) => {
+  await page.goto("/contract-test", { waitUntil: "domcontentloaded" });
+
+  const resolvedState = await page.evaluate(async () => {
+    const { resolveSnapshotUiState } = await import("/src/core/ui-state.js");
+    return resolveSnapshotUiState({
+      systemStatus: "PASS",
+      stale: true,
+      dataQualityHardFail: false,
+      predictions: [{ decision: "CANDIDATE" }],
+      candidates: [{ decision: "CANDIDATE" }],
+      reasonCodes: [],
+    });
+  });
+
+  expect(resolvedState).toBe("stale");
 });
 
 test("首頁只把資料庫真實摘要顯示為 RAW／RESEARCH_ONLY", async ({ page }) => {

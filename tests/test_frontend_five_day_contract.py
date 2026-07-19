@@ -219,6 +219,7 @@ def test_formal_candidates_exclude_hard_fail_and_etf() -> None:
 def test_research_results_are_not_hidden_and_missing_fields_are_not_fabricated() -> None:
     contract = read("src/data/prediction-contract.js")
     selection = read("src/features/prediction-selection.js")
+    ui_state = read("src/core/ui-state.js")
     pages = "\n".join(
         read(path)
         for path in (
@@ -231,6 +232,7 @@ def test_research_results_are_not_hidden_and_missing_fields_are_not_fabricated()
     assert '["PASS", "RESEARCH_ONLY"].includes' in selection
     assert 'snapshot.systemStatus === "RESEARCH_ONLY" || !snapshot.stale' in selection
     assert 'snapshot?.systemStatus === "RESEARCH_ONLY" && snapshot.stale === true' in selection
+    assert 'snapshot.stale && snapshot.systemStatus !== "RESEARCH_ONLY"' in ui_state
     assert "displayableStockRecords" in selection
     assert "overviewStockRecords" in selection
     assert 'firstValue(record, ["decision"])' in contract

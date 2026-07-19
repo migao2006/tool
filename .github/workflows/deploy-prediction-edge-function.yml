@@ -1,0 +1,176 @@
+name: Deploy prediction Edge Function
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/deploy-prediction-edge-function.yml"
+      - ".github/scripts/smoke-prediction-snapshot.mjs"
+      - "supabase/functions/prediction-snapshot/**"
+      - "supabase/config.toml"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/deploy-prediction-edge-function.yml"
+      - ".github/scripts/smoke-prediction-snapshot.mjs"
+      - "supabase/functions/prediction-snapshot/**"
+      - "supabase/config.toml"
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: GitHub environment containing the target Supabase project settings
+        required: true
+        type: choice
+        options:
+          - staging
+          - production
+
+permissions:
+  contents: read
+
+concurrency:
+  group: prediction-edge-${{ github.event_name == 'workflow_dispatch' && 'deployment' || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: Edge Function tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Check and test prediction-snapshot
+        working-directory: supabase/functions/prediction-snapshot
+        run: |
+          deno task check
+          deno fmt --check
+          deno lint
+          deno task test
+
+  ref-gate:
+    name: Validate deployment ref
+    if: github.event_name == 'workflow_dispatch'
+    needs: test
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require main for Production
+        shell: bash
+        env:
+          TARGET_ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          set -euo pipefail
+          if [[ "$TARGET_ENVIRONMENT" == "production" && "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "Production can only deploy from refs/heads/main." >&2
+            exit 1
+          fi
+
+  deploy-staging:
+    name: Deploy and verify Staging
+    if: github.event_name == 'workflow_dispatch'
+    needs: ref-gate
+    runs-on: ubuntu-24.04
+    environment: staging
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
+      SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+      PREDICTION_ALLOWED_ORIGINS: ${{ vars.PREDICTION_ALLOWED_ORIGINS }}
+      PREDICTION_STALE_AFTER_HOURS: ${{ vars.PREDICTION_STALE_AFTER_HOURS }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6.0.9
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install locked Supabase CLI
+        run: pnpm install --frozen-lockfile
+
+      - name: Validate project-scoped deployment settings
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$SUPABASE_ACCESS_TOKEN"
+          test -n "$SUPABASE_PROJECT_REF"
+          test -n "$SUPABASE_URL"
+          test -n "$PREDICTION_ALLOWED_ORIGINS"
+
+      - name: Configure function allowlist
+        shell: bash
+        run: |
+          set -euo pipefail
+          stale_hours="${PREDICTION_STALE_AFTER_HOURS:-72}"
+          pnpm exec supabase secrets set \
+            "PREDICTION_ALLOWED_ORIGINS=$PREDICTION_ALLOWED_ORIGINS" \
+            "PREDICTION_STALE_AFTER_HOURS=$stale_hours" \
+            --project-ref "$SUPABASE_PROJECT_REF"
+
+      - name: Deploy prediction-snapshot through GitHub
+        run: >-
+          pnpm exec supabase functions deploy prediction-snapshot
+          --project-ref "$SUPABASE_PROJECT_REF"
+
+      - name: Smoke-test public research contract
+        run: node .github/scripts/smoke-prediction-snapshot.mjs
+
+  deploy-production:
+    name: Deploy and verify Production
+    if: github.event_name == 'workflow_dispatch' && inputs.environment == 'production'
+    needs: deploy-staging
+    runs-on: ubuntu-24.04
+    environment: production
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
+      SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+      PREDICTION_ALLOWED_ORIGINS: ${{ vars.PREDICTION_ALLOWED_ORIGINS }}
+      PREDICTION_STALE_AFTER_HOURS: ${{ vars.PREDICTION_STALE_AFTER_HOURS }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6.0.9
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install locked Supabase CLI
+        run: pnpm install --frozen-lockfile
+
+      - name: Validate project-scoped deployment settings
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/main"
+          test -n "$SUPABASE_ACCESS_TOKEN"
+          test -n "$SUPABASE_PROJECT_REF"
+          test -n "$SUPABASE_URL"
+          test -n "$PREDICTION_ALLOWED_ORIGINS"
+
+      - name: Configure function allowlist
+        shell: bash
+        run: |
+          set -euo pipefail
+          stale_hours="${PREDICTION_STALE_AFTER_HOURS:-72}"
+          pnpm exec supabase secrets set \
+            "PREDICTION_ALLOWED_ORIGINS=$PREDICTION_ALLOWED_ORIGINS" \
+            "PREDICTION_STALE_AFTER_HOURS=$stale_hours" \
+            --project-ref "$SUPABASE_PROJECT_REF"
+
+      - name: Deploy prediction-snapshot through GitHub
+        run: >-
+          pnpm exec supabase functions deploy prediction-snapshot
+          --project-ref "$SUPABASE_PROJECT_REF"
+
+      - name: Smoke-test public research contract
+        run: node .github/scripts/smoke-prediction-snapshot.mjs

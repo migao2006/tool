@@ -60,8 +60,11 @@ class PipelineOrchestrator:
             )
         try:
             batch = repository.load(mode=mode, horizon=horizon, as_of_date=as_of_date)
-        except DataSourceError:
-            return finalize(self._research_only(mode, horizon, "REAL_DATA_UNAVAILABLE"))
+        except DataSourceError as error:
+            reason_code = getattr(error, "reason_code", "REAL_DATA_UNAVAILABLE")
+            if not isinstance(reason_code, str) or not reason_code.strip():
+                reason_code = "REAL_DATA_UNAVAILABLE"
+            return finalize(self._research_only(mode, horizon, reason_code))
         except Exception:
             return finalize(
                 PipelineResult(

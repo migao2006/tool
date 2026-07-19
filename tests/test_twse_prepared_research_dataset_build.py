@@ -44,6 +44,11 @@ from src.pipeline.twse_prepared_research_artifact import (
     PreparedResearchArtifactError,
     PreparedResearchArtifactWriter,
 )
+from src.pipeline.twse_prepared_research_repository import (
+    PreparedResearchArtifactRepository,
+    PreparedResearchArtifactSourceError,
+)
+from src.pipeline.contracts import PipelineMode
 from src.pipeline.twse_research_dataset_build import (
     TwseResearchDatasetBuildError,
     TwseResearchDatasetBuilder,
@@ -445,3 +450,59 @@ def test_prepared_snapshot_changes_with_taiex_input_and_rejects_mixed_manifest(
     )
     with pytest.raises(ValueError, match="input snapshot"):
         _ = replace(manifest, benchmark_snapshot_sha256="7" * 64)
+
+
+def test_prepared_repository_requires_sidecar_and_decodes_reason_codes(
+    tmp_path: Path,
+) -> None:
+    result = _result(tmp_path)
+    output = tmp_path / "prepared.parquet"
+    audit = tmp_path / "prepared-audit.json"
+    manifest = PreparedResearchArtifactWriter().write(output, result)
+    payload = result.audit_payload()
+    payload.update(
+        {
+            "build_status": "COMPLETED_RESEARCH_ONLY",
+            "output_file": output.name,
+            "prepared_artifact_manifest": manifest.to_dict(),
+            "prepared_artifact_read_back_verified": True,
+        }
+    )
+    audit.write_text(json.dumps(payload), encoding="utf-8")
+
+    assert isinstance(pd.read_parquet(output).iloc[0]["reason_codes"], str)
+    batch = PreparedResearchArtifactRepository(output, audit).load(
+        mode=PipelineMode.TRAIN,
+        horizon=5,
+        as_of_date=None,
+    )
+
+    assert isinstance(batch.records.iloc[0]["reason_codes"], tuple)
+    assert batch.source_hash == manifest.parquet_sha256
+
+
+def test_prepared_repository_rejects_unverified_or_tampered_sidecar(
+    tmp_path: Path,
+) -> None:
+    result = _result(tmp_path)
+    output = tmp_path / "prepared.parquet"
+    audit = tmp_path / "prepared-audit.json"
+    manifest = PreparedResearchArtifactWriter().write(output, result)
+    payload = result.audit_payload()
+    payload.update(
+        {
+            "build_status": "COMPLETED_RESEARCH_ONLY",
+            "output_file": output.name,
+            "prepared_artifact_manifest": manifest.to_dict(),
+            "prepared_artifact_read_back_verified": False,
+        }
+    )
+    audit.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(PreparedResearchArtifactSourceError) as captured:
+        _ = PreparedResearchArtifactRepository(output, audit).load(
+            mode=PipelineMode.TRAIN,
+            horizon=5,
+            as_of_date=None,
+        )
+    assert captured.value.reason_code == "PREPARED_RESEARCH_ARTIFACT_AUDIT_INVALID"

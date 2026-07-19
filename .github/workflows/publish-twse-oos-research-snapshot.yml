@@ -64,6 +64,7 @@ jobs:
         run: >-
           uv run python -m scripts.publish_twse_research_snapshot
           --input inputs/prepared/twse-prepared-research.parquet
+          --input-audit inputs/prepared/twse-prepared-research-audit.json
           --artifact-root artifacts
           --report twse-research-publish-report.json
           --horizon 5

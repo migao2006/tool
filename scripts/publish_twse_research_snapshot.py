@@ -26,7 +26,9 @@ from src.data.research.twse_research_prediction_supabase import (  # noqa: E402
 )
 from src.pipeline.contracts import PipelineMode, PipelineStatus  # noqa: E402
 from src.pipeline.orchestrator import PipelineOrchestrator  # noqa: E402
-from src.pipeline.repositories import FileDatasetRepository  # noqa: E402
+from src.pipeline.twse_prepared_research_repository import (  # noqa: E402
+    PreparedResearchArtifactRepository,
+)
 from src.pipeline.twse_research_runner import (  # noqa: E402
     twse_price_research_runner,
 )
@@ -40,6 +42,7 @@ def _parser() -> argparse.ArgumentParser:
         )
     )
     _ = parser.add_argument("--input", required=True, type=Path)
+    _ = parser.add_argument("--input-audit", required=True, type=Path)
     _ = parser.add_argument("--artifact-root", type=Path, default=Path("artifacts"))
     _ = parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH)
     _ = parser.add_argument("--report", type=Path)
@@ -85,7 +88,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     ).run(
         mode=PipelineMode.TRAIN,
         horizon=horizon,
-        repository=FileDatasetRepository(cast(Path, arguments.input)),
+        repository=PreparedResearchArtifactRepository(
+            cast(Path, arguments.input),
+            cast(Path, arguments.input_audit),
+        ),
         runner=twse_price_research_runner,
     )
     payload = cast(dict[str, object], result.to_dict())

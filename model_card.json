@@ -2,16 +2,114 @@
   "model_name": "alpha_lens_five_day_mvp",
   "status": "RESEARCH_ONLY",
   "production_horizon": 5,
-  "model_version": null,
-  "training_end_date": null,
+  "scope": "TWSE_PRICE_ONLY",
+  "model_version": "twse-price-research-h5-v1",
+  "training_end_date": "2024-06-18",
   "locked_holdout_executed": false,
   "ranking_is_only_sort_source": true,
-  "entry_rule": "t_plus_1_executable_open",
+  "workflow": {
+    "run_id": 29690820942,
+    "url": "https://github.com/migao2006/tool/actions/runs/29690820942",
+    "git_commit": "1c900c6873337606ac197332d6d9c84bdbf3ee08",
+    "conclusion": "success",
+    "generated_at": "2026-07-19T22:34:20.279167+08:00"
+  },
+  "models": {
+    "rank": "LightGBM LGBMRanker lambdarank",
+    "direction": "LightGBM multiclass with time-separated temperature calibration",
+    "quantiles": "LightGBM quantile 0.10/0.50/0.90",
+    "ranking_is_only_sort_source": true,
+    "random_seed": 20260718,
+    "library_versions": {
+      "lightgbm": "4.6.0",
+      "scikit-learn": "1.9.0"
+    }
+  },
+  "research_dataset": {
+    "record_count": 1196162,
+    "input_artifact_sha256": "9ca63d003f082948013545f2755bb0d4dea145d94aaebbcd358cd93f40b480be",
+    "dataset_snapshot_id": "22f6747e395b2a893ea297496558b05bd59e10751ec6a27d7d8ad3560aa88c22",
+    "feature_schema_hash": "8e256243dbe0018a7a96a637b989e2338dcf06a8f2e9a9d42faf888c7f54cd53",
+    "source_hash": "18c6aac3780bea72be2ebdae2803fbe86b8a42436f60101d6412199fc11a6701",
+    "label_version": "twse-research-unadjusted-open-close-5d-v1",
+    "benchmark_id": "TWSE_TAIEX_PRICE_INDEX",
+    "benchmark_version": "rwd.en.TAIEX.MI_5MINS_HIST.v1@snapshot:4c58a09fd1bbccc21416948eff8d31f77c31ba8568e2392493d0050f674c52c9",
+    "cost_profile_version": "tw_stock_swing_v1:base_cost",
+    "production_eligible": false
+  },
+  "validation": {
+    "method": "purged_walk_forward",
+    "fold_count": 5,
+    "evaluated_dates_per_fold": 63,
+    "locked_holdout_executed": false,
+    "locked_holdout_rows": 170032,
+    "locked_holdout_reason": "FROZEN_UNTIL_RESEARCH_DESIGN_IS_LOCKED",
+    "ranking_mean": {
+      "ndcg_at_10": 0.3118559358104792,
+      "ndcg_at_20": 0.3054872920483399,
+      "ndcg_at_50": 0.2877961237694637,
+      "precision_at_10": 0.39746031746031746,
+      "precision_at_20": 0.3914285714285714,
+      "precision_at_50": 0.3784126984126984,
+      "rank_ic_mean": -0.05455249592571441,
+      "rank_icir": -0.3583357717440063
+    },
+    "momentum_20d_baseline_mean": {
+      "ndcg_at_10": 0.33015609766513776,
+      "ndcg_at_20": 0.3174443892862485,
+      "ndcg_at_50": 0.2939938236953087,
+      "precision_at_10": 0.4022222222222222,
+      "precision_at_20": 0.39396825396825397,
+      "precision_at_50": 0.3771428571428571,
+      "rank_ic_mean": -0.023127247869154845,
+      "rank_icir": -0.18106417114739332
+    },
+    "rank_model_beats_momentum_20d": false,
+    "direction_mean": {
+      "log_loss": 1.0371983617119593,
+      "macro_f1": 0.3331015425382762,
+      "ece": 0.03045878221144363,
+      "calibrated_log_loss": 1.042601182868113,
+      "uncalibrated_log_loss": 1.0438519437271512,
+      "brier_down": 0.24038665939798917,
+      "brier_neutral": 0.20462095686524093,
+      "brier_up": 0.1793551988538135
+    },
+    "quantile_mean": {
+      "p10_breach_rate": 0.12125536253581089,
+      "p90_exceedance_rate": 0.09922253778945613,
+      "p10_p90_coverage": 0.779522099674733,
+      "mean_interval_width": 0.12004807752773364,
+      "pinball_q10": 0.00966010485206841,
+      "pinball_q50": 0.02016551586748424,
+      "pinball_q90": 0.010663422339008192,
+      "raw_crossing_rate": 0.0,
+      "final_crossing_rate": 0.0
+    }
+  },
+  "published_research_snapshot": {
+    "prediction_run_id": 1,
+    "as_of_date": "2025-05-02",
+    "decision_at": "2025-05-02T17:00:00+08:00",
+    "prediction_count": 672,
+    "candidate_count": 0,
+    "watch_count": 0,
+    "no_trade_count": 672,
+    "hard_fail_count": 0,
+    "snapshot_sha256": "f4fa5a50ebaa3f4820caadaf02c70525a7b6e93fd89d1fa89fbaac21cc7840d9",
+    "github_artifact_id": 8443586850,
+    "github_artifact_digest": "57eb16f26d50e2408020c51a4e1bef2f179e998819baf2f550bfc088c92e6b69"
+  },
+  "entry_rule": "t_plus_1_open_research_path",
   "exit_rule": "entry_plus_5_trading_days_close",
   "labels": {
-    "rank": "net_executable_return_minus_versioned_market_benchmark",
+    "rank": "research_net_open_close_return_minus_close_based_taiex_benchmark",
     "direction": "UP_NEUTRAL_DOWN_using_dynamic_no_trade_band",
-    "quantiles": [0.1, 0.5, 0.9]
+    "quantiles": [
+      0.1,
+      0.5,
+      0.9
+    ]
   },
   "data_requirements": {
     "available_at_audit_required": true,
@@ -19,20 +117,22 @@
     "corporate_actions_required": true,
     "unadjusted_ohlc_for_execution": true
   },
-  "published_metrics": null,
   "latest_raw_archive_audit": {
     "as_of_date": "2026-07-19",
     "integrity_status": "PASS",
-    "object_count": 1687,
-    "row_count": 1941388,
+    "object_count": 1971,
+    "row_count": 2183917,
     "twse_common_stock_symbols": 1080,
-    "tpex_common_stock_symbols": 607,
+    "tpex_common_stock_symbols": 891,
     "production_eligible": false
   },
+  "formal_pass": false,
   "limitations": [
-    "Raw archives are real but historical identity, actions, and tradability are not fully point-in-time verified",
-    "The TAIEX benchmark and feature dataset workflows have not yet been executed in Production",
-    "Walk-forward and locked holdout have not been executed",
-    "No production predictions or backtest performance are available"
+    "Historical security identity remains current-universe mapped and is not fully point-in-time verified",
+    "Corporate actions, tradability states, and execution feasibility are not fully point-in-time verified",
+    "The stock and TAIEX benchmark entry paths are not fully aligned",
+    "The research label uses unadjusted open-close returns rather than formal executable total return",
+    "The rank model did not beat the 20-day momentum baseline and mean Rank IC is negative",
+    "Locked holdout and complete execution backtest have not been executed"
   ]
 }

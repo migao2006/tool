@@ -15,17 +15,26 @@
 - 已建立每月費用為 `$0` 的獨立 Staging 專案 `alpha-lens-staging`。
 - Project ref：`kretvnnfavndkmckyidl`。
 - 專案狀態：`ACTIVE_HEALTHY`。
-- Staging 已完成 database reset，並套用 27 個 migrations。
-- 27 個 migrations 包含 `20260719081157_defer_unavailable_supplemental_datasets.sql`。
+- Staging 已完成 database reset，並套用 28 個 migrations。
+- 最新 migration 為
+  `20260719090300_allow_late_retrieval_for_current_security_snapshot.sql`。
+- 新約束已實測允許來源日期後才取得的快照，仍拒絕未來快照日期，且驗證資料無殘留。
 - `supabase db lint --linked --level error`：0 個 schema error。
 - Supplemental task transaction RPC contract：`PASS`。
 - Staging 只用於隔離驗證；它不是 Supabase Pro Branching，也不是 Production。
 
 ### Supabase Production
 
-- Production 目前有 26 個 migrations，既有 migration history 已對齊。
-- `20260719081157_defer_unavailable_supplemental_datasets.sql` 尚未套用至 Production。
-- 在新 migration 完成正式發布前，Production 不具備該次 supplemental unavailable／defer 修正。
+- Production 目前有 27 個 migrations，既有 migration history 已對齊至
+  `20260719081157_defer_unavailable_supplemental_datasets.sql`。
+- `20260719090300_allow_late_retrieval_for_current_security_snapshot.sql`
+  尚未套用至 Production，需先通過 GitHub 發布閘門。
+
+### 本機隔離環境
+
+- Docker Engine `29.6.1`、Docker Compose `5.3.0` 與 Docker Desktop 已驗證可用。
+- Supabase Local 已用 Docker 完整重建 28 個 migrations。
+- 新 security snapshot 約束、rollback 及 `supabase db lint` 已實際通過。
 
 ## 二、已封存及已產生的真實資料
 

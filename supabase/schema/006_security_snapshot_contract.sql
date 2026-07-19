@@ -51,7 +51,7 @@ alter table market_data.security_history
       and snapshot_date is not null
       and effective_from = snapshot_date
       and effective_to = snapshot_date + 1
-      and (available_at at time zone 'Asia/Taipei')::date = snapshot_date
+      and snapshot_date <= (available_at at time zone 'Asia/Taipei')::date
       and source_revision_hash is not null
     )
     or (
@@ -66,5 +66,9 @@ comment on column market_data.security_history.source_revision_hash is
   'SHA-256 of the deterministic composite source payload manifest.';
 comment on column market_data.security_history.full_cash_delivery_flag is
   'True or false means observed; null means the connected source did not establish the state.';
+
+comment on constraint security_history_current_snapshot_check
+  on market_data.security_history is
+  'Late retrieval is allowed after the source date; available_at stays actual.';
 
 commit;

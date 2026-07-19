@@ -20,6 +20,11 @@ from src.models.stock.rank_model import (
 )
 
 from .contracts import PipelineContext
+from .twse_research_evaluation_contracts import (
+    DirectionEvaluation,
+    QuantileEvaluation,
+    RankEvaluation,
+)
 from .research_fold_metrics import (
     direction_metric_summary,
     quantile_metric_summary,
@@ -31,14 +36,14 @@ from .twse_research_fold_preparation import (
 )
 
 
-def rank_metrics(
+def evaluate_rank(
     *,
     frame: Any,
     train_indices: Sequence[int],
     test_indices: Sequence[int],
     matrices: FoldMatrices,
     context: PipelineContext,
-) -> dict[str, object]:
+) -> RankEvaluation:
     """Evaluate LambdaRank against the fixed baseline suite."""
 
     train_dates = frame_dates(frame, train_indices)
@@ -102,10 +107,13 @@ def rank_metrics(
             predicted_scores=scores,
             eval_at=context.config.rank.eval_at,
         )
-    return {"model": primary, "baselines": baselines}
+    return RankEvaluation(
+        metrics={"model": primary, "baselines": baselines},
+        model_scores=tuple(model_scores),
+    )
 
 
-def direction_metrics(
+def evaluate_direction(
     *,
     frame: Any,
     train_indices: Sequence[int],
@@ -113,7 +121,7 @@ def direction_metrics(
     test_indices: Sequence[int],
     matrices: FoldMatrices,
     context: PipelineContext,
-) -> dict[str, object]:
+) -> DirectionEvaluation:
     """Train the direction candidate and calibrate on a disjoint time slice."""
 
     train_labels = list(frame.iloc[list(train_indices)]["direction"])
@@ -153,10 +161,16 @@ def direction_metrics(
         "uncalibrated_log_loss": calibrator.audit.uncalibrated_log_loss,
         "calibrated_log_loss": calibrator.audit.calibrated_log_loss,
     }
-    return summary
+    return DirectionEvaluation(
+        metrics=summary,
+        probabilities=tuple(
+            (float(row[0]), float(row[1]), float(row[2])) for row in probabilities
+        ),
+        calibration_version=calibrator.version,
+    )
 
 
-def quantile_metrics(
+def evaluate_quantiles(
     *,
     frame: Any,
     train_indices: Sequence[int],
@@ -164,7 +178,7 @@ def quantile_metrics(
     test_indices: Sequence[int],
     matrices: FoldMatrices,
     context: PipelineContext,
-) -> dict[str, object]:
+) -> QuantileEvaluation:
     """Train gross-return quantiles and evaluate calibrated net intervals."""
 
     train_gross = [
@@ -198,9 +212,16 @@ def quantile_metrics(
     costs = [
         float(value) for value in frame.iloc[list(test_indices)]["round_trip_cost_rate"]
     ]
-    q10 = [row[0] - cost for row, cost in zip(calibrated, costs)]
-    q50 = [row[1] - cost for row, cost in zip(calibrated, costs)]
-    q90 = [row[2] - cost for row, cost in zip(calibrated, costs)]
+    gross_quantiles = tuple(
+        (float(row[0]), float(row[1]), float(row[2])) for row in calibrated
+    )
+    net_quantiles = tuple(
+        (row[0] - cost, row[1] - cost, row[2] - cost)
+        for row, cost in zip(gross_quantiles, costs)
+    )
+    q10 = [row[0] for row in net_quantiles]
+    q50 = [row[1] for row in net_quantiles]
+    q90 = [row[2] for row in net_quantiles]
     actual_net = [
         float(value) for value in frame.iloc[list(test_indices)]["net_return"]
     ]
@@ -217,4 +238,10 @@ def quantile_metrics(
         "raw_crossing_rate": calibrator.audit.raw_crossing_rate,
         "calibrated_crossing_rate": calibrator.audit.calibrated_crossing_rate,
     }
-    return summary
+    return QuantileEvaluation(
+        metrics=summary,
+        gross_quantiles=gross_quantiles,
+        net_quantiles=net_quantiles,
+        raw_crossed=tuple(bool(row[3]) for row in calibrated),
+        calibration_version=calibrator.version,
+    )

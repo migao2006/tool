@@ -63,6 +63,26 @@ class HistoricalBackfillRepository:
             )
         return value
 
+    def seed_delisted_common(
+        self, *, start_date: date, end_date: date, selection_snapshot_at: datetime
+    ) -> int:
+        """Schedule unresolved official delistings without guessing a security ID."""
+
+        value = self.writer.rpc(
+            "seed_historical_backfill_delisted_common_tasks",
+            {
+                "p_start_date": start_date.isoformat(),
+                "p_end_date": end_date.isoformat(),
+                "p_selection_snapshot_at": selection_snapshot_at.isoformat(),
+            },
+        )
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise IngestionError(
+                "HISTORICAL_BACKFILL_RPC_INVALID",
+                "Delisted common-task seeding returned an invalid result",
+            )
+        return value
+
     def seed_etfs(
         self,
         rows: Sequence[Mapping[str, object]],

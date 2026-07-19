@@ -40,6 +40,10 @@ class BackfillRepository(Protocol):
         self, *, start_date: date, end_date: date, selection_snapshot_at: datetime
     ) -> int: ...
 
+    def seed_delisted_common(
+        self, *, start_date: date, end_date: date, selection_snapshot_at: datetime
+    ) -> int: ...
+
     def seed_etfs(
         self,
         rows: tuple[dict[str, object], ...],

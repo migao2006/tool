@@ -54,6 +54,7 @@ class HistoricalBackfillSettings:
     max_archive_objects_per_run: int = 100
     max_archive_object_bytes: int = 50_000_000
     seed_common_tasks: bool = True
+    seed_delisted_tasks: bool = False
     refresh_home_status: bool = True
 
     @classmethod
@@ -103,6 +104,11 @@ class HistoricalBackfillSettings:
                 values,
                 "HISTORICAL_BACKFILL_SEED_COMMON_TASKS",
                 True,
+            ),
+            seed_delisted_tasks=_boolean(
+                values,
+                "HISTORICAL_BACKFILL_SEED_DELISTED_TASKS",
+                False,
             ),
             refresh_home_status=_boolean(
                 values,

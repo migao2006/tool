@@ -55,9 +55,13 @@ available_at <= decision_at
 - R2 原始列不得直接進入特徵、標籤、訓練或回測；必須先通過 manifest／Parquet 完整性、歷史掛牌身分、交易日曆、公司行動涵蓋與 `available_at` 稽核。
 - 歷史關聯使用 `security_id + listing_period_id`；`scheduled_market` 只是排程提示，不能單獨證明股票所屬市場或身分。
 - `security_listing_periods` 與 `trading_calendar_observations` 是 append-only 證據；後續矛盾只能追加 `CONFLICT`，不得覆寫或回填既有證據。
+- `security_state_snapshots` 保存 private R2 狀態 object 的 manifest；未完整觀察停牌、處置、變更交易方法、全額交割及分盤等欄位時不得 VERIFIED。
+- `historical_corporate_action_observations` 保存事件生命週期；`company_action_coverage_observations` 另存完整含無事件證明。查無事件列不等於完整 coverage。
 - Canonical 日線必須保留 R2 object、archive SHA-256、來源 revision／payload hash、原始 `first_observed_at`／`available_at`、身分 revision 與 publication rule version。
+- 第一版 `canonical_dataset_objects` 只允許 `CANONICAL_RESEARCH_ONLY` 且強制 `model_eligible_row_count=0`；正式資料必須由後續獨立且經驗證的 builder 契約產生。
 - 原始資料的取得時間不得回改成歷史日期。若資料在決策時間後才首次取得，該列只能維持 `RESEARCH_ONLY`。
-- 每日就緒度稽核只回答資料是否可交給 dataset builder；即使資料閘門全部通過，模型仍須完成 walk-forward、locked holdout 與成本後驗收，才可能標記為 `PASS`。
+- 就緒度分成兩層：`canonicalization_ready` 只檢查建構前的 PIT 證據交集，不得要求先存在 canonical 成品；`dataset_build_ready` 另檢查建構後是否真的產生 model-eligible canonical rows。這可避免「必須先有成品才允許建構成品」的循環。
+- 即使兩層資料閘門全部通過，模型仍須完成 walk-forward、locked holdout 與成本後驗收，才可能標記為 `PASS`。
 
 ## 四、決策順序
 
@@ -132,6 +136,8 @@ available_at <= decision_at
   `available_at`、`first_observed_at`、可用時間依據、修訂 hash 與使用範圍。
 - Archive integrity 與 dataset readiness 必須使用完全相同的 manifest
   snapshot hash；LIMITED_SAMPLE 或稽核後發生變動時一律 FAIL。
+- Manifest snapshot hash 必須涵蓋所有會改變資料語意的欄位，包括來源、期間、
+  使用範圍、狀態與 reason codes，不得只雜湊 object key、byte size 或 row count。
 - 就緒判斷必須驗證 archive symbol、掛牌身分、交易日曆、交易狀態、公司行動
   與 canonical row 的實際交集，不得只比較彼此無關的總筆數。
 - 在交集覆蓋 persistence 尚未完成前，就緒狀態固定為 BLOCKED，系統最多只能

@@ -22,6 +22,10 @@ def test_backfill_workflow_is_resumable_scheduled_and_capacity_bounded() -> None
     assert (
         "HISTORICAL_BACKFILL_SEED_COMMON_TASKS: ${{ inputs.seed_common_tasks }}"
     ) in worker
+    assert (
+        "HISTORICAL_BACKFILL_SEED_DELISTED_TASKS: "
+        "${{ vars.HISTORICAL_BACKFILL_SEED_DELISTED_TASKS || 'false' }}"
+    ) in worker
     assert 'HISTORICAL_BACKFILL_REFRESH_HOME_STATUS: "false"' in worker
     assert '--max-tasks "$MAX_TASKS"' in worker
     assert "FINMIND_TOKEN: ${{ secrets.finmind_token }}" in worker

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from datetime import date, datetime
 from hashlib import sha256
+import json
 from types import MappingProxyType
 from typing import Protocol, final
 
@@ -69,6 +71,30 @@ class HistoricalArchiveManifestSnapshot:
         return len(self.rows)
 
 
+def _canonical_manifest_mapping(
+    archive_id: int,
+    manifest: HistoricalArchiveManifest,
+) -> dict[str, object]:
+    return {"archive_id": archive_id, **asdict(manifest)}
+
+
+def _snapshot_identity(values: Mapping[str, object]) -> str:
+    """Hash the same canonical mapping consumed by downstream audits."""
+
+    def serialize(value: object) -> str:
+        if isinstance(value, (date, datetime)):
+            return value.isoformat()
+        raise TypeError(f"unsupported manifest value: {type(value).__name__}")
+
+    return json.dumps(
+        values,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=serialize,
+    )
+
+
 @final
 class HistoricalArchiveManifestRepository:
     """Keyset-page manifests without relying on a mutable row offset."""
@@ -128,18 +154,9 @@ class HistoricalArchiveManifestRepository:
                     )
                 manifest = HistoricalArchiveManifest.from_mapping(raw)
                 last_archive_id = archive_id
-                rows.append(MappingProxyType(dict(raw)))
-                identities.append(
-                    "\0".join(
-                        (
-                            str(archive_id),
-                            manifest.archive_key,
-                            manifest.parquet_sha256,
-                            str(manifest.byte_size),
-                            str(manifest.row_count),
-                        )
-                    )
-                )
+                canonical = _canonical_manifest_mapping(archive_id, manifest)
+                rows.append(MappingProxyType(canonical))
+                identities.append(_snapshot_identity(canonical))
 
             if len(page) < request_limit:
                 break

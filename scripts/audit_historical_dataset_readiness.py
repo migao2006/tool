@@ -109,6 +109,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         result = assess_historical_dataset_readiness(metrics)
         payload: dict[str, object] = {
             "generated_at": generated_at,
+            "canonicalization_status": result.canonicalization_status,
+            "canonicalization_ready": result.canonicalization_ready,
+            "canonicalization_reason_codes": list(
+                result.canonicalization_reason_codes
+            ),
             "readiness_status": result.readiness_status,
             "dataset_build_ready": result.dataset_build_ready,
             "system_status": result.system_status,
@@ -124,6 +129,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (IngestionError, OSError, TypeError, ValueError) as error:
         payload = {
             "generated_at": generated_at,
+            "canonicalization_status": "BLOCKED",
+            "canonicalization_ready": False,
+            "canonicalization_reason_codes": [
+                getattr(error, "reason_code", "HISTORICAL_READINESS_AUDIT_FAILED")
+            ],
             "readiness_status": "BLOCKED",
             "dataset_build_ready": False,
             "system_status": "FAIL",

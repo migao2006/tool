@@ -3,7 +3,8 @@
 `market_data` 是只允許伺服器端 `service_role` 存取的研究資料 schema。它會註冊於 Data API，
 但 `anon`／`authenticated` 沒有 schema 或資料表權限；`service_role` 絕不可放入瀏覽器或 Git。
 
-以下檔案是可讀的 declarative schema 來源，供契約審查與新 migration 產生使用：
+以下檔案是可讀的契約參考 schema，供審查與新 migration 產生使用；它們不是
+資料庫版本的 source of truth：
 
 1. `001_market_facts.sql`
 2. `002_research_outputs.sql`
@@ -18,6 +19,9 @@
 11. `011_historical_r2_archive_manifest.sql`
 12. `012_security_listing_periods.sql`
 13. `013_trading_calendar_observations.sql`
+14. `014_canonical_research_manifests.sql`
+15. `015_historical_company_action_evidence.sql`
+16. `016_historical_security_state_snapshots.sql`
 
 `012_security_listing_periods.sql` 將穩定掛牌期間識別碼
 `listing_period_id` 與 append-only 證據列 `listing_evidence_id` 分開。
@@ -54,9 +58,11 @@ prediction run，阻擋晚於 `decision_at` 的稽核資料。
 point-in-time 驗證的來源列與問題。它們不含 `security_id`，也不會外鍵連到正式
 `securities` 或 `daily_bars`；資料只能標示為 `RAW_LANDING_ONLY / RESEARCH_ONLY`。
 
-`historical_backfill_tasks` 只管理自動回補的排序、lease、重試及斷點。任務股票池來自
-目前可見的 security master，只能作為排程依據，不會讓歷史落地資料取得 point-in-time
-資格。此佇列只由版本化 migration 建立，不維護第二份重複 SQL。
+`historical_backfill_tasks` 只管理自動回補的排序、lease、重試及斷點。任務股票池可來自
+目前可見的 security master，或來自官方下市名冊的 scheduling-only 未解析身分；兩者都
+只能作為排程依據，不會讓歷史落地資料取得 point-in-time 資格。下市名冊任務必須保留
+空的 `security_id` 與 `IDENTITY_UNRESOLVED`，不得以相同股票代號猜測連到現行 security。
+此佇列只由版本化 migration 建立，不維護第二份重複 SQL。
 
 `historical_archive_objects` 是 private Cloudflare R2 Parquet object 的 service-role-only
 manifest，只保存位置、來源期間、雜湊、列數、品質狀態及版本 metadata。新 R2 封存的完整
@@ -73,3 +79,20 @@ manifest，只保存位置、來源期間、雜湊、列數、品質狀態及版
 必須追加成 `CONFLICT`，不得更新或覆寫既有 `VERIFIED` period。兩證據表沒有前端政策，
 僅允許 `service_role` 新增及讀取，且 trigger 阻擋更新與刪除；既有 `security_history` 與
 `trading_calendar` 不會被此契約改寫。
+
+`daily_bar_publication_snapshots` 與 `canonical_dataset_objects` 只保存 private R2 object、
+來源 lineage、完整性雜湊、稽核 snapshot 與列數 metadata，高筆數日線與 canonical rows
+不複製進 PostgreSQL。兩表皆為 append-only、force RLS 且只允許 `service_role` 讀取與新增。
+第一版 canonical manifest 由資料庫約束固定為 `CANONICAL_RESEARCH_ONLY / RESEARCH_ONLY`，
+`model_eligible_row_count` 必須為 0；未來若要允許正式模型資料，必須另外建立經審查的
+版本化 migration，不得更新既有 raw 或 canonical research manifest 來升級狀態。
+
+`historical_corporate_action_observations` 將 ANNOUNCED、REALIZED 與 CANCELLED 分開保存；
+`company_action_coverage_observations` 另外證明指定掛牌期間與日期視窗是否完整查過所有
+行動類型，包括明確的 `COMPLETE / NO_EVENTS`。資料表沒有事件列不代表無事件，也不能
+自行視為完整 coverage。兩表都綁定 listing evidence、來源 revision、實際可用時間及
+append-only 稽核軌跡。
+
+`security_state_snapshots` 只保存 private R2 狀態 object 的 manifest。VERIFIED snapshot
+必須完整涵蓋交易狀態、注意、處置、變更交易方法、全額交割、分盤及停牌欄位，且
+`unknown_state_row_count` 必須為 0；在事件名單中查不到股票不能推論為 ACTIVE 或全部 false。

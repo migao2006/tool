@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from hashlib import sha256
+from typing import final
 
 import pytest
 
@@ -45,9 +46,10 @@ def _manifest(archive_id: int) -> dict[str, object]:
     }
 
 
+@final
 class FakeSource:
     def __init__(self, rows: list[dict[str, object]]) -> None:
-        self.rows = rows
+        self.rows: list[dict[str, object]] = rows
         self.calls: list[tuple[Mapping[str, str], int]] = []
 
     def select_rows(
@@ -63,7 +65,13 @@ class FakeSource:
         normalized = dict(filters or {})
         self.calls.append((normalized, limit))
         cursor = int(normalized["archive_id"].removeprefix("gt."))
-        return [row for row in self.rows if int(row["archive_id"]) > cursor][:limit]
+        selected: list[dict[str, object]] = []
+        for row in self.rows:
+            archive_id = row.get("archive_id")
+            assert isinstance(archive_id, int) and not isinstance(archive_id, bool)
+            if archive_id > cursor:
+                selected.append(row)
+        return selected[:limit]
 
 
 def test_repository_keyset_pages_and_builds_deterministic_snapshot() -> None:
@@ -83,6 +91,47 @@ def test_repository_keyset_pages_and_builds_deterministic_snapshot() -> None:
     ]
 
 
+def test_snapshot_hash_covers_all_meaning_bearing_manifest_fields() -> None:
+    original = _manifest(1)
+    revised_source = dict(original)
+    revised_source["source_version"] = "v2"
+    revised_reason = dict(original)
+    revised_reason["reason_codes"] = [
+        "HISTORICAL_POINT_IN_TIME_UNVERIFIED",
+        "SOURCE_POLICY_CHANGED",
+    ]
+
+    original_hash = HistoricalArchiveManifestRepository(
+        FakeSource([original])
+    ).fetch().snapshot_sha256
+    revised_source_hash = HistoricalArchiveManifestRepository(
+        FakeSource([revised_source])
+    ).fetch().snapshot_sha256
+    revised_reason_hash = HistoricalArchiveManifestRepository(
+        FakeSource([revised_reason])
+    ).fetch().snapshot_sha256
+
+    assert len({original_hash, revised_source_hash, revised_reason_hash}) == 3
+
+
+def test_snapshot_rows_and_hash_share_the_same_normalized_values() -> None:
+    original = _manifest(1)
+    padded = dict(original)
+    padded["source_symbol"] = f"  {original['source_symbol']}  "
+    padded["source_version"] = "  v1  "
+
+    clean_snapshot = HistoricalArchiveManifestRepository(
+        FakeSource([original])
+    ).fetch()
+    padded_snapshot = HistoricalArchiveManifestRepository(
+        FakeSource([padded])
+    ).fetch()
+
+    assert padded_snapshot.rows[0]["source_symbol"] == original["source_symbol"]
+    assert padded_snapshot.rows[0]["source_version"] == "v1"
+    assert padded_snapshot.snapshot_sha256 == clean_snapshot.snapshot_sha256
+
+
 def test_repository_marks_limited_sample_and_rejects_invalid_manifest() -> None:
     source = FakeSource([_manifest(1), _manifest(2)])
     limited = HistoricalArchiveManifestRepository(source).fetch(max_objects=1)
@@ -96,7 +145,7 @@ def test_repository_marks_limited_sample_and_rejects_invalid_manifest() -> None:
         HistoricalArchiveReadError,
         match="incomplete or inconsistent",
     ):
-        HistoricalArchiveManifestRepository(FakeSource([invalid])).fetch()
+        _ = HistoricalArchiveManifestRepository(FakeSource([invalid])).fetch()
 
 
 def test_repository_rejects_non_increasing_archive_ids() -> None:
@@ -106,4 +155,4 @@ def test_repository_rejects_non_increasing_archive_ids() -> None:
         HistoricalArchiveReadError,
         match="strictly ordered",
     ):
-        HistoricalArchiveManifestRepository(source).fetch()
+        _ = HistoricalArchiveManifestRepository(source).fetch()

@@ -90,6 +90,12 @@ class HistoricalBackfillCoordinator:
                 end_date=end_date,
                 selection_snapshot_at=selection_snapshot_at,
             )
+        if self.settings.seed_common_tasks and self.settings.seed_delisted_tasks:
+            _ = self.repository.seed_delisted_common(
+                start_date=start_date,
+                end_date=end_date,
+                selection_snapshot_at=selection_snapshot_at,
+            )
         before = self.repository.snapshot(start_date=start_date, end_date=end_date)
         # Pace logical FinMind calls from request start to request start. Transport
         # retries remain internal to the HTTP client and are not counted as separate

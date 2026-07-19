@@ -71,6 +71,7 @@ def test_cli_reports_blocked_research_state_without_fake_readiness(
                 verified_security_state_count=0,
                 verified_company_action_coverage_count=0,
                 unresolved_delisting_count=843,
+                canonical_contract_object_count=0,
                 canonical_production_row_count=0,
             )
 
@@ -99,6 +100,8 @@ def test_cli_reports_blocked_research_state_without_fake_readiness(
     payload = cast(Mapping[str, object], raw_payload)
 
     assert exit_code == 0
+    assert payload["canonicalization_status"] == "BLOCKED"
+    assert payload["canonicalization_ready"] is False
     assert payload["readiness_status"] == "BLOCKED"
     assert payload["dataset_build_ready"] is False
     assert payload["system_status"] == "RESEARCH_ONLY"
@@ -123,10 +126,13 @@ def test_cli_fails_if_manifest_snapshot_changes_after_integrity_audit(
         ),
         encoding="utf-8",
     )
+    def fake_writer(**_kwargs: object) -> object:
+        return object()
+
     monkeypatch.setattr(
         audit_historical_dataset_readiness,
         "SupabaseWriter",
-        lambda **_kwargs: object(),
+        fake_writer,
     )
 
     class ChangedManifestRepository:
@@ -156,6 +162,8 @@ def test_cli_fails_if_manifest_snapshot_changes_after_integrity_audit(
     )
 
     assert exit_code == 1
+    assert payload["canonicalization_status"] == "BLOCKED"
+    assert payload["canonicalization_ready"] is False
     assert payload["system_status"] == "FAIL"
     assert payload["dataset_build_ready"] is False
     assert "changed after" in str(payload["message"])

@@ -25,6 +25,7 @@ def _metrics() -> HistoricalDatasetReadinessMetrics:
         verified_security_state_count=10_000,
         verified_company_action_coverage_count=1_700,
         unresolved_delisting_count=0,
+        canonical_contract_object_count=1,
         canonical_production_row_count=2_000_000,
     )
 
@@ -32,6 +33,8 @@ def _metrics() -> HistoricalDatasetReadinessMetrics:
 def test_complete_evidence_can_unlock_dataset_build_but_not_model_pass() -> None:
     result = assess_historical_dataset_readiness(_metrics())
 
+    assert result.canonicalization_ready is True
+    assert result.canonicalization_status == "READY_FOR_CANONICALIZATION"
     assert result.dataset_build_ready is True
     assert result.readiness_status == "READY_FOR_DATASET_BUILD"
     assert result.system_status == "RESEARCH_ONLY"
@@ -51,6 +54,7 @@ def test_raw_volume_does_not_hide_missing_pit_evidence() -> None:
         )
     )
 
+    assert result.canonicalization_ready is False
     assert result.dataset_build_ready is False
     assert result.system_status == "RESEARCH_ONLY"
     assert "TPEX_ARCHIVE_SYMBOL_COVERAGE_INSUFFICIENT" in result.reason_codes
@@ -126,3 +130,53 @@ def test_thresholds_are_explicit_and_configurable() -> None:
     )
 
     assert result.dataset_build_ready is True
+
+
+def test_canonical_rows_are_a_dataset_output_not_a_prebuild_prerequisite() -> None:
+    result = assess_historical_dataset_readiness(
+        replace(_metrics(), canonical_production_row_count=0)
+    )
+
+    assert result.canonicalization_ready is True
+    assert result.canonicalization_status == "READY_FOR_CANONICALIZATION"
+    assert result.canonicalization_reason_codes == ()
+    assert result.dataset_build_ready is False
+    assert result.readiness_status == "READY_FOR_CANONICALIZATION"
+    assert result.reason_codes == ("CANONICAL_PRODUCTION_ROWS_EMPTY",)
+
+
+def test_missing_canonical_row_aggregate_does_not_block_canonicalization() -> None:
+    result = assess_historical_dataset_readiness(
+        replace(_metrics(), canonical_production_row_count=None)
+    )
+
+    assert result.canonicalization_ready is True
+    assert result.dataset_build_ready is False
+    assert result.reason_codes == ("CANONICAL_ROW_COUNT_UNAVAILABLE",)
+
+
+def test_unavailable_canonical_contract_blocks_canonicalization() -> None:
+    result = assess_historical_dataset_readiness(
+        replace(_metrics(), canonical_contract_object_count=None)
+    )
+
+    assert result.canonicalization_ready is False
+    assert result.canonicalization_status == "BLOCKED"
+    assert result.dataset_build_ready is False
+    assert "CANONICAL_CONTRACT_UNAVAILABLE" in result.canonicalization_reason_codes
+    assert "CANONICAL_CONTRACT_UNAVAILABLE" in result.reason_codes
+
+
+def test_empty_but_available_canonical_contract_allows_canonicalization() -> None:
+    result = assess_historical_dataset_readiness(
+        replace(
+            _metrics(),
+            canonical_contract_object_count=0,
+            canonical_production_row_count=0,
+        )
+    )
+
+    assert result.canonicalization_ready is True
+    assert result.canonicalization_reason_codes == ()
+    assert result.dataset_build_ready is False
+    assert result.reason_codes == ("CANONICAL_PRODUCTION_ROWS_EMPTY",)

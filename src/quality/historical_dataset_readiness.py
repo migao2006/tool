@@ -29,6 +29,7 @@ class HistoricalDatasetReadinessMetrics:
     verified_security_state_count: int | None
     verified_company_action_coverage_count: int | None
     unresolved_delisting_count: int | None
+    canonical_contract_object_count: int | None
     canonical_production_row_count: int | None
 
     def __post_init__(self) -> None:
@@ -55,6 +56,7 @@ class HistoricalDatasetReadinessMetrics:
             self.verified_security_state_count,
             self.verified_company_action_coverage_count,
             self.unresolved_delisting_count,
+            self.canonical_contract_object_count,
             self.canonical_production_row_count,
         )
 
@@ -89,9 +91,12 @@ class HistoricalDatasetReadinessThresholds:
 
 @dataclass(frozen=True)
 class HistoricalDatasetReadinessResult:
+    canonicalization_ready: bool
+    canonicalization_status: str
     dataset_build_ready: bool
     readiness_status: str
     system_status: str
+    canonicalization_reason_codes: tuple[str, ...]
     reason_codes: tuple[str, ...]
 
 
@@ -135,6 +140,7 @@ _METRIC_UNAVAILABLE_REASONS = (
         "COMPANY_ACTION_COVERAGE_COUNT_UNAVAILABLE",
     ),
     ("unresolved_delisting_count", "UNRESOLVED_DELISTING_COUNT_UNAVAILABLE"),
+    ("canonical_contract_object_count", "CANONICAL_CONTRACT_UNAVAILABLE"),
     ("canonical_production_row_count", "CANONICAL_ROW_COUNT_UNAVAILABLE"),
 )
 
@@ -147,19 +153,19 @@ def assess_historical_dataset_readiness(
     """Apply only hard evidence gates; never infer readiness from raw row volume."""
 
     limits = thresholds or HistoricalDatasetReadinessThresholds()
-    reasons: list[str] = []
+    prerequisite_reasons: list[str] = []
     if metrics.archive_integrity_status == "FAIL":
-        reasons.append("ARCHIVE_INTEGRITY_FAILED")
+        prerequisite_reasons.append("ARCHIVE_INTEGRITY_FAILED")
     elif metrics.archive_integrity_status == "UNKNOWN":
-        reasons.append("ARCHIVE_INTEGRITY_UNVERIFIED")
+        prerequisite_reasons.append("ARCHIVE_INTEGRITY_UNVERIFIED")
 
     for field, reason in _METRIC_UNAVAILABLE_REASONS:
-        if getattr(metrics, field) is None:
-            reasons.append(reason)
+        if field != "canonical_production_row_count" and getattr(metrics, field) is None:
+            prerequisite_reasons.append(reason)
 
     def below(value: int | None, minimum: int, reason: str) -> None:
         if value is not None and value < minimum:
-            reasons.append(reason)
+            prerequisite_reasons.append(reason)
 
     below(metrics.archive_object_count, 1, "HISTORICAL_ARCHIVE_EMPTY")
     below(
@@ -203,7 +209,7 @@ def assess_historical_dataset_readiness(
         "TPEX_LISTING_IDENTITY_COVERAGE_INSUFFICIENT",
     )
     if metrics.conflicting_listing_period_count not in {None, 0}:
-        reasons.append("LISTING_IDENTITY_CONFLICTS_PRESENT")
+        prerequisite_reasons.append("LISTING_IDENTITY_CONFLICTS_PRESENT")
     below(
         metrics.twse_verified_calendar_session_count,
         limits.minimum_calendar_sessions,
@@ -225,21 +231,34 @@ def assess_historical_dataset_readiness(
         "COMPANY_ACTION_COVERAGE_EMPTY",
     )
     if metrics.unresolved_delisting_count not in {None, 0}:
-        reasons.append("DELISTING_IDENTITIES_UNRESOLVED")
-    below(
-        metrics.canonical_production_row_count,
-        limits.minimum_canonical_rows,
-        "CANONICAL_PRODUCTION_ROWS_EMPTY",
-    )
+        prerequisite_reasons.append("DELISTING_IDENTITIES_UNRESOLVED")
 
-    unique_reasons = tuple(dict.fromkeys(reasons))
-    ready = not unique_reasons
+    canonicalization_reasons = tuple(dict.fromkeys(prerequisite_reasons))
+    canonicalization_ready = not canonicalization_reasons
+    dataset_reasons = list(canonicalization_reasons)
+    if metrics.canonical_production_row_count is None:
+        dataset_reasons.append("CANONICAL_ROW_COUNT_UNAVAILABLE")
+    elif metrics.canonical_production_row_count < limits.minimum_canonical_rows:
+        dataset_reasons.append("CANONICAL_PRODUCTION_ROWS_EMPTY")
+    unique_reasons = tuple(dict.fromkeys(dataset_reasons))
+    dataset_ready = not unique_reasons
     return HistoricalDatasetReadinessResult(
-        dataset_build_ready=ready,
-        readiness_status="READY_FOR_DATASET_BUILD" if ready else "BLOCKED",
+        canonicalization_ready=canonicalization_ready,
+        canonicalization_status=(
+            "READY_FOR_CANONICALIZATION" if canonicalization_ready else "BLOCKED"
+        ),
+        dataset_build_ready=dataset_ready,
+        readiness_status=(
+            "READY_FOR_DATASET_BUILD"
+            if dataset_ready
+            else "READY_FOR_CANONICALIZATION"
+            if canonicalization_ready
+            else "BLOCKED"
+        ),
         # Data readiness alone can never approve a model for production.
         system_status=(
             "FAIL" if metrics.archive_integrity_status == "FAIL" else "RESEARCH_ONLY"
         ),
+        canonicalization_reason_codes=canonicalization_reasons,
         reason_codes=unique_reasons,
     )

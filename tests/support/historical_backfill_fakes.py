@@ -140,6 +140,7 @@ class FakeRepository:
         self.etf_rows: list[dict[str, object]] = []
         self.ensure_calls: int = 0
         self.seed_common_calls: int = 0
+        self.seed_delisted_common_calls: int = 0
         self.snapshot_calls: int = 0
 
     def ensure_finmind_source(self) -> None:
@@ -150,6 +151,13 @@ class FakeRepository:
     ) -> int:
         _ = (start_date, end_date, selection_snapshot_at)
         self.seed_common_calls += 1
+        return 0
+
+    def seed_delisted_common(
+        self, *, start_date: date, end_date: date, selection_snapshot_at: datetime
+    ) -> int:
+        _ = (start_date, end_date, selection_snapshot_at)
+        self.seed_delisted_common_calls += 1
         return 0
 
     def seed_etfs(

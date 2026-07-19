@@ -15,6 +15,7 @@ def test_settings_default_to_supabase_storage_without_r2_environment() -> None:
     assert settings.max_archive_objects_per_run == 100
     assert settings.max_archive_object_bytes == 50_000_000
     assert settings.seed_common_tasks is True
+    assert settings.seed_delisted_tasks is False
     assert settings.refresh_home_status is True
 
 
@@ -70,6 +71,14 @@ def test_settings_can_disable_shared_common_task_seeding() -> None:
     assert settings.seed_common_tasks is False
 
 
+def test_settings_can_enable_delisted_task_seeding() -> None:
+    settings = HistoricalBackfillSettings.from_env(
+        {"HISTORICAL_BACKFILL_SEED_DELISTED_TASKS": " true "}
+    )
+
+    assert settings.seed_delisted_tasks is True
+
+
 @pytest.mark.parametrize("value", ["enabled", "2", "sometimes"])
 def test_settings_reject_invalid_common_task_seed_flag(value: str) -> None:
     with pytest.raises(
@@ -78,6 +87,17 @@ def test_settings_reject_invalid_common_task_seed_flag(value: str) -> None:
     ):
         _ = HistoricalBackfillSettings.from_env(
             {"HISTORICAL_BACKFILL_SEED_COMMON_TASKS": value}
+        )
+
+
+@pytest.mark.parametrize("value", ["enabled", "2", "sometimes"])
+def test_settings_reject_invalid_delisted_task_seed_flag(value: str) -> None:
+    with pytest.raises(
+        ValueError,
+        match="HISTORICAL_BACKFILL_SEED_DELISTED_TASKS must be true or false",
+    ):
+        _ = HistoricalBackfillSettings.from_env(
+            {"HISTORICAL_BACKFILL_SEED_DELISTED_TASKS": value}
         )
 
 

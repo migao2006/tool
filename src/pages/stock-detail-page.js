@@ -1,4 +1,4 @@
-import { createDecisionGates, renderDecisionGates } from "../components/decision-gates.js?v=api-4";
+import { createDecisionGates, renderDecisionGates } from "../components/decision-gates.js?v=api-5";
 import { createStockAuditSection } from "../components/stock-audit-section.js";
 import { formatCurrency, formatPercent, formatRank, formatRankScore, formatReasonCodeSummary } from "../core/formatters.js";
 import { setText } from "../core/html.js";
@@ -78,7 +78,7 @@ export function renderStockDetailPage(prediction, { isWatchlisted = false } = {}
   setText(
     root,
     "[data-stock-gate-state]",
-    prediction.gates?.length ? "已評估" : noFormalDecisionPolicy ? "正式決策政策尚未執行" : "未評估",
+    prediction.gates?.length ? "研究決策 gate 已評估" : noFormalDecisionPolicy ? "正式決策政策尚未執行" : "未評估",
   );
   const directFields = ["decision", "as_of_date", "decision_at", "horizon", "calibration_version", "calibration_status", "cost_profile"];
   directFields.forEach((field) => {

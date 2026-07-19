@@ -89,9 +89,7 @@ def _row(
             available_hour_utc,
             tzinfo=timezone.utc,
         ),
-        "latest_observed_available_at": datetime(
-            2026, 7, 19, 4, tzinfo=timezone.utc
-        ),
+        "latest_observed_available_at": datetime(2026, 7, 19, 4, tzinfo=timezone.utc),
         "point_in_time_audit_pass": False,
         "hard_fail": False,
         "research_limitation_reason_codes": ["RESEARCH_SCHEDULING_HINT"],
@@ -228,12 +226,23 @@ def test_latest_feature_is_scored_without_labels_and_costs_are_recomputed(
     assert all(row.data_quality_status == "WARN" for row in snapshot.predictions)
     assert all(row.estimated_round_trip_cost > 0 for row in snapshot.predictions)
     for row in snapshot.predictions:
+        assert len(row.gates) == 8
+        assert row.to_dict()["decision"] == "NO_TRADE"
+        assert "RESEARCH_ONLY_NO_FORMAL_DECISION_POLICY" not in row.reason_codes
+        gates = {gate.gate: gate for gate in row.gates}
+        assert gates["tradability_gate"].reason_code == (
+            "FORMAL_TRADABILITY_INPUT_MISSING"
+        )
+        assert gates["market_exposure_cap"].source_date is None
+        assert gates["position_capacity_limits"].source_date is None
         assert row.net_q50 == pytest.approx(
             row.gross_q50 - row.estimated_round_trip_cost
         )
         assert sum(
             (row.calibrated_p_up, row.calibrated_p_neutral, row.calibrated_p_down)
         ) == pytest.approx(1.0)
+    assert snapshot.validation["research_decision_policy_executed"] is True
+    assert snapshot.validation["formal_decision_policy_executed"] is False
 
 
 def test_latest_feature_rejects_values_available_after_decision(

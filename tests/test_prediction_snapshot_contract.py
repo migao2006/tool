@@ -38,6 +38,7 @@ def _gates() -> tuple[DecisionGateOutput, ...]:
             actual="PASS",
             threshold="PASS",
             reason_code="PASS",
+            source_date=AS_OF_DATE,
         )
         for name in names
     )
@@ -144,6 +145,7 @@ def test_snapshot_serializes_the_versioned_frontend_contract() -> None:
     assert payload["market"]["p_up"] == pytest.approx(0.60)
     assert payload["predictions"][0]["name"] == "測試股票"
     assert payload["predictions"][0]["gates"][0]["gate"] == "data_quality_hard_gate"
+    assert payload["predictions"][0]["gates"][0]["source_date"] == "2026-07-17"
     assert payload["excluded"][0]["data_quality_hard_fail"] is True
     json.dumps(payload, ensure_ascii=False, allow_nan=False)
 
@@ -228,6 +230,7 @@ def test_candidate_output_rejects_failed_decision_gate() -> None:
             actual=False,
             threshold=True,
             reason_code="POSITION_LIMIT_FAIL",
+            source_date=AS_OF_DATE,
         ),
     )
     with pytest.raises(ValueError, match="failed decision gate"):

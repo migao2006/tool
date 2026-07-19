@@ -10,10 +10,9 @@ import type {
   StockPredictionRow,
 } from "./types.ts";
 
-const RESEARCH_WARNING_REASON_CODES = [
-  "RESEARCH_ONLY_NO_FORMAL_DECISION_POLICY",
-  "RESEARCH_DATA_QUALITY_WARN",
-] as const;
+const RESEARCH_DATA_QUALITY_WARNING = "RESEARCH_DATA_QUALITY_WARN";
+const LEGACY_NO_POLICY_REASON = "RESEARCH_ONLY_NO_FORMAL_DECISION_POLICY";
+const RESEARCH_GATE_ENVELOPE_VERSION = "research-decision-gate.v1";
 
 export interface PublicDataQuality {
   status: "PASS" | "WARN" | "HARD_FAIL";
@@ -34,9 +33,7 @@ export function resolvePublicDataQuality(
 
   const researchWarning = run.system_validation_status === "RESEARCH_ONLY" &&
     prediction.data_quality_status === "FAIL" &&
-    RESEARCH_WARNING_REASON_CODES.every((reason) =>
-      prediction.reason_codes.includes(reason)
-    );
+    prediction.reason_codes.includes(RESEARCH_DATA_QUALITY_WARNING);
   if (researchWarning) return { status: "WARN", hardFail: false };
   return prediction.data_quality_status === "FAIL"
     ? { status: "HARD_FAIL", hardFail: true }
@@ -74,15 +71,38 @@ export function mapMarket(
   };
 }
 
+function unwrapGateActual(value: JsonValue): {
+  actual: JsonValue;
+  sourceDate: string | null;
+} {
+  if (
+    value !== null && typeof value === "object" && !Array.isArray(value) &&
+    value.contract_version === RESEARCH_GATE_ENVELOPE_VERSION &&
+    Object.hasOwn(value, "value")
+  ) {
+    return {
+      actual: value.value,
+      sourceDate: typeof value.source_date === "string"
+        ? value.source_date
+        : null,
+    };
+  }
+  return { actual: value, sourceDate: null };
+}
+
 function mapGates(rows: DecisionGateRow[]): JsonRecord[] {
   return [...rows].sort((left, right) => left.gate_order - right.gate_order)
-    .map((row) => ({
-      gate: row.gate_name,
-      passed: row.passed,
-      actual: row.actual_value,
-      threshold: row.threshold_value,
-      reason_code: row.reason_code,
-    }));
+    .map((row) => {
+      const envelope = unwrapGateActual(row.actual_value);
+      return {
+        gate: row.gate_name,
+        passed: row.passed,
+        actual: envelope.actual,
+        threshold: row.threshold_value,
+        reason_code: row.reason_code,
+        source_date: envelope.sourceDate,
+      };
+    });
 }
 
 export function mapPrediction(
@@ -93,6 +113,12 @@ export function mapPrediction(
   gates: DecisionGateRow[],
 ): JsonRecord {
   const quality = resolvePublicDataQuality(run, prediction, audit);
+  const mappedGates = mapGates(gates);
+  const predictionReasons = mappedGates.length > 0
+    ? prediction.reason_codes.filter((reason) =>
+      reason !== LEGACY_NO_POLICY_REASON
+    )
+    : prediction.reason_codes;
   return {
     as_of_date: run.as_of_date,
     decision_at: run.decision_at,
@@ -131,7 +157,7 @@ export function mapPrediction(
     decision: prediction.decision,
     reason_codes: [
       ...new Set([
-        ...(prediction.reason_codes ?? []),
+        ...predictionReasons,
         ...(audit?.reason_codes ?? []),
       ]),
     ],
@@ -149,7 +175,7 @@ export function mapPrediction(
     cost_profile: null,
     previous_global_rank: null,
     previous_decision: null,
-    gates: mapGates(gates),
+    gates: mappedGates,
   };
 }
 

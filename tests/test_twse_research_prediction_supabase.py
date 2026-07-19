@@ -10,6 +10,7 @@ import pytest
 from src.core.research_prediction_contract import (
     RESEARCH_PREDICTION_CONTRACT_VERSION,
 )
+from src.decision.decision_policy import DECISION_GATE_ORDER
 from src.data.research.twse_research_prediction_supabase import (
     TwseResearchPredictionSupabasePublisher,
 )
@@ -20,6 +21,7 @@ class _Writer:
         self.upserts: list[tuple[str, list[dict[str, object]]]] = []
         self.rpc_calls: list[tuple[str, dict[str, object]]] = []
         self.cost_profiles: dict[str, dict[str, object]] = {}
+        self.stock_predictions: list[dict[str, object]] = []
         self.persist_cost_profiles: bool = persist_cost_profiles
 
     def select_rows(
@@ -37,6 +39,8 @@ class _Writer:
             assert version_filter.startswith("eq.")
             stored = self.cost_profiles.get(version_filter.removeprefix("eq."))
             return [] if stored is None else [dict(stored)]
+        if table == "stock_predictions":
+            return [dict(value) for value in self.stock_predictions]
         assert table == "securities"
         return [
             {
@@ -57,7 +61,7 @@ class _Writer:
         return_rows: bool = False,
         preserve_existing: bool = False,
     ) -> list[dict[str, object]]:
-        del select, return_rows
+        del select
         materialized = [dict(value) for value in rows]
         self.upserts.append((table, materialized))
         if table == "cost_profiles" and self.persist_cost_profiles:
@@ -67,6 +71,8 @@ class _Writer:
                 version = str(row["cost_profile_version"])
                 if version not in self.cost_profiles:
                     self.cost_profiles[version] = dict(row)
+        if table == "decision_gate_results" and return_rows:
+            return materialized
         return []
 
     def rpc(
@@ -75,7 +81,11 @@ class _Writer:
         parameters: Mapping[str, object],
     ) -> object:
         self.rpc_calls.append((function_name, dict(parameters)))
-        predictions = cast(list[object], parameters["p_stock_predictions"])
+        predictions = cast(list[dict[str, object]], parameters["p_stock_predictions"])
+        self.stock_predictions = [
+            {"stock_prediction_id": index, **dict(value)}
+            for index, value in enumerate(predictions, start=1)
+        ]
         return {"prediction_run_id": 7, "prediction_count": len(predictions)}
 
 
@@ -83,6 +93,7 @@ def _payload(
     *,
     evaluation_scope: str = "OUT_OF_SAMPLE_TEST",
     model_bundle_sha256: str | None = None,
+    include_gates: bool = False,
 ) -> dict[str, object]:
     prediction = {
         "symbol": "2330",
@@ -114,6 +125,46 @@ def _payload(
         "data_quality_status": "WARN",
         "reason_codes": ["TWSE_PRICE_ONLY_RESEARCH"],
     }
+    if include_gates:
+        prediction["decision"] = "NO_TRADE"
+        prediction["gates"] = [
+            {
+                "gate": gate,
+                "passed": gate
+                in {
+                    "liquidity_capacity_gate",
+                    "calibrated_direction_probabilities",
+                    "net_quantile_thresholds",
+                    "rank_eligibility",
+                },
+                "actual": {"gate": gate},
+                "threshold": {"configured": True},
+                "reason_code": (
+                    "PASS"
+                    if gate
+                    in {
+                        "liquidity_capacity_gate",
+                        "calibrated_direction_probabilities",
+                        "net_quantile_thresholds",
+                        "rank_eligibility",
+                    }
+                    else "FORMAL_INPUT_MISSING"
+                ),
+                "source_date": (
+                    "2026-01-02"
+                    if gate
+                    in {
+                        "data_quality_hard_gate",
+                        "liquidity_capacity_gate",
+                        "calibrated_direction_probabilities",
+                        "net_quantile_thresholds",
+                        "rank_eligibility",
+                    }
+                    else None
+                ),
+            }
+            for gate in DECISION_GATE_ORDER
+        ]
     payload: dict[str, object] = {
         "artifact_contract_version": RESEARCH_PREDICTION_CONTRACT_VERSION,
         "system_status": "RESEARCH_ONLY",
@@ -187,8 +238,42 @@ def test_staging_publish_is_conservative_and_idempotent() -> None:
     source_dates = cast(dict[str, object], run["source_dates"])
     assert source_dates["prediction_scope"] == "OUT_OF_SAMPLE_TEST"
     assert source_dates["feature_snapshot"] == "b" * 64
+    assert source_dates["decision_gate_count"] == 0
+    assert source_dates["decision_gate_attachment_contract"] == (
+        "research-decision-gate.v1"
+    )
     assert stock["decision"] == "NO_TRADE"
     assert stock["data_quality_status"] == "FAIL"
+    assert "RESEARCH_ONLY_NO_FORMAL_DECISION_POLICY" in cast(
+        list[object], stock["reason_codes"]
+    )
+
+
+def test_gated_research_snapshot_persists_all_eight_verified_gate_rows() -> None:
+    writer = _Writer()
+
+    result = TwseResearchPredictionSupabasePublisher(
+        writer,
+        target_environment="staging",
+        publish_enabled=True,
+    ).publish(_payload(include_gates=True))
+
+    assert result.decision_gate_count == 8
+    tables = [value[0] for value in writer.upserts]
+    assert tables == ["cost_profiles", "decision_gate_results"]
+    gate_rows = writer.upserts[-1][1]
+    assert [row["gate_name"] for row in gate_rows] == list(DECISION_GATE_ORDER)
+    first_actual = cast(dict[str, object], gate_rows[0]["actual_value"])
+    assert first_actual["contract_version"] == "research-decision-gate.v1"
+    assert first_actual["source_date"] == "2026-01-02"
+    _, parameters = writer.rpc_calls[0]
+    run = cast(dict[str, object], parameters["p_run"])
+    source_dates = cast(dict[str, object], run["source_dates"])
+    assert source_dates["decision_gate_count"] == 8
+    assert source_dates["snapshot_sha256"] == first_actual[
+        "attachment_snapshot_sha256"
+    ]
+    stock = cast(list[dict[str, object]], parameters["p_stock_predictions"])[0]
     assert "RESEARCH_ONLY_NO_FORMAL_DECISION_POLICY" in cast(
         list[object], stock["reason_codes"]
     )
@@ -372,6 +457,31 @@ def test_invalid_snapshot_is_rejected_before_any_database_write() -> None:
     ).hexdigest()
 
     with pytest.raises(ValueError, match="does not match"):
+        _ = TwseResearchPredictionSupabasePublisher(
+            writer,
+            target_environment="staging",
+            publish_enabled=True,
+        ).publish(payload)
+
+    assert writer.upserts == []
+    assert writer.rpc_calls == []
+
+
+def test_partial_research_gate_set_is_rejected_before_database_write() -> None:
+    writer = _Writer()
+    payload = _payload(include_gates=True)
+    prediction = cast(list[dict[str, object]], payload["predictions"])[0]
+    cast(list[object], prediction["gates"]).pop()
+    payload["snapshot_sha256"] = sha256(
+        json.dumps(
+            {key: value for key, value in payload.items() if key != "snapshot_sha256"},
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
+
+    with pytest.raises(ValueError, match="all eight gates"):
         _ = TwseResearchPredictionSupabasePublisher(
             writer,
             target_environment="staging",

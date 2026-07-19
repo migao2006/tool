@@ -19,6 +19,16 @@ const GATE_ORDER = [
   "rank_eligibility",
   "position_capacity_limits",
 ];
+const RESEARCH_GATE_ENVELOPE_VERSION = "research-decision-gate.v1";
+
+function validGateSourceDate(value: unknown, asOfDate: string): boolean {
+  if (
+    typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/u.test(value) ||
+    Number.isNaN(Date.parse(`${value}T00:00:00Z`))
+  ) return false;
+  return new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value &&
+    value <= asOfDate;
+}
 
 function emptySnapshot(): JsonRecord {
   return {
@@ -41,6 +51,73 @@ function emptySnapshot(): JsonRecord {
   };
 }
 
+function validateResearchGateAttachments(
+  rows: SnapshotRows,
+  gatesByPrediction: Map<number, DecisionGateRow[]>,
+): void {
+  if (!Object.hasOwn(rows.run.source_dates, "decision_gate_count")) return;
+  const expectedCount = rows.run.source_dates.decision_gate_count;
+  const expectedContract =
+    rows.run.source_dates.decision_gate_attachment_contract;
+  const snapshotSha256 = rows.run.source_dates.snapshot_sha256;
+  if (
+    typeof expectedCount !== "number" || !Number.isInteger(expectedCount) ||
+    expectedCount < 0 ||
+    expectedContract !== RESEARCH_GATE_ENVELOPE_VERSION ||
+    typeof snapshotSha256 !== "string"
+  ) {
+    throw new ApiError(
+      409,
+      "RESEARCH_DECISION_GATE_MANIFEST_INVALID",
+      "Research decision gate manifest is invalid",
+    );
+  }
+  if (expectedCount === 0) {
+    if (rows.gates.length !== 0) {
+      throw new ApiError(
+        409,
+        "RESEARCH_DECISION_GATE_ATTACHMENT_MISMATCH",
+        "Legacy research run unexpectedly contains decision gate rows",
+      );
+    }
+    return;
+  }
+  if (
+    rows.gates.length !== expectedCount ||
+    expectedCount !== rows.predictions.length * GATE_ORDER.length
+  ) {
+    throw new ApiError(
+      409,
+      "RESEARCH_DECISION_GATE_ATTACHMENT_INCOMPLETE",
+      "Research decision gate rows do not match the run manifest",
+    );
+  }
+  for (const prediction of rows.predictions) {
+    const gates = [
+      ...(gatesByPrediction.get(prediction.stock_prediction_id) ?? []),
+    ]
+      .sort((left, right) => left.gate_order - right.gate_order);
+    const valid = gates.length === GATE_ORDER.length &&
+      gates.every((gate, index) => {
+        const actual = gate.actual_value;
+        if (
+          gate.gate_name !== GATE_ORDER[index] || actual === null ||
+          typeof actual !== "object" || Array.isArray(actual)
+        ) return false;
+        return actual.contract_version === RESEARCH_GATE_ENVELOPE_VERSION &&
+          actual.attachment_snapshot_sha256 === snapshotSha256 &&
+          Object.hasOwn(actual, "value");
+      });
+    if (!valid) {
+      throw new ApiError(
+        409,
+        "RESEARCH_DECISION_GATE_ATTACHMENT_MISMATCH",
+        "Research decision gate attachment does not match the prediction snapshot",
+      );
+    }
+  }
+}
+
 function formalContractReady(
   mapped: JsonRecord[],
   rows: SnapshotRows,
@@ -55,10 +132,17 @@ function formalContractReady(
   ) return false;
   return mapped.every((prediction) => {
     const gates = prediction.gates as JsonRecord[];
-    return gates.length === GATE_ORDER.length &&
+    const complete = gates.length === GATE_ORDER.length &&
       gates.every((gate, index) =>
-        gate.gate === GATE_ORDER[index] && typeof gate.source_date === "string"
+        gate.gate === GATE_ORDER[index] &&
+        typeof gate.passed === "boolean" &&
+        typeof gate.reason_code === "string" && gate.reason_code.length > 0 &&
+        gate.actual !== null && gate.actual !== undefined &&
+        gate.threshold !== null && gate.threshold !== undefined &&
+        validGateSourceDate(gate.source_date, rows.run.as_of_date)
       );
+    return complete && (prediction.decision !== "CANDIDATE" ||
+      gates.every((gate) => gate.passed === true));
   });
 }
 
@@ -107,6 +191,7 @@ export function buildSnapshot(
       gate,
     ]);
   }
+  validateResearchGateAttachments(rows, gates);
 
   const mapped = rows.predictions.map((prediction) => {
     const security = securities.get(prediction.security_id);

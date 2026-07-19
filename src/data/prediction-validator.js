@@ -55,7 +55,56 @@ function isFiniteInRange(value, minimum, maximum = Number.POSITIVE_INFINITY) {
   return Number.isFinite(value) && value >= minimum && value <= maximum;
 }
 
+function validateDecisionGateSet(record, snapshot, requireSourceDates = false) {
+  if (record.gates.length === 0) {
+    if (requireSourceDates) {
+      throw new TypeError(`${record.symbol} 的決策 gate 缺漏。`);
+    }
+    return;
+  }
+  if (
+    record.gates.map((gate) => gate.key).join("|") !==
+    DECISION_GATE_ORDER.join("|")
+  ) {
+    throw new TypeError(`${record.symbol} 的決策 gate 缺漏或順序錯誤。`);
+  }
+  record.gates.forEach((gate) => {
+    if (typeof gate.passed !== "boolean" || !gate.reason_code) {
+      throw new TypeError(`${record.symbol} 的決策 gate 結果不完整。`);
+    }
+    if (
+      gate.actual === null ||
+      gate.actual === undefined ||
+      gate.threshold === null ||
+      gate.threshold === undefined
+    ) {
+      throw new TypeError(`${record.symbol} 的決策 gate 實際值或門檻缺漏。`);
+    }
+    if (gate.source_date === null) {
+      if (requireSourceDates) {
+        throw new TypeError(`${record.symbol} 的決策 gate 缺少來源日期。`);
+      }
+      return;
+    }
+    if (
+      dateOnly(gate.source_date, `${record.symbol} gate source_date`) >
+      snapshot.asOfDate
+    ) {
+      throw new RangeError(
+        `${record.symbol} 的決策 gate 來源日期晚於資料日期。`,
+      );
+    }
+  });
+  if (
+    record.decision === "CANDIDATE" &&
+    record.gates.some((gate) => !gate.passed)
+  ) {
+    throw new TypeError(`${record.symbol} 的決策與 gate 結果不一致。`);
+  }
+}
+
 function validateFormalRecord(record, snapshot, decisionTimestamp) {
+  validateDecisionGateSet(record, snapshot, true);
   if (!record.symbol || !record.name || !["TWSE", "TPEX"].includes(record.market)
     || record.asset_type !== "STOCK" || record.data_quality_status !== "PASS") {
     throw new TypeError("正式普通股預測含有不支援的標的或市場。");
@@ -137,16 +186,13 @@ function validateFormalRecord(record, snapshot, decisionTimestamp) {
   if (awareTimestamp(record.latest_available_at, `${record.symbol} latest_available_at`) > decisionTimestamp) {
     throw new RangeError(`${record.symbol} 使用了決策時間之後的資料。`);
   }
-  if (record.gates.map((gate) => gate.key).join("|") !== DECISION_GATE_ORDER.join("|")) {
-    throw new TypeError(`${record.symbol} 的決策 gate 缺漏或順序錯誤。`);
-  }
-  if (record.gates.some((gate) => typeof gate.passed !== "boolean")
-    || (record.decision === "CANDIDATE" && record.gates.some((gate) => !gate.passed))) {
-    throw new TypeError(`${record.symbol} 的決策與 gate 結果不一致。`);
-  }
 }
 
 export function validateFormalSnapshot(snapshot) {
+  [...snapshot.predictions, ...snapshot.watchlist, ...snapshot.excluded]
+    .forEach((record) => {
+      validateDecisionGateSet(record, snapshot);
+    });
   if (snapshot.systemStatus !== "PASS") return;
   if (snapshot.stale || snapshot.dataQualityHardFail) {
     throw new TypeError("PASS 快照不得為 stale 或 data quality hard fail。");
@@ -178,5 +224,7 @@ export function validateFormalSnapshot(snapshot) {
   }
   [...snapshot.predictions, ...snapshot.watchlist]
     .filter((record) => !record.data_quality_hard_fail)
-    .forEach((record) => validateFormalRecord(record, snapshot, decisionTimestamp));
+    .forEach((record) => {
+      validateFormalRecord(record, snapshot, decisionTimestamp);
+    });
 }

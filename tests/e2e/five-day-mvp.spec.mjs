@@ -220,6 +220,68 @@ test("歷史 OOS 研究快照的 NO_TRADE 排序與已完成輸出仍可檢視",
   );
 });
 
+test("研究決策政策會顯示八層真實 gate 並維持 NO_TRADE", async ({ page }) => {
+	await page.goto("/?api_mode=gated-research", {
+		waitUntil: "domcontentloaded",
+	});
+
+	await expect(page.locator("body")).toHaveAttribute(
+		"data-ui-state",
+		"research_only",
+	);
+	const navigation = page.getByRole("navigation", { name: "主要導覽" });
+	await navigation.getByRole("button", { name: "5 日候選" }).click();
+	const card = page.locator(
+		'[data-candidate-list] .candidate-card[data-symbol="GATED1"]',
+	);
+	await expect(card).toBeVisible();
+	await expect(card.locator(".decision-badge")).toHaveText("NO_TRADE");
+	await card.getByRole("button", { name: "查看決策詳情" }).click();
+
+	await expect(page.locator("[data-stock-gate-state]")).toHaveText(
+		"研究決策 gate 已評估",
+	);
+	const gates = page.locator(".decision-gates > li");
+	await expect(gates).toHaveCount(8);
+	await expect(
+		gates.filter({ has: page.locator(".gate-step") }).locator(".gate-step"),
+	).toHaveCount(8);
+	await expect(page.locator(".decision-gates > li.is-pass")).toHaveCount(4);
+	await expect(page.locator(".decision-gates > li.is-fail")).toHaveCount(4);
+	const liquidity = page.locator('[data-gate="liquidity_capacity_gate"]');
+	await expect(liquidity).toContainText("通過");
+	await expect(liquidity).toContainText('"adv20_ntd":1000000000');
+	await expect(liquidity).toContainText("2026-07-17");
+	const tradability = page.locator('[data-gate="tradability_gate"]');
+	await expect(tradability).toContainText("未通過");
+	await expect(tradability).toContainText("MISSING");
+	await expect(tradability).toContainText("FORMAL_INPUT_MISSING");
+	await expect(page.locator('[data-page="stock"]')).not.toContainText(
+		"正式決策政策尚未執行",
+	);
+	await expect(page.locator('[data-page="stock"]')).not.toContainText(
+		"RESEARCH_ONLY_NO_FORMAL_DECISION_POLICY",
+	);
+});
+
+test("研究快照 gate 缺漏時會 fail closed", async ({ page }) => {
+	await page.goto("/?api_mode=partial-gates", {
+		waitUntil: "domcontentloaded",
+	});
+
+	await expect(page.locator("body")).toHaveAttribute(
+		"data-ui-state",
+		"api_error",
+	);
+	await expect(page.locator("body")).toHaveAttribute(
+		"data-system-status",
+		"FAIL",
+	);
+	await expect(
+		page.locator("[data-candidate-list] .candidate-card"),
+	).toHaveCount(0);
+});
+
 test("正式 PASS 快照若過期仍維持 fail-closed", async ({ page }) => {
   await page.goto("/contract-test", { waitUntil: "domcontentloaded" });
 

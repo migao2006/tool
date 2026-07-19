@@ -135,6 +135,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "target_environment": published.target_environment,
                 "prediction_run_id": published.prediction_run_id,
                 "prediction_count": published.prediction_count,
+                "decision_gate_count": published.decision_gate_count,
             }
         except Exception as error:
             payload["supabase_publish"] = {

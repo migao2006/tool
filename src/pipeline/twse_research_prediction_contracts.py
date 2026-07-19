@@ -18,6 +18,9 @@ from src.core.json_value import require_aware_datetime, to_json_safe
 from src.core.research_prediction_contract import (
     RESEARCH_PREDICTION_CONTRACT_VERSION,
 )
+from src.decision.decision_policy import DECISION_GATE_ORDER
+
+from .twse_research_decision_contracts import ResearchDecisionGate
 
 
 RESEARCH_EVALUATION_SCOPES = (
@@ -47,6 +50,7 @@ class TwseOosResearchPrediction:
     distinguishes untouched OOS evaluation from bundle-backed inference and is
     always serialized for downstream auditing.
     """
+
     symbol: str
     decision_date: date
     decision_at: datetime
@@ -78,6 +82,7 @@ class TwseOosResearchPrediction:
     maximum_order_notional_ntd: float | None = None
     market: str = "TWSE"
     evaluation_scope: str = "OUT_OF_SAMPLE_TEST"
+    gates: tuple[ResearchDecisionGate, ...] = ()
 
     def __post_init__(self) -> None:
         _ = require_production_horizon(self.horizon)
@@ -139,55 +144,59 @@ class TwseOosResearchPrediction:
             not isfinite(self.maximum_order_notional_ntd)
             or self.maximum_order_notional_ntd <= 0
         ):
-            raise ValueError(
-                "maximum_order_notional_ntd must be positive when present"
-            )
+            raise ValueError("maximum_order_notional_ntd must be positive when present")
         if self.data_quality_status not in {"PASS", "WARN"}:
             raise ValueError("research data quality must be PASS or WARN")
         _require_text(self.calibration_version, "calibration_version")
         _require_text(self.calibration_status, "calibration_status")
         if not self.reason_codes or any(not value for value in self.reason_codes):
             raise ValueError("research limitations must be preserved as reason_codes")
+        if (
+            self.gates
+            and tuple(gate.gate for gate in self.gates) != DECISION_GATE_ORDER
+        ):
+            raise ValueError("research decision gates must follow the complete order")
 
     def to_dict(self) -> dict[str, Any]:
-        return to_json_safe(
-            {
-                "symbol": self.symbol,
-                "market": self.market,
-                "industry": self.industry,
-                "decision_date": self.decision_date,
-                "decision_at": self.decision_at,
-                "horizon": self.horizon,
-                "fold_number": self.fold_number,
-                "evaluation_scope": self.evaluation_scope,
-                "model_raw_score": self.model_raw_score,
-                "rank_score": self.rank_score,
-                "global_rank": self.global_rank,
-                "global_rank_percentile": self.global_rank_percentile,
-                "calibrated_p_up": self.calibrated_p_up,
-                "calibrated_p_neutral": self.calibrated_p_neutral,
-                "calibrated_p_down": self.calibrated_p_down,
-                "calibration_version": self.calibration_version,
-                "gross_q10": self.gross_q10,
-                "gross_q50": self.gross_q50,
-                "gross_q90": self.gross_q90,
-                "net_q10": self.net_q10,
-                "net_q50": self.net_q50,
-                "net_q90": self.net_q90,
-                "interval_width": self.interval_width,
-                "calibration_status": self.calibration_status,
-                "quantile_crossing_before_calibration": (
-                    self.quantile_crossing_before_calibration
-                ),
-                "estimated_round_trip_cost": self.estimated_round_trip_cost,
-                "adv20_ntd": self.adv20_ntd,
-                "maximum_order_notional_ntd": self.maximum_order_notional_ntd,
-                "latest_available_at": self.latest_available_at,
-                "data_quality_status": self.data_quality_status,
-                "reason_codes": self.reason_codes,
-            },
-            "prediction",
-        )
+        payload: dict[str, Any] = {
+            "symbol": self.symbol,
+            "market": self.market,
+            "industry": self.industry,
+            "decision_date": self.decision_date,
+            "decision_at": self.decision_at,
+            "horizon": self.horizon,
+            "fold_number": self.fold_number,
+            "evaluation_scope": self.evaluation_scope,
+            "model_raw_score": self.model_raw_score,
+            "rank_score": self.rank_score,
+            "global_rank": self.global_rank,
+            "global_rank_percentile": self.global_rank_percentile,
+            "calibrated_p_up": self.calibrated_p_up,
+            "calibrated_p_neutral": self.calibrated_p_neutral,
+            "calibrated_p_down": self.calibrated_p_down,
+            "calibration_version": self.calibration_version,
+            "gross_q10": self.gross_q10,
+            "gross_q50": self.gross_q50,
+            "gross_q90": self.gross_q90,
+            "net_q10": self.net_q10,
+            "net_q50": self.net_q50,
+            "net_q90": self.net_q90,
+            "interval_width": self.interval_width,
+            "calibration_status": self.calibration_status,
+            "quantile_crossing_before_calibration": (
+                self.quantile_crossing_before_calibration
+            ),
+            "estimated_round_trip_cost": self.estimated_round_trip_cost,
+            "adv20_ntd": self.adv20_ntd,
+            "maximum_order_notional_ntd": self.maximum_order_notional_ntd,
+            "latest_available_at": self.latest_available_at,
+            "data_quality_status": self.data_quality_status,
+            "reason_codes": self.reason_codes,
+        }
+        if self.gates:
+            payload["decision"] = "NO_TRADE"
+            payload["gates"] = [gate.to_dict() for gate in self.gates]
+        return to_json_safe(payload, "prediction")
 
 
 @dataclass(frozen=True)

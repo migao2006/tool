@@ -14,6 +14,9 @@ from src.data.research.twse_research_prediction_supabase_contracts import (
     ResearchSupabasePublishResult,
     SupabaseResearchWriter,
 )
+from src.data.research.twse_research_decision_gate_repository import (
+    persist_research_decision_gates,
+)
 from src.data.research.twse_research_prediction_supabase_payload import (
     ParsedResearchSnapshot,
     parse_research_snapshot,
@@ -133,10 +136,17 @@ class TwseResearchPredictionSupabasePublisher:
             },
         )
         run_id, prediction_count = self._parse_rpc_result(response, parsed)
+        gate_count = persist_research_decision_gates(
+            self.writer,
+            prediction_run_id=run_id,
+            stock_predictions=resolved.stock_predictions,
+            decision_gates=resolved.decision_gates,
+        )
         return ResearchSupabasePublishResult(
             prediction_run_id=run_id,
             prediction_count=prediction_count,
             target_environment=self.target_environment,
+            decision_gate_count=gate_count,
         )
 
     def _security_ids(

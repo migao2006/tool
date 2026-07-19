@@ -1,5 +1,5 @@
 import { CURRENT_HORIZON, SYSTEM_STATUS, normalizeHorizon } from "../core/five-day-contract.js";
-import { validateFormalSnapshot } from "./prediction-validator.js?v=api-4";
+import { validateFormalSnapshot } from "./prediction-validator.js?v=api-5";
 
 const DECISIONS = new Set(["CANDIDATE", "WATCH", "NO_TRADE"]);
 const SYSTEM_STATUSES = new Set(Object.values(SYSTEM_STATUS));
@@ -42,6 +42,7 @@ function normalizeGate(gate) {
     actual: firstValue(gate, ["actual", "actual_value"]),
     threshold: firstValue(gate, ["threshold", "threshold_value"]),
     reason_code: nullableString(firstValue(gate, ["reason_code", "reasonCode"])),
+    source_date: nullableString(firstValue(gate, ["source_date", "sourceDate"])),
   });
 }
 

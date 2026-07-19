@@ -41,7 +41,13 @@
 
 .candidate-card.compact { min-height: 0; padding: 13px 14px; }
 .candidate-card header { display: flex; justify-content: space-between; gap: 12px; }
-.candidate-card header div span { margin-left: 7px; color: var(--muted); font-size: 0.72rem; }
+.candidate-card header > div { min-width: 0; }
+.candidate-card header div span {
+  margin-left: 7px;
+  color: var(--muted);
+  font-size: 0.72rem;
+  overflow-wrap: anywhere;
+}
 .candidate-meta { margin: 4px 0; color: var(--muted); font-size: 0.68rem; }
 .candidate-values { margin: 0; }
 .candidate-values > div { display: flex; justify-content: space-between; gap: 12px; padding: 8px 0; border-bottom: 0.5px solid var(--separator-soft); }
@@ -68,11 +74,15 @@
   gap: 10px;
 }
 
+.watchlist-card header > div,
+.excluded-record header > * { min-width: 0; }
+
 .watchlist-card header div span,
 .excluded-record header span {
   margin-left: 7px;
   color: var(--muted);
   font-size: 0.7rem;
+  overflow-wrap: anywhere;
 }
 
 .watchlist-values { margin: 9px 0 0; }
@@ -111,7 +121,7 @@
 .settings-form label { display: block; margin-top: 11px; padding: 11px 12px; border-radius: 12px; background: var(--surface-2); }
 .settings-form label span { display: block; color: var(--muted); font-size: 0.67rem; }
 .settings-form input,
-.settings-form select { width: 100%; min-height: 34px; padding: 0; border: 0; outline: 0; background: transparent; color: var(--text); font: inherit; }
+.settings-form select { width: 100%; min-height: 44px; padding: 0; border: 0; outline: 0; background: transparent; color: var(--text); font: inherit; }
 .settings-save { width: 100%; }
 .settings-feedback { min-height: 1.3rem; margin: 8px 0 0; color: var(--green); font-size: 0.7rem; text-align: center; }
 .inline-feedback { margin: 8px 4px 0; color: var(--muted); font-size: 0.78rem; text-align: right; }

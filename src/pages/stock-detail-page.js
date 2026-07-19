@@ -23,7 +23,7 @@ export function createStockDetailPage({ horizon }) {
       <section class="decision-hero" aria-label="決策摘要">
         <div><span>資料狀態</span><span class="system-badge" data-system-status-label>RESEARCH_ONLY</span></div>
         <div><span>決策 <small>decision</small></span><strong data-stock-field="decision">—</strong></div>
-        <div><span>主要原因 <small>reason_codes</small></span><code data-stock-field="reason_codes">NO_STOCK_SELECTED</code></div>
+        <div class="decision-reasons"><span>主要原因 <small>reason_codes</small></span><code data-stock-field="reason_codes">NO_STOCK_SELECTED</code></div>
         <dl><div><dt>資料日期 <small>as_of_date</small></dt><dd data-stock-field="as_of_date">—</dd></div><div><dt>決策時間 <small>decision_at</small></dt><dd data-stock-field="decision_at">—</dd></div><div><dt>期間 <small>horizon</small></dt><dd data-stock-field="horizon">${horizon}</dd></div></dl>
       </section>
 

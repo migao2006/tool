@@ -19,6 +19,8 @@ export class AuthDialog {
     this.user = null;
     this.submitHandler = () => {};
     this.signOutHandler = () => {};
+    this.returnFocus = null;
+    this.busyFocus = null;
     this.bindEvents();
   }
 
@@ -47,8 +49,12 @@ export class AuthDialog {
     this.dialog.addEventListener("click", (event) => {
       if (!this.busy && event.target === this.dialog) this.close();
     });
+    this.dialog.addEventListener("cancel", (event) => {
+      if (this.busy) event.preventDefault();
+    });
     this.dialog.addEventListener("close", () => {
       document.body.classList.remove("auth-modal-open");
+      this.restoreFocus();
     });
   }
 
@@ -61,8 +67,10 @@ export class AuthDialog {
   }
 
   open(view = "signin") {
+    const wasOpen = this.dialog.open;
+    if (!wasOpen) this.returnFocus = document.activeElement;
     this.showView(view);
-    if (!this.dialog.open) {
+    if (!wasOpen) {
       if (typeof this.dialog.showModal === "function") {
         this.dialog.showModal();
       } else {
@@ -70,6 +78,7 @@ export class AuthDialog {
       }
     }
     document.body.classList.add("auth-modal-open");
+    this.focusView(view);
   }
 
   close() {
@@ -78,8 +87,21 @@ export class AuthDialog {
       this.dialog.close();
     } else {
       this.dialog.removeAttribute("open");
+      this.restoreFocus();
     }
     document.body.classList.remove("auth-modal-open");
+  }
+
+  focusView(view) {
+    const activeView = this.root.querySelector(`[data-auth-view="${view}"]`);
+    activeView?.querySelector("input, button:not(:disabled)")?.focus();
+  }
+
+  restoreFocus() {
+    if (this.returnFocus instanceof HTMLElement && this.returnFocus.isConnected) {
+      this.returnFocus.focus();
+    }
+    this.returnFocus = null;
   }
 
   showView(view) {
@@ -88,6 +110,7 @@ export class AuthDialog {
       section.hidden = section.dataset.authView !== view;
     });
     this.title.textContent = authTitles[view] ?? "帳戶";
+    if (this.dialog.open) this.focusView(view);
     if (!this.available && view !== "account") {
       this.showMessage("登入服務尚未完成連接。", "warning");
     }
@@ -113,8 +136,21 @@ export class AuthDialog {
   }
 
   setBusy(busy) {
+    if (busy && this.dialog.open) this.busyFocus = document.activeElement;
     this.busy = busy;
+    this.dialog.setAttribute("aria-busy", String(busy));
     this.updateSubmitState();
+    if (busy && this.dialog.open) {
+      this.dialog.focus();
+    } else if (!busy && this.dialog.open) {
+      if (this.busyFocus instanceof HTMLElement && this.busyFocus.isConnected) {
+        this.busyFocus.focus();
+      } else {
+        const view = this.root.querySelector("[data-auth-view]:not([hidden])")?.dataset.authView;
+        if (view) this.focusView(view);
+      }
+    }
+    if (!busy) this.busyFocus = null;
   }
 
   updateSubmitState() {

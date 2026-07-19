@@ -4,7 +4,7 @@ import { initializeResearchSettings } from "./src/features/research-settings.js?
 import { initializeCandidateFilters } from "./src/features/candidate-filters.js";
 import { initializeWatchlistFilters } from "./src/features/watchlist-filters.js";
 import { CURRENT_HORIZON } from "./src/core/five-day-contract.js";
-import { createRouter } from "./src/core/router.js?v=debug-1";
+import { createRouter } from "./src/core/router.js?v=debug-2";
 import {
   HOME_DATA_STATE,
   UI_STATE,
@@ -24,7 +24,7 @@ import {
   renderCandidatesPage,
 } from "./src/pages/candidates-page.js?v=mobile-ui-1";
 import { createOverviewPage, renderOverviewPage } from "./src/pages/overview-page.js?v=mobile-ui-1";
-import { createStockDetailPage, renderStockDetailPage } from "./src/pages/stock-detail-page.js?v=mobile-ui-1";
+import { createStockDetailPage, renderStockDetailPage } from "./src/pages/stock-detail-page.js?v=mobile-ui-2";
 import { createWatchlistPage, renderWatchlistPage } from "./src/pages/watchlist-page.js?v=research-ui-1";
 
 const appRoot = document.querySelector("#app-content");

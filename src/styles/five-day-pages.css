@@ -96,9 +96,10 @@
 }
 
 .decision-hero > div { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.decision-hero > div > * { min-width: 0; }
 .decision-hero > div + div { margin-top: 8px; }
 .decision-hero span { color: var(--muted); font-size: 0.7rem; }
-.decision-hero code { color: var(--amber); font-size: 0.67rem; }
+.decision-hero code { max-width: 100%; color: var(--amber); font-size: 0.67rem; overflow-wrap: anywhere; word-break: break-word; }
 .decision-hero dl { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; margin: 14px 0 0; }
 .decision-hero dl div { padding: 9px; border-radius: 10px; background: var(--surface-2); }
 .decision-hero dd { margin-top: 3px; text-align: left; }
@@ -109,8 +110,9 @@
 .gate-step { width: 26px; height: 26px; display: grid; place-items: center; border-radius: 50%; background: var(--surface-2); color: var(--muted); font-size: 0.68rem; }
 .decision-gates li.is-pass .gate-step { background: var(--green-soft); color: var(--green); }
 .decision-gates li.is-fail .gate-step { background: rgba(255, 69, 58, 0.14); color: var(--red); }
+.gate-main { min-width: 0; }
 .gate-main strong { display: block; font-size: 0.78rem; }
-.gate-main code { margin-top: 3px; }
+.gate-main code { max-width: 100%; margin-top: 3px; word-break: break-word; }
 .decision-gates dl { grid-column: 2; display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin: 2px 0 0; }
 .decision-gates dl div { padding: 8px; border-radius: 9px; background: var(--surface-2); }
 .decision-gates dd { margin-top: 2px; text-align: left; }
@@ -134,9 +136,15 @@
   .detail-section-grid { grid-template-columns: 1fr; }
   .detail-wide { grid-column: auto; }
   .wide-filter-grid { grid-template-columns: 1fr; }
+  .filter-grid input,
+  .filter-grid select { min-height: 44px; font-size: 1rem; }
+  .decision-hero > .decision-reasons {
+    flex-direction: column;
+    align-items: flex-start;
+  }
   .decision-hero dl { grid-template-columns: 1fr; }
   .inline-fields { grid-template-columns: 1fr; }
-  .watch-filters { display: flex; overflow-x: auto; scrollbar-width: none; }
-  .watch-filters button { flex: 0 0 auto; min-width: 92px; }
-  .date-badge { max-width: none; white-space: nowrap; }
+  .watch-filters { display: grid; overflow: visible; }
+  .watch-filters button { min-width: 0; }
+  .date-badge { max-width: 48%; white-space: nowrap; }
 }

@@ -4,6 +4,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "backfill-historical-daily-bars.yml"
 WORKER = ROOT / ".github" / "workflows" / "historical-daily-bar-backfill-worker.yml"
+EXTENSION_WORKFLOW = (
+    ROOT / ".github" / "workflows" / "extend-twse-research-history.yml"
+)
 SCRIPT = ROOT / "scripts" / "backfill_historical_daily_bars.py"
 
 
@@ -28,6 +31,8 @@ def test_backfill_workflow_is_resumable_scheduled_and_capacity_bounded() -> None
     ) in worker
     assert 'HISTORICAL_BACKFILL_REFRESH_HOME_STATUS: "false"' in worker
     assert '--max-tasks "$MAX_TASKS"' in worker
+    assert '--start-date "$START_DATE"' in worker
+    assert '--end-date "$END_DATE"' in worker
     assert "FINMIND_TOKEN: ${{ secrets.finmind_token }}" in worker
     assert (
         "SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.supabase_service_role_key }}" in worker
@@ -63,12 +68,29 @@ def test_backfill_workflow_isolates_three_finmind_credentials() -> None:
         assert f"credential_slot: {slot}" in workflow
     assert workflow.count("seed_common_tasks: true") == 1
     assert workflow.count("seed_common_tasks: false") == 2
+    assert workflow.count('start_date: "2021-07-19"') == 3
+    assert workflow.count('end_date: "2026-07-17"') == 3
     assert "seed_common_tasks:" in worker
+    assert "start_date:" in worker
+    assert "end_date:" in worker
     assert "type: boolean" in worker
     assert (
         "historical-backfill-${{ inputs.credential_slot }}-${{ github.run_id }}"
         in worker
     )
+
+
+def test_history_extension_is_fixed_non_overlapping_and_twse_first() -> None:
+    extension = EXTENSION_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "schedule:" not in extension
+    assert extension.count('start_date: "2018-01-01"') == 3
+    assert extension.count('end_date: "2021-07-18"') == 3
+    assert "group: historical-daily-bar-backfill" in extension
+    assert extension.count("seed_common_tasks: true") == 1
+    assert extension.count("seed_common_tasks: false") == 2
+    assert extension.count("finmind_token:") == 3
+    assert "The shared queue always claims TWSE common stocks before TPEX" in extension
 
 
 def test_backfill_workflow_refreshes_home_status_once_after_parallel_workers() -> None:

@@ -10,7 +10,7 @@ import re
 from typing import cast
 
 from src.data.ingestion.historical_archive_contracts import (
-    HISTORICAL_ARCHIVE_SCHEMA_VERSION,
+    HISTORICAL_ARCHIVE_SCHEMA_VERSIONS,
     HistoricalArchiveRequest,
 )
 
@@ -131,9 +131,11 @@ class HistoricalArchiveManifest:
             raise ValueError("archive_key does not match the object location")
         if self.storage_provider != "CLOUDFLARE_R2":
             raise ValueError("storage_provider must be CLOUDFLARE_R2")
-        if self.schema_version != HISTORICAL_ARCHIVE_SCHEMA_VERSION:
+        if self.schema_version != HISTORICAL_ARCHIVE_SCHEMA_VERSIONS.get(
+            self.source_dataset
+        ):
             raise ValueError("unsupported historical archive schema version")
-        if self.provider_code != "FINMIND" or self.source_dataset != "daily_bars":
+        if self.provider_code != "FINMIND":
             raise ValueError("unsupported historical archive source")
         if not self.source_version:
             raise ValueError("source_version must not be empty")
@@ -173,6 +175,7 @@ class HistoricalArchiveManifest:
             requested_end_date=self.requested_end_date,
             source_payload_sha256=self.source_payload_hash,
             retrieved_at=self.first_observed_at,
+            source_dataset=self.source_dataset,
         )
 
     @classmethod

@@ -1,4 +1,9 @@
-"""Archive one normalized FinMind symbol batch to verified private R2 Parquet."""
+"""Archive one normalized FinMind symbol batch to verified private R2 Parquet.
+
+The historical filename remains as a compatibility import for the original
+daily-bar worker.  The implementation now supports the explicitly versioned
+supplemental datasets without changing the existing daily-bar object keys.
+"""
 
 from __future__ import annotations
 
@@ -17,7 +22,13 @@ from src.data.providers.contracts import ProviderPayload
 from .contracts import IngestionError
 from .historical_archive_contracts import HistoricalArchiveRequest
 from .historical_archive_repository import HistoricalArchiveRepository
+from .historical_benchmark_contracts import BENCHMARK_DATASET
+from .historical_benchmark_parquet import serialize_historical_benchmark_parquet
 from .historical_parquet_serializer import serialize_historical_parquet
+from .historical_supplemental_contracts import SUPPLEMENTAL_DATASETS
+from .historical_supplemental_parquet import (
+    serialize_historical_supplemental_parquet,
+)
 
 
 _GIT_COMMIT = re.compile(r"^[0-9a-f]{7,40}$")
@@ -150,18 +161,18 @@ def _verified_object(
         )
     metadata = head.metadata
     content_sha256 = metadata.get("content-sha256", "")
+    required_metadata = [
+        "source-payload-sha256",
+        "row-count",
+        "schema-version",
+        "compression",
+        "scheduled-market",
+        "asset-type",
+    ]
+    if "source-dataset" in expected_metadata:
+        required_metadata.append("source-dataset")
     if (
-        any(
-            metadata.get(name) != expected_metadata[name]
-            for name in (
-                "source-payload-sha256",
-                "row-count",
-                "schema-version",
-                "compression",
-                "scheduled-market",
-                "asset-type",
-            )
-        )
+        any(metadata.get(name) != expected_metadata[name] for name in required_metadata)
         or metadata.get("byte-size") != str(head.content_length)
         or head.content_type != "application/vnd.apache.parquet"
         or not re.fullmatch(r"[0-9a-f]{64}", content_sha256)
@@ -238,9 +249,26 @@ class HistoricalDailyBarArchiveService:
             requested_end_date=end_date,
             source_payload_sha256=payload.payload_sha256,
             retrieved_at=payload.retrieved_at,
+            source_dataset=payload.dataset,
         )
         prepared = _with_quarantine_issues(rows, quarantine_rows)
-        artifact = serialize_historical_parquet(prepared, request=request)
+        if payload.dataset == "daily_bars":
+            artifact = serialize_historical_parquet(prepared, request=request)
+        elif payload.dataset == BENCHMARK_DATASET:
+            artifact = serialize_historical_benchmark_parquet(
+                prepared,
+                request=request,
+            )
+        elif payload.dataset in SUPPLEMENTAL_DATASETS:
+            artifact = serialize_historical_supplemental_parquet(
+                prepared,
+                request=request,
+            )
+        else:
+            raise IngestionError(
+                "HISTORICAL_ARCHIVE_SOURCE_INVALID",
+                "The FinMind archive dataset is not supported",
+            )
         object_metadata = artifact.object_metadata()
         if artifact.byte_size > self.max_object_bytes:
             raise IngestionError(

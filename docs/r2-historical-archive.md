@@ -71,5 +71,20 @@ HISTORICAL_BACKFILL_REFRESH_HOME_STATUS
 
 - Caller workflow 使用單一 concurrency group，`cancel-in-progress=false`；前一輪未完成時，後一輪不得平行修改同一 queue。
 - 正常完成必須同時看到 primary、secondary、tertiary 與 `finalize-home-status` 四個 job 成功。
+- 日線 worker 每組每輪上限為 100 檔，仍受 FinMind 即時 quota、保留額度、請求 pacing、
+  20 分鐘執行期限及 R2 object／byte guard 限制；不得用同一 token 開多個 worker。
 - 實際封存量以 Supabase manifest 的 object、distinct symbol、row count 與 byte size 為準；GitHub artifact 只保存每個 worker 的執行摘要，不保存 Parquet 原始資料。
 - 首頁 `historical_landing_count` 可以合計既有 Supabase landing 與最新 R2 logical slices，但 `historical_production_eligible_count` 在 point-in-time 驗證完成前必須保持 0。
+
+## 資料集邊界
+
+R2 object 依 `source_dataset` 使用獨立 schema 與 key prefix：
+
+- `daily_bars`
+- `adjusted_bars`
+- `institutional_flows`
+- `margin_short`
+- `benchmark_total_return`
+
+每一類資料都必須以自己的 schema version、metadata 與 row validator 驗證；不得把 benchmark
+或籌碼資料套用日線 schema。研究 feature artifact 不是原始封存，也不得覆寫任何 raw object。

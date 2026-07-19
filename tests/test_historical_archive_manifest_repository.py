@@ -101,15 +101,21 @@ def test_snapshot_hash_covers_all_meaning_bearing_manifest_fields() -> None:
         "SOURCE_POLICY_CHANGED",
     ]
 
-    original_hash = HistoricalArchiveManifestRepository(
-        FakeSource([original])
-    ).fetch().snapshot_sha256
-    revised_source_hash = HistoricalArchiveManifestRepository(
-        FakeSource([revised_source])
-    ).fetch().snapshot_sha256
-    revised_reason_hash = HistoricalArchiveManifestRepository(
-        FakeSource([revised_reason])
-    ).fetch().snapshot_sha256
+    original_hash = (
+        HistoricalArchiveManifestRepository(FakeSource([original]))
+        .fetch()
+        .snapshot_sha256
+    )
+    revised_source_hash = (
+        HistoricalArchiveManifestRepository(FakeSource([revised_source]))
+        .fetch()
+        .snapshot_sha256
+    )
+    revised_reason_hash = (
+        HistoricalArchiveManifestRepository(FakeSource([revised_reason]))
+        .fetch()
+        .snapshot_sha256
+    )
 
     assert len({original_hash, revised_source_hash, revised_reason_hash}) == 3
 
@@ -120,12 +126,8 @@ def test_snapshot_rows_and_hash_share_the_same_normalized_values() -> None:
     padded["source_symbol"] = f"  {original['source_symbol']}  "
     padded["source_version"] = "  v1  "
 
-    clean_snapshot = HistoricalArchiveManifestRepository(
-        FakeSource([original])
-    ).fetch()
-    padded_snapshot = HistoricalArchiveManifestRepository(
-        FakeSource([padded])
-    ).fetch()
+    clean_snapshot = HistoricalArchiveManifestRepository(FakeSource([original])).fetch()
+    padded_snapshot = HistoricalArchiveManifestRepository(FakeSource([padded])).fetch()
 
     assert padded_snapshot.rows[0]["source_symbol"] == original["source_symbol"]
     assert padded_snapshot.rows[0]["source_version"] == "v1"
@@ -156,3 +158,23 @@ def test_repository_rejects_non_increasing_archive_ids() -> None:
         match="strictly ordered",
     ):
         _ = HistoricalArchiveManifestRepository(source).fetch()
+
+
+def test_repository_applies_scope_filters_to_every_keyset_page() -> None:
+    source = FakeSource([_manifest(1), _manifest(2), _manifest(3)])
+    filters = {
+        "source_dataset": "eq.daily_bars",
+        "scheduled_market": "eq.TWSE",
+        "asset_type": "eq.COMMON_STOCK",
+    }
+
+    snapshot = HistoricalArchiveManifestRepository(source, page_size=2).fetch(
+        filters=filters
+    )
+
+    assert snapshot.object_count == 3
+    assert all(set(filters.items()).issubset(call[0].items()) for call in source.calls)
+    with pytest.raises(ValueError, match="cannot override"):
+        _ = HistoricalArchiveManifestRepository(source).fetch(
+            filters={"archive_id": "gt.100"}
+        )

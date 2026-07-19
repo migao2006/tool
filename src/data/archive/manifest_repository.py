@@ -106,10 +106,17 @@ class HistoricalArchiveManifestRepository:
         self.page_size = page_size
 
     def fetch(
-        self, *, max_objects: int | None = None
+        self,
+        *,
+        max_objects: int | None = None,
+        filters: Mapping[str, str] | None = None,
     ) -> HistoricalArchiveManifestSnapshot:
         if max_objects is not None and max_objects <= 0:
             raise ValueError("max_objects must be positive when provided")
+
+        fixed_filters = dict(filters or {})
+        if {"archive_id", "order"}.intersection(fixed_filters):
+            raise ValueError("manifest filters cannot override keyset pagination")
 
         rows: list[Mapping[str, object]] = []
         identities: list[str] = []
@@ -128,6 +135,7 @@ class HistoricalArchiveManifestRepository:
                 "historical_archive_objects",
                 select=",".join(_MANIFEST_FIELDS),
                 filters={
+                    **fixed_filters,
                     "archive_id": f"gt.{last_archive_id}",
                     "order": "archive_id.asc",
                 },

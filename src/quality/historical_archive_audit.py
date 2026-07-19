@@ -10,7 +10,7 @@ from typing import Protocol
 
 from src.data.archive.contracts import HistoricalArchiveReadError
 from src.data.ingestion.historical_archive_contracts import (
-    HISTORICAL_ARCHIVE_SCHEMA_VERSION,
+    HISTORICAL_ARCHIVE_SCHEMA_VERSIONS,
 )
 
 
@@ -64,6 +64,7 @@ class _ManifestRecord:
     byte_size: int
     row_count: int
     schema_version: str
+    source_dataset: str
 
 
 def _text(row: Mapping[str, object], field: str) -> str | None:
@@ -87,6 +88,7 @@ def _manifest_record(
     object_key = _text(row, "object_key")
     content_sha256 = _text(row, "parquet_sha256")
     schema_version = _text(row, "schema_version")
+    source_dataset = _text(row, "source_dataset")
     byte_size = _integer(row, "byte_size")
     row_count = _integer(row, "row_count")
     parsed_row_count = _integer(row, "parsed_row_count")
@@ -121,7 +123,7 @@ def _manifest_record(
     ):
         reasons.append("HISTORICAL_ARCHIVE_MANIFEST_COUNTS_MISMATCH")
 
-    if schema_version != HISTORICAL_ARCHIVE_SCHEMA_VERSION:
+    if schema_version != HISTORICAL_ARCHIVE_SCHEMA_VERSIONS.get(source_dataset or ""):
         reasons.append("HISTORICAL_ARCHIVE_MANIFEST_SCHEMA_UNSUPPORTED")
 
     if not (
@@ -136,7 +138,8 @@ def _manifest_record(
         and quarantined_row_count is not None
         and quarantined_row_count >= 0
         and parsed_row_count + quarantined_row_count == row_count
-        and schema_version == HISTORICAL_ARCHIVE_SCHEMA_VERSION
+        and source_dataset is not None
+        and schema_version == HISTORICAL_ARCHIVE_SCHEMA_VERSIONS.get(source_dataset)
     ):
         return None
 
@@ -145,6 +148,7 @@ def _manifest_record(
     assert object_key is not None
     assert content_sha256 is not None
     assert schema_version is not None
+    assert source_dataset is not None
     assert byte_size is not None
     assert row_count is not None
 
@@ -164,6 +168,7 @@ def _manifest_record(
         byte_size=byte_size,
         row_count=row_count,
         schema_version=schema_version,
+        source_dataset=source_dataset,
     )
 
 

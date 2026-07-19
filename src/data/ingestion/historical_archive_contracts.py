@@ -14,8 +14,16 @@ HISTORICAL_ARCHIVE_SCHEMA_VERSION = "historical_daily_bars.v1"
 HISTORICAL_ARCHIVE_COMPRESSION = "ZSTD"
 HISTORICAL_ARCHIVE_CONTENT_TYPE = "application/vnd.apache.parquet"
 
+HISTORICAL_ARCHIVE_SCHEMA_VERSIONS = {
+    "daily_bars": HISTORICAL_ARCHIVE_SCHEMA_VERSION,
+    "adjusted_bars": "historical_adjusted_bars.v1",
+    "institutional_flows": "historical_institutional_flows.v1",
+    "margin_short": "historical_margin_short.v1",
+    "benchmark_total_return": "historical_benchmark_total_return.v1",
+}
+
 _SCHEDULED_MARKETS = frozenset({"TWSE", "TPEX"})
-_ASSET_TYPES = frozenset({"COMMON_STOCK", "ETF"})
+_ASSET_TYPES = frozenset({"COMMON_STOCK", "ETF", "BENCHMARK"})
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -35,6 +43,7 @@ class HistoricalArchiveRequest:
     requested_end_date: date
     source_payload_sha256: str
     retrieved_at: datetime
+    source_dataset: str = "daily_bars"
 
     def __post_init__(self) -> None:
         scheduled_market = self.scheduled_market.strip().upper()
@@ -43,11 +52,17 @@ class HistoricalArchiveRequest:
             self.source_symbol,
             field="source_symbol",
         )
+        source_dataset = require_path_segment(
+            self.source_dataset,
+            field="source_dataset",
+        )
         digest = self.source_payload_sha256.strip().lower()
         if scheduled_market not in _SCHEDULED_MARKETS:
             raise ValueError("scheduled_market must be TWSE or TPEX")
         if asset_type not in _ASSET_TYPES:
-            raise ValueError("asset_type must be COMMON_STOCK or ETF")
+            raise ValueError("asset_type must be COMMON_STOCK, ETF, or BENCHMARK")
+        if source_dataset not in HISTORICAL_ARCHIVE_SCHEMA_VERSIONS:
+            raise ValueError("source_dataset is not supported by the archive contract")
         if (
             type(self.requested_start_date) is not date
             or type(self.requested_end_date) is not date
@@ -65,6 +80,7 @@ class HistoricalArchiveRequest:
         object.__setattr__(self, "scheduled_market", scheduled_market)
         object.__setattr__(self, "asset_type", asset_type)
         object.__setattr__(self, "source_symbol", source_symbol)
+        object.__setattr__(self, "source_dataset", source_dataset)
         object.__setattr__(self, "source_payload_sha256", digest)
         object.__setattr__(
             self,
@@ -99,7 +115,10 @@ class HistoricalArchiveArtifact:
         actual_digest = sha256(self.payload).hexdigest()
         if self.content_sha256 != actual_digest:
             raise ValueError("content_sha256 does not match payload")
-        if self.schema_version != HISTORICAL_ARCHIVE_SCHEMA_VERSION:
+        expected_schema = HISTORICAL_ARCHIVE_SCHEMA_VERSIONS[
+            self.request.source_dataset
+        ]
+        if self.schema_version != expected_schema:
             raise ValueError("unsupported historical archive schema version")
         if self.compression != HISTORICAL_ARCHIVE_COMPRESSION:
             raise ValueError("historical archives must use ZSTD compression")
@@ -109,7 +128,7 @@ class HistoricalArchiveArtifact:
     def object_metadata(self) -> dict[str, str]:
         """Return non-secret ASCII metadata suitable for an R2 object."""
 
-        return {
+        metadata = {
             "content-sha256": self.content_sha256,
             "byte-size": str(self.byte_size),
             "row-count": str(self.row_count),
@@ -120,3 +139,9 @@ class HistoricalArchiveArtifact:
             "source-payload-sha256": self.request.source_payload_sha256,
             "retrieved-at": self.request.retrieved_at.isoformat(),
         }
+        # Preserve the immutable daily-bar object contract already stored in R2.
+        # Supplemental schemas need the extra discriminator because they share
+        # the generic archive writer.
+        if self.request.source_dataset != "daily_bars":
+            metadata["source-dataset"] = self.request.source_dataset
+        return metadata

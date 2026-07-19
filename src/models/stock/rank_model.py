@@ -1,13 +1,16 @@
 """Cross-sectional rank model; the sole source of stock ordering."""
 
+# pyright: reportAny=false, reportExplicitAny=false, reportMissingTypeStubs=false
+
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from hashlib import sha256
 from importlib import import_module
 from math import floor
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any
 
 from ..model_contracts import validate_horizon
 
@@ -21,9 +24,11 @@ class RankingConfig:
     random_seed: int = 20260718
 
     def __post_init__(self) -> None:
-        validate_horizon(self.horizon)
+        _ = validate_horizon(self.horizon)
         if self.relevance_levels != 10:
-            raise ValueError("the MVP relevance contract is fixed to integer grades 0..9")
+            raise ValueError(
+                "the MVP relevance contract is fixed to integer grades 0..9"
+            )
         if not self.eval_at or min(self.eval_at) <= 0:
             raise ValueError("eval_at must contain positive Top-K values")
 
@@ -92,31 +97,44 @@ def _take_rows(values: Any, indices: Sequence[int]) -> Any:
 class LGBMStockRanker:
     """Lazy LightGBM LambdaMART adapter with date-level query grouping."""
 
-    def __init__(self, config: RankingConfig | None = None, **model_params: Any) -> None:
-        self.config = config or RankingConfig()
-        self.model_params = model_params
+    def __init__(
+        self, config: RankingConfig | None = None, **model_params: Any
+    ) -> None:
+        self.config: RankingConfig = config or RankingConfig()
+        self.model_params: dict[str, Any] = model_params
         self.model: Any | None = None
 
-    def fit(self, features: Any, relevance: Sequence[int], decision_dates: Sequence[Any]) -> "LGBMStockRanker":
+    def fit(
+        self, features: Any, relevance: Sequence[int], decision_dates: Sequence[Any]
+    ) -> "LGBMStockRanker":
         if len(relevance) != len(decision_dates):
             raise ValueError("relevance and decision_dates must have equal length")
         if any(label < 0 or label > 9 or int(label) != label for label in relevance):
-            raise ValueError("LambdaRank relevance labels must be integers from 0 through 9")
+            raise ValueError(
+                "LambdaRank relevance labels must be integers from 0 through 9"
+            )
         try:
             lightgbm = import_module("lightgbm")
         except ModuleNotFoundError as error:
-            raise RuntimeError("LightGBM is required to train LGBMStockRanker") from error
+            raise RuntimeError(
+                "LightGBM is required to train LGBMStockRanker"
+            ) from error
         order, groups = ordered_groups(decision_dates)
         parameters = {
             "objective": "lambdarank",
             "metric": "ndcg",
-            "eval_at": self.config.eval_at,
             "lambdarank_truncation_level": self.config.lambdarank_truncation_level,
             "random_state": self.config.random_seed,
         }
         parameters.update(self.model_params)
-        self.model = lightgbm.LGBMRanker(**parameters)
-        self.model.fit(_take_rows(features, order), _take_rows(relevance, order), group=groups)
+        model = lightgbm.LGBMRanker(**parameters)
+        model.fit(
+            _take_rows(features, order),
+            _take_rows(relevance, order),
+            group=groups,
+            eval_at=self.config.eval_at,
+        )
+        self.model = model
         return self
 
     def predict(self, features: Any) -> list[float]:
@@ -136,7 +154,9 @@ def rank_cross_section(
         by_date[row["decision_date"]].append(row)
     output: list[dict[str, Any]] = []
     for date_rows in by_date.values():
-        ordered = sorted(date_rows, key=lambda row: (-float(row[score_key]), str(row["symbol"])))
+        ordered = sorted(
+            date_rows, key=lambda row: (-float(row[score_key]), str(row["symbol"]))
+        )
         total = len(ordered)
         for rank, row in enumerate(ordered, start=1):
             percentile = 1.0 if total == 1 else (total - rank) / (total - 1)
@@ -147,7 +167,9 @@ def rank_cross_section(
         for row in ordered:
             by_industry[str(row.get("industry", "UNKNOWN"))].append(row)
         for industry_rows in by_industry.values():
-            industry_rows.sort(key=lambda row: (-float(row[score_key]), str(row["symbol"])))
+            industry_rows.sort(
+                key=lambda row: (-float(row[score_key]), str(row["symbol"]))
+            )
             size = len(industry_rows)
             for rank, row in enumerate(industry_rows, start=1):
                 row["industry_rank"] = rank
@@ -162,12 +184,15 @@ def random_baseline_scores(keys: Iterable[str], seed: int = 20260718) -> list[fl
     """Reproducible random-ranking baseline independent of Python hash state."""
 
     return [
-        int.from_bytes(sha256(f"{seed}:{key}".encode("utf-8")).digest()[:8], "big") / 2**64
+        int.from_bytes(sha256(f"{seed}:{key}".encode("utf-8")).digest()[:8], "big")
+        / 2**64
         for key in keys
     ]
 
 
-def momentum_baseline_scores(rows: Iterable[Mapping[str, float]], window: int) -> list[float]:
+def momentum_baseline_scores(
+    rows: Iterable[Mapping[str, float]], window: int
+) -> list[float]:
     if window not in (5, 20):
         raise ValueError("the defined momentum baselines are 5 and 20 trading days")
     field = f"total_return_{window}d"
@@ -180,21 +205,26 @@ class RegressThenRankBaseline:
     def __init__(self, backend: str = "linear", random_seed: int = 20260718) -> None:
         if backend not in {"linear", "lightgbm"}:
             raise ValueError("backend must be 'linear' or 'lightgbm'")
-        self.backend = backend
-        self.random_seed = random_seed
+        self.backend: str = backend
+        self.random_seed: int = random_seed
         self.model: Any | None = None
 
-    def fit(self, features: Any, net_alpha: Sequence[float]) -> "RegressThenRankBaseline":
+    def fit(
+        self, features: Any, net_alpha: Sequence[float]
+    ) -> "RegressThenRankBaseline":
         try:
             if self.backend == "linear":
                 model_class = import_module("sklearn.linear_model").LinearRegression
-                self.model = model_class()
+                model = model_class()
             else:
                 model_class = import_module("lightgbm").LGBMRegressor
-                self.model = model_class(random_state=self.random_seed)
+                model = model_class(random_state=self.random_seed)
         except ModuleNotFoundError as error:
-            raise RuntimeError(f"{self.backend} training dependency is not installed") from error
-        self.model.fit(features, net_alpha)
+            raise RuntimeError(
+                f"{self.backend} training dependency is not installed"
+            ) from error
+        model.fit(features, net_alpha)
+        self.model = model
         return self
 
     def predict(self, features: Any) -> list[float]:

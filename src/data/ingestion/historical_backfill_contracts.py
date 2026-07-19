@@ -32,6 +32,7 @@ def _required_int(row: Mapping[str, object], name: str) -> int:
 @dataclass(frozen=True)
 class HistoricalBackfillTask:
     task_id: int
+    source_dataset: str
     symbol: str
     display_name: str | None
     market: str
@@ -49,6 +50,7 @@ class HistoricalBackfillTask:
         if market not in {"TWSE", "TPEX"} or asset_type not in {
             "COMMON_STOCK",
             "ETF",
+            "BENCHMARK",
         }:
             raise IngestionError(
                 "HISTORICAL_BACKFILL_TASK_INVALID",
@@ -65,6 +67,7 @@ class HistoricalBackfillTask:
         display_name = row.get("display_name")
         return cls(
             task_id=_required_int(row, "task_id"),
+            source_dataset=_required_text(row, "source_dataset"),
             symbol=_required_text(row, "source_symbol"),
             display_name=display_name if isinstance(display_name, str) else None,
             market=market,

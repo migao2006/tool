@@ -68,6 +68,7 @@ def task(
         priority = 30
     return HistoricalBackfillTask(
         task_id=task_id,
+        source_dataset="daily_bars",
         symbol=symbol,
         display_name=None,
         market=market,

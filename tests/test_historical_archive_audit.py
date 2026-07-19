@@ -54,6 +54,7 @@ def _manifest(
         "parsed_row_count": parsed_row_count,
         "quarantined_row_count": quarantined_row_count,
         "schema_version": "historical_daily_bars.v1",
+        "source_dataset": "daily_bars",
     }
 
 

@@ -1,0 +1,61 @@
+name: Backfill TWSE historical benchmark
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Sunday 04:20 Asia/Taipei. The repository variable keeps this off by default.
+    - cron: "20 20 * * 6"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: historical-benchmark-backfill
+  cancel-in-progress: false
+
+jobs:
+  archive:
+    if: ${{ vars.HISTORICAL_BENCHMARK_BACKFILL_ENABLED == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install uv with dependency caching
+        uses: astral-sh/setup-uv@v8.3.2
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Synchronize locked environment
+        run: uv sync --frozen
+
+      - name: Fetch once and archive immutable benchmark Parquet
+        env:
+          FINMIND_TOKEN: ${{ secrets.FINMIND_TOKEN }}
+          R2_ACCOUNT_ID: ${{ vars.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET_NAME: ${{ vars.R2_BUCKET_NAME }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          HISTORICAL_BACKFILL_STORAGE_TARGET: R2
+          HISTORICAL_BACKFILL_MAX_ARCHIVE_OBJECT_BYTES: "50000000"
+        run: >-
+          uv run python -m scripts.backfill_historical_benchmark
+          --start-date 2021-07-19
+          --end-date 2026-07-17
+          --output historical-benchmark-summary.json
+
+      - name: Preserve benchmark audit summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: historical-benchmark-${{ github.run_id }}
+          path: historical-benchmark-summary.json
+          if-no-files-found: warn
+          retention-days: 90

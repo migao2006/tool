@@ -205,6 +205,10 @@ test("歷史 OOS 研究快照的 NO_TRADE 排序與已完成輸出仍可檢視",
   await expect(page.locator('[data-stock-field="net_q10"]')).toHaveText("-2.4%");
   await expect(page.locator('[data-stock-field="net_q50"]')).toHaveText("1.3%");
   await expect(page.locator('[data-stock-field="net_q90"]')).toHaveText("4.6%");
+  await expect(page.locator(".decision-gates code")).toHaveText(
+    Array(8).fill("RESEARCH_ONLY_NO_FORMAL_DECISION_POLICY"),
+  );
+  await expect(page.locator("[data-stock-gate-state]")).toHaveText("正式決策政策尚未執行");
   await expect(page.locator('[data-stock-field="reason_codes"]')).toHaveText(
     "RESEARCH_ONLY_NO_FORMAL_DECISION_POLICY · UNADJUSTED_PRICE_RESEARCH_ONLY · 另 3 項稽核資訊",
   );

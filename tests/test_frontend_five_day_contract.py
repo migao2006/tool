@@ -159,6 +159,16 @@ def test_decision_gate_renderer_matches_backend_contract_and_formats_objects() -
     ):
         assert key in gates
     assert "JSON.stringify(value)" in gates
+    assert "GATE_NOT_EVALUATED" in gates
+    for false_reason in (
+        "DIRECTION_MODEL_NOT_AVAILABLE",
+        "QUANTILE_MODEL_NOT_AVAILABLE",
+        "RANK_MODEL_NOT_AVAILABLE",
+    ):
+        assert false_reason not in gates
+
+    stock = read("src/pages/stock-detail-page.js")
+    assert "RESEARCH_ONLY_NO_FORMAL_DECISION_POLICY" in stock
 
 
 def test_stock_route_and_saved_research_settings_are_guarded() -> None:

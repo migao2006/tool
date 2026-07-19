@@ -37,6 +37,26 @@
     "cost_profile_version": "tw_stock_swing_v1:base_cost",
     "production_eligible": false
   },
+  "latest_feature_dataset": {
+    "workflow_run_id": 29693937930,
+    "workflow_url": "https://github.com/migao2006/tool/actions/runs/29693937930",
+    "git_commit": "be9ca59c4bbae18de88cd95b080ceecb4c60fda3",
+    "dataset_version": "twse-archive-price-volume-5d-v2",
+    "record_count": 1908104,
+    "symbol_count": 1080,
+    "source_archive_count": 2009,
+    "latest_decision_date": "2026-07-17",
+    "decision_close_price_included": true,
+    "parquet_sha256": "24c90589d51de6b0c06f084ca977c4bfb99993f91164d65b3bad33bce3c73aac",
+    "dataset_snapshot_id": "c349a800d40dd73319c27fa39ca42107252230f1c14606919d7b6d90f52a919f",
+    "parquet_schema_sha256": "a53d4976fb779f89054786e2f960d355f4f4426a90eb4a46eadce251c1c22dad",
+    "model_feature_schema_hash": "8e256243dbe0018a7a96a637b989e2338dcf06a8f2e9a9d42faf888c7f54cd53",
+    "source_archive_snapshot_sha256": "5438e7435de331b27ad2723eeee2544641e0e2520a56ebd949bbaac08b259407",
+    "github_artifact_id": 8444804465,
+    "github_artifact_digest": "70143a1cb7f8ecb4905c67787830c991fded7ab89f913d5b1ce46dca3c92b19b",
+    "read_back_verified": true,
+    "production_eligible": false
+  },
   "validation": {
     "method": "purged_walk_forward",
     "fold_count": 5,
@@ -87,7 +107,7 @@
       "final_crossing_rate": 0.0
     }
   },
-  "published_research_snapshot": {
+  "historical_oos_snapshot": {
     "prediction_run_id": 1,
     "as_of_date": "2025-05-02",
     "decision_at": "2025-05-02T17:00:00+08:00",
@@ -100,10 +120,36 @@
     "github_artifact_id": 8443586850,
     "github_artifact_digest": "57eb16f26d50e2408020c51a4e1bef2f179e998819baf2f550bfc088c92e6b69"
   },
+  "published_research_snapshot": {
+    "workflow_run_id": 29695406502,
+    "workflow_url": "https://github.com/migao2006/tool/actions/runs/29695406502",
+    "git_commit": "be9ca59c4bbae18de88cd95b080ceecb4c60fda3",
+    "prepared_workflow_run_id": 29687877010,
+    "feature_workflow_run_id": 29693937930,
+    "prediction_run_id": 2,
+    "as_of_date": "2026-07-17",
+    "decision_at": "2026-07-17T17:00:00+08:00",
+    "evaluation_scope": "RETROSPECTIVE_RESEARCH_INFERENCE",
+    "status": "RESEARCH_ONLY",
+    "prediction_count": 1068,
+    "candidate_count": 0,
+    "watch_count": 0,
+    "no_trade_count": 1068,
+    "hard_fail_count": 0,
+    "data_quality_warn_count": 1068,
+    "industry_non_null_count": 0,
+    "formal_decision_policy_executed": false,
+    "feature_artifact_sha256": "24c90589d51de6b0c06f084ca977c4bfb99993f91164d65b3bad33bce3c73aac",
+    "model_bundle_sha256": "b588f93a9d43639b7329155aafff3f3d31c00dd6e78875618e426f8dd8f50156",
+    "snapshot_sha256": "0b1f116e64ccdfb3880acd352b95913e03fb8419c24196f6f4d6b2e1458b088a",
+    "snapshot_artifact_sha256": "ff9707336a27315bcf5d087b24b7c30aaa2d94b2807b59a80cd570fdd9532914",
+    "github_artifact_id": 8444923880,
+    "github_artifact_digest": "044985dba1fdc7c94c60e9a4c52cf8225a0f2edc4e9ca7d8e201c7f823b00f9f"
+  },
   "entry_rule": "t_plus_1_open_research_path",
   "exit_rule": "entry_plus_5_trading_days_close",
   "labels": {
-    "rank": "research_net_open_close_return_minus_close_based_taiex_benchmark",
+    "rank": "research_net_open_close_return_minus_same_path_taiex_price_index_return",
     "direction": "UP_NEUTRAL_DOWN_using_dynamic_no_trade_band",
     "quantiles": [
       0.1,
@@ -130,9 +176,11 @@
   "limitations": [
     "Historical security identity remains current-universe mapped and is not fully point-in-time verified",
     "Corporate actions, tradability states, and execution feasibility are not fully point-in-time verified",
-    "The stock and TAIEX benchmark entry paths are not fully aligned",
+    "The stock and TAIEX price-index research paths are aligned, but the benchmark is not a total-return index",
     "The research label uses unadjusted open-close returns rather than formal executable total return",
     "The rank model did not beat the 20-day momentum baseline and mean Rank IC is negative",
-    "Locked holdout and complete execution backtest have not been executed"
+    "Locked holdout and complete execution backtest have not been executed",
+    "The latest snapshot is retrospective research inference rather than a new out-of-sample evaluation",
+    "Industry history and formal decision-policy gates are absent from the latest 1,068-row snapshot"
   ]
 }

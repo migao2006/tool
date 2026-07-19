@@ -20,7 +20,7 @@ import { setWatchlistMembership } from "./src/data/watchlist-api.js?v=api-5";
 import { isSupabaseSdkLoadError } from "./src/data/supabase-sdk-loader.js?v=auth-1";
 import { createCandidatesPage, renderCandidatesPage } from "./src/pages/candidates-page.js?v=research-ui-1";
 import { createOverviewPage, renderOverviewPage } from "./src/pages/overview-page.js?v=research-ui-1";
-import { createStockDetailPage, renderStockDetailPage } from "./src/pages/stock-detail-page.js?v=research-ui-1";
+import { createStockDetailPage, renderStockDetailPage } from "./src/pages/stock-detail-page.js?v=research-ui-2";
 import { createWatchlistPage, renderWatchlistPage } from "./src/pages/watchlist-page.js?v=research-ui-1";
 
 const appRoot = document.querySelector("#app-content");

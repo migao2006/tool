@@ -54,10 +54,14 @@ def _frame() -> pd.DataFrame:
 
 def test_prepared_research_dataset_accepts_audited_twse_rows() -> None:
     dataset = PreparedResearchDataset.from_frame(_frame())
+    observation = dataset.observations()[0]
 
     assert dataset.feature_names == TWSE_PRICE_RESEARCH_FEATURES
     assert dataset.latest_training_date == date(2026, 7, 17)
-    assert dataset.observations()[0].sample_id == "2330:2026-07-17"
+    assert observation.sample_id == "2330:2026-07-17"
+    assert observation.decision_date == date(2026, 7, 17)
+    assert observation.entry_at == datetime(2026, 7, 18, 6, 30, tzinfo=UTC)
+    assert observation.exit_at == datetime(2026, 7, 24, 6, 30, tzinfo=UTC)
 
 
 def test_prepared_research_dataset_rejects_future_features() -> None:

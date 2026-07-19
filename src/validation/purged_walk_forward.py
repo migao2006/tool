@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from bisect import bisect_right
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Hashable, Iterable, Iterator, Sequence
@@ -37,15 +38,72 @@ def label_windows_overlap(left: LabeledObservation, right: LabeledObservation) -
     return left.entry_at <= right.exit_at and right.entry_at <= left.exit_at
 
 
+@dataclass(frozen=True)
+class _IntervalOverlapIndex:
+    """Query inclusive interval overlap without comparing every row pair.
+
+    Protected intervals are ordered by their entry timestamp.  For every prefix
+    we retain the greatest exit timestamp and the record that supplied it.  A
+    candidate overlaps the protected set exactly when the prefix ending at the
+    last protected entry not later than the candidate exit has a maximum exit
+    not earlier than the candidate entry.
+    """
+
+    entries: tuple[Timestamp, ...]
+    prefix_max_exits: tuple[Timestamp, ...]
+    prefix_max_indices: tuple[int, ...]
+
+    @classmethod
+    def build(
+        cls,
+        records: Sequence[LabeledObservation],
+        indices: Iterable[int],
+    ) -> "_IntervalOverlapIndex":
+        ordered = sorted(
+            (
+                (records[index].entry_at, records[index].exit_at, index)
+                for index in indices
+            ),
+            key=lambda value: value[0],
+        )
+        entries: list[Timestamp] = []
+        prefix_max_exits: list[Timestamp] = []
+        prefix_max_indices: list[int] = []
+        greatest_exit: Timestamp | None = None
+        greatest_index = -1
+        for entry_at, exit_at, index in ordered:
+            entries.append(entry_at)
+            if greatest_exit is None or exit_at > greatest_exit:
+                greatest_exit = exit_at
+                greatest_index = index
+            prefix_max_exits.append(greatest_exit)
+            prefix_max_indices.append(greatest_index)
+        return cls(
+            entries=tuple(entries),
+            prefix_max_exits=tuple(prefix_max_exits),
+            prefix_max_indices=tuple(prefix_max_indices),
+        )
+
+    def overlapping_index(self, candidate: LabeledObservation) -> int | None:
+        prefix_position = bisect_right(self.entries, candidate.exit_at) - 1
+        if prefix_position < 0:
+            return None
+        if self.prefix_max_exits[prefix_position] < candidate.entry_at:
+            return None
+        return self.prefix_max_indices[prefix_position]
+
+
 def purge_overlaps(
-    candidate_indices: Iterable[int], protected_indices: Iterable[int], records: Sequence[LabeledObservation]
+    candidate_indices: Iterable[int],
+    protected_indices: Iterable[int],
+    records: Sequence[LabeledObservation],
 ) -> tuple[int, ...]:
     candidates = tuple(candidate_indices)
-    protected = tuple(protected_indices)
+    protected_index = _IntervalOverlapIndex.build(records, protected_indices)
     blocked_dates = {
         records[index].decision_date
         for index in candidates
-        if any(label_windows_overlap(records[index], records[other]) for other in protected)
+        if protected_index.overlapping_index(records[index]) is not None
     }
     return tuple(
         index
@@ -59,13 +117,15 @@ def assert_zero_label_overlap(
 ) -> None:
     for left_position, left in enumerate(partitions):
         for right in partitions[left_position + 1 :]:
+            right_index = _IntervalOverlapIndex.build(records, right)
             for left_index in left:
-                for right_index in right:
-                    if label_windows_overlap(records[left_index], records[right_index]):
-                        raise ValueError(
-                            f"label windows overlap across partitions: "
-                            f"{records[left_index].sample_id!r}, {records[right_index].sample_id!r}"
-                        )
+                overlapping_index = right_index.overlapping_index(records[left_index])
+                if overlapping_index is not None:
+                    raise ValueError(
+                        f"label windows overlap across partitions: "
+                        f"{records[left_index].sample_id!r}, "
+                        f"{records[overlapping_index].sample_id!r}"
+                    )
 
 
 def assert_decision_dates_are_atomic(

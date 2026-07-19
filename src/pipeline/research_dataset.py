@@ -288,17 +288,17 @@ class PreparedResearchDataset:
         return cls(frame=prepared, feature_names=normalized_features)
 
     def observations(self) -> tuple[LabeledObservation, ...]:
-        rows: list[LabeledObservation] = []
-        for _, row in self.frame.iterrows():
-            rows.append(
-                LabeledObservation(
-                    sample_id=f"{row['symbol']}:{row['decision_date'].isoformat()}",
-                    decision_date=row["decision_date"],
-                    entry_at=row["entry_at"].to_pydatetime(),
-                    exit_at=row["exit_at"].to_pydatetime(),
-                )
+        return tuple(
+            LabeledObservation(
+                sample_id=f"{row.symbol}:{row.decision_date.isoformat()}",
+                decision_date=row.decision_date,
+                entry_at=row.entry_at.to_pydatetime(),
+                exit_at=row.exit_at.to_pydatetime(),
             )
-        return tuple(rows)
+            for row in self.frame[
+                ["symbol", "decision_date", "entry_at", "exit_at"]
+            ].itertuples(index=False)
+        )
 
     @property
     def decision_dates(self) -> tuple[date, ...]:

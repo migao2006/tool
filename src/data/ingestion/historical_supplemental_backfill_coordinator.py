@@ -106,14 +106,19 @@ class HistoricalSupplementalBackfillCoordinator:
         except ProviderHttpError as error:
             if not is_quota_error(error):
                 raise
+            outcome = "QUOTA_WAIT"
+            reason_codes = ["FINMIND_QUOTA_WAIT"]
+            if before.exhausted > 0:
+                outcome = "EXHAUSTED_TASKS"
+                reason_codes.append("HISTORICAL_SUPPLEMENTAL_TASKS_EXHAUSTED")
             return self._summary(
-                outcome="QUOTA_WAIT",
+                outcome=outcome,
                 start_date=start_date,
                 end_date=end_date,
                 snapshot=before,
                 quota_remaining=0,
                 request_budget=0,
-                reason_codes=("FINMIND_QUOTA_WAIT",),
+                reason_codes=tuple(reason_codes),
             )
         quota_used, quota_limit = finmind_quota_counters(quota_payload)
         quota_remaining = max(quota_limit - quota_used, 0)
@@ -193,7 +198,11 @@ class HistoricalSupplementalBackfillCoordinator:
                     reason_codes.add("FINMIND_QUOTA_WAIT")
                     break
         after = self.repository.snapshot(start_date=start_date, end_date=end_date)
-        outcome = "COMPLETED" if after.remaining == 0 else "PARTIAL"
+        if after.exhausted > 0:
+            outcome = "EXHAUSTED_TASKS"
+            reason_codes.add("HISTORICAL_SUPPLEMENTAL_TASKS_EXHAUSTED")
+        else:
+            outcome = "COMPLETED" if after.remaining == 0 else "PARTIAL"
         return HistoricalSupplementalBackfillSummary(
             outcome=outcome,
             start_date=start_date.isoformat(),

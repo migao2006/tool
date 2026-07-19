@@ -14,6 +14,8 @@ from .historical_backfill_contracts import HistoricalBackfillTask
 from .historical_benchmark_contracts import (
     BENCHMARK_DATASET,
     BENCHMARK_DATA_ID,
+    BENCHMARK_REASON_CODES,
+    HistoricalBenchmarkBackfillState,
     HistoricalBenchmarkBackfillSummary,
     HistoricalBenchmarkLandingResult,
 )
@@ -33,6 +35,10 @@ class HistoricalBenchmarkRepository(Protocol):
     def claim(
         self, *, worker_id: str, claim_token: UUID, lease_seconds: int
     ) -> HistoricalBackfillTask | None: ...
+
+    def backfill_state(
+        self, *, start_date: date, end_date: date
+    ) -> HistoricalBenchmarkBackfillState: ...
 
     def complete(
         self,
@@ -99,17 +105,54 @@ class HistoricalBenchmarkBackfillCoordinator:
             lease_seconds=1800,
         )
         if task is None:
+            state = self.repository.backfill_state(
+                start_date=start_date,
+                end_date=end_date,
+            )
+            task_status = state.task_status
+            if task_status == "EXHAUSTED":
+                raise IngestionError(
+                    "HISTORICAL_BENCHMARK_TASK_EXHAUSTED",
+                    "benchmark task exhausted its retry budget",
+                )
+            if task_status is None:
+                raise IngestionError(
+                    "HISTORICAL_BENCHMARK_TASK_MISSING",
+                    "benchmark task is missing after queue seeding",
+                )
+            if task_status == "SUCCEEDED" and not state.archive_exists:
+                raise IngestionError(
+                    "HISTORICAL_BENCHMARK_ARCHIVE_MISSING",
+                    "succeeded benchmark task has no exact archive manifest",
+                )
+            if state.archive_exists and task_status != "SUCCEEDED":
+                raise IngestionError(
+                    "HISTORICAL_BENCHMARK_STATE_INCONSISTENT",
+                    "benchmark archive and queue state are inconsistent",
+                )
+            outcome = {
+                "SUCCEEDED": "ALREADY_ARCHIVED",
+                "LEASED": "TASK_LEASED",
+                "PENDING": "TASK_DEFERRED",
+                "RETRY": "TASK_DEFERRED",
+            }[task_status]
             return HistoricalBenchmarkBackfillSummary(
-                outcome="NO_PENDING_TASK",
+                outcome=outcome,
                 start_date=start_date.isoformat(),
                 end_date=end_date.isoformat(),
-                task_id=None,
+                task_id=state.task_id,
                 request_count=0,
                 fetched_rows=0,
                 archived_rows=0,
                 quarantined_rows=0,
                 object_key=None,
                 source_payload_hash=None,
+                reason_codes=(
+                    *BENCHMARK_REASON_CODES,
+                    f"BENCHMARK_TASK_{task_status}",
+                ),
+                queue_status=task_status,
+                last_error_code=state.last_error_code,
             )
         if (
             task.source_dataset != BENCHMARK_DATASET

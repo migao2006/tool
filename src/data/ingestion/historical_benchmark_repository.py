@@ -9,6 +9,7 @@ from uuid import UUID
 
 from .contracts import IngestionError
 from .historical_backfill_contracts import HistoricalBackfillTask
+from .historical_benchmark_contracts import HistoricalBenchmarkBackfillState
 from .source_catalog import finmind_data_source_row
 
 
@@ -25,6 +26,15 @@ class HistoricalBenchmarkQueueWriter(Protocol):
     ) -> list[dict[str, object]]: ...
 
     def rpc(self, function_name: str, parameters: Mapping[str, object]) -> object: ...
+
+    def select_rows(
+        self,
+        table: str,
+        *,
+        select: str,
+        filters: Mapping[str, str] | None = None,
+        limit: int = 1_000,
+    ) -> list[dict[str, object]]: ...
 
 
 @final
@@ -91,6 +101,44 @@ class HistoricalBenchmarkBackfillRepository:
             HistoricalBackfillTask.from_row(cast(Mapping[str, object], rows[0]))
             if rows
             else None
+        )
+
+    def backfill_state(
+        self, *, start_date: date, end_date: date
+    ) -> HistoricalBenchmarkBackfillState:
+        """Read exact task and archive rows after a claim returns no row."""
+
+        task_rows = self.writer.select_rows(
+            "historical_backfill_tasks",
+            select="task_id,status,last_error_code",
+            filters={
+                "provider_code": "eq.FINMIND",
+                "source_dataset": "eq.benchmark_total_return",
+                "source_symbol": "eq.TAIEX",
+                "market": "eq.TWSE",
+                "asset_type": "eq.BENCHMARK",
+                "requested_start_date": f"eq.{start_date.isoformat()}",
+                "requested_end_date": f"eq.{end_date.isoformat()}",
+            },
+            limit=2,
+        )
+        archive_rows = self.writer.select_rows(
+            "historical_archive_objects",
+            select="archive_id",
+            filters={
+                "provider_code": "eq.FINMIND",
+                "source_dataset": "eq.benchmark_total_return",
+                "source_symbol": "eq.TAIEX",
+                "scheduled_market": "eq.TWSE",
+                "asset_type": "eq.BENCHMARK",
+                "requested_start_date": f"eq.{start_date.isoformat()}",
+                "requested_end_date": f"eq.{end_date.isoformat()}",
+            },
+            limit=2,
+        )
+        return HistoricalBenchmarkBackfillState.from_rows(
+            task_rows=task_rows,
+            archive_rows=archive_rows,
         )
 
     def complete(

@@ -13,6 +13,7 @@ from src.data.ingestion.historical_backfill_contracts import HistoricalBackfillT
 from src.data.ingestion.historical_benchmark_contracts import (
     BENCHMARK_DATASET,
     BENCHMARK_DATA_ID,
+    HistoricalBenchmarkBackfillState,
     HistoricalBenchmarkLandingResult,
 )
 from src.data.ingestion.historical_benchmark_coordinator import (
@@ -232,11 +233,22 @@ def test_landing_uses_exactly_one_fixed_finmind_request() -> None:
 
 
 class FakeRepository:
-    def __init__(self, task: HistoricalBackfillTask | None) -> None:
-        self.task = task
+    def __init__(
+        self,
+        task: HistoricalBackfillTask | None,
+        *,
+        state: HistoricalBenchmarkBackfillState | None = None,
+    ) -> None:
+        self.task: HistoricalBackfillTask | None = task
+        self.state = state or HistoricalBenchmarkBackfillState(
+            archive_exists=True,
+            task_id=17,
+            task_status="SUCCEEDED",
+            last_error_code=None,
+        )
         self.completed: list[dict[str, object]] = []
-        self.ensure_calls = 0
-        self.seed_calls = 0
+        self.ensure_calls: int = 0
+        self.seed_calls: int = 0
 
     def ensure_finmind_source(self) -> None:
         self.ensure_calls += 1
@@ -261,6 +273,12 @@ class FakeRepository:
 
     def complete(self, **values: object) -> None:
         self.completed.append(values)
+
+    def backfill_state(
+        self, *, start_date: date, end_date: date
+    ) -> HistoricalBenchmarkBackfillState:
+        _ = (start_date, end_date)
+        return self.state
 
 
 class FakeLanding:
@@ -332,5 +350,6 @@ def test_coordinator_makes_no_provider_request_when_archive_is_complete() -> Non
     ).run(start_date=START, end_date=END, worker_id="benchmark-test")
 
     assert landing.calls == 0
-    assert summary.outcome == "NO_PENDING_TASK"
+    assert summary.outcome == "ALREADY_ARCHIVED"
     assert summary.request_count == 0
+    assert "BENCHMARK_TASK_SUCCEEDED" in summary.reason_codes

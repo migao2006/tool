@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import sys
 from typing import cast
+from uuid import uuid4
 
 try:
     from scripts._bootstrap import add_project_root
@@ -33,6 +34,9 @@ from src.data.research.twse_archive_feature_contracts import (  # noqa: E402
 )
 from src.data.research.twse_archive_feature_parquet import (  # noqa: E402
     TwseArchiveFeatureParquetWriter,
+)
+from src.data.research.twse_feature_artifact_reader import (  # noqa: E402
+    TwseFeatureArtifactReader,
 )
 from src.data.research.twse_current_identity_repository import (  # noqa: E402
     TwseCurrentIdentityRepository,
@@ -65,6 +69,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     arguments = _parser().parse_args(argv)
     output_path = cast(Path, arguments.output)
     audit_path = cast(Path, arguments.audit)
+    candidate_path = output_path.with_name(
+        f".{output_path.name}.{uuid4().hex}.candidate"
+    )
     try:
         source = SupabaseWriter(
             url=os.environ.get("SUPABASE_URL"),
@@ -79,7 +86,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             current_identity_snapshot_sha256=identities.snapshot_sha256,
         )
         writer = TwseArchiveFeatureParquetWriter(
-            output_path,
+            candidate_path,
             dataset_snapshot_sha256=dataset_hash,
             source_archive_snapshot_sha256=manifests.snapshot_sha256,
             current_identity_snapshot_sha256=identities.snapshot_sha256,
@@ -91,12 +98,19 @@ def main(argv: Sequence[str] | None = None) -> int:
             identities=identities,
             writer=writer,
         )
+        artifact_reader = TwseFeatureArtifactReader()
+        artifact_manifest = artifact_reader.manifest_from_parquet(candidate_path)
+        _ = artifact_reader.verify(candidate_path, artifact_manifest)
+        _ = candidate_path.replace(output_path)
         payload = audit.as_json()
         payload["output_file"] = output_path.name
+        payload["feature_artifact_manifest"] = artifact_manifest.to_dict()
+        payload["feature_artifact_read_back_verified"] = True
         _write_json(audit_path, payload)
         print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
         return 0
     except Exception as error:  # fail closed at the CLI boundary
+        candidate_path.unlink(missing_ok=True)
         payload: dict[str, object] = {
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "build_status": "FAIL",

@@ -17,6 +17,7 @@ class CalendarImportSummary:
     fetched_dates: int
     normalized_records: int
     database_count: int | None
+    observation_database_count: int | None
     source_uri: str
     source_version: str
     source_hash: str
@@ -36,6 +37,7 @@ class CalendarImportSummary:
             "fetched_dates": self.fetched_dates,
             "normalized_records": self.normalized_records,
             "database_count": self.database_count,
+            "observation_database_count": self.observation_database_count,
             "source_uri": self.source_uri,
             "source_version": self.source_version,
             "source_hash": self.source_hash,

@@ -46,8 +46,13 @@ def test_untrusted_dispatch_strings_are_not_interpolated_into_secret_shell() -> 
 
     assert "START_DATE: ${{ inputs.start_date }}" in workflow
     assert "END_DATE: ${{ inputs.end_date }}" in workflow
+    assert "CREDENTIAL_SLOT: ${{ inputs.credential_slot }}" in workflow
     assert '--start-date "$START_DATE"' in workflow
     assert '--end-date "$END_DATE"' in workflow
+    assert '--credential-slot "$CREDENTIAL_SLOT"' in workflow
     assert '--start-date "${{ inputs.start_date }}"' not in workflow
     assert '--end-date "${{ inputs.end_date }}"' not in workflow
+    assert '--credential-slot "${{ inputs.credential_slot }}"' not in workflow
     assert "start_date must use YYYY-MM-DD" in workflow
+    assert "end_date must be blank or use YYYY-MM-DD" in workflow
+    assert "credential_slot is invalid" in workflow

@@ -45,6 +45,9 @@ from src.data.providers.finmind import FinMindClient  # noqa: E402
 from src.data.providers.settings import ApiProviderSettings  # noqa: E402
 
 
+_FAILED_OUTCOMES = frozenset({"EXHAUSTED_TASKS"})
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Advance TWSE adjusted, institutional, and margin history."
@@ -106,7 +109,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         result = summary.to_dict()
         _write(output, result)
         print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
-        return 0
+        return 1 if summary.outcome in _FAILED_OUTCOMES else 0
     except (IngestionError, ProviderError, KeyError, TypeError, ValueError) as error:
         result: dict[str, object] = {
             "system_status": "FAIL",

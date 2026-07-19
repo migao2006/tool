@@ -20,6 +20,11 @@ Python：
 
 其他：
 
+- PowerShell 7
+- jq
+- yq
+- fd
+- fzf
 - Docker Desktop（含 Docker Engine 與 Docker Compose）
 - SQLFluff
 - actionlint
@@ -33,10 +38,15 @@ Python：
 
 不得加入功能重疊工具，除非有明確必要。
 
-2026-07-19 已實際確認 Docker Engine `29.6.1`、Docker Compose
+2026-07-19 已實際確認 PowerShell `7.6.3`、jq `1.8.2`、yq `4.53.3`、
+fd `10.4.2`、fzf `0.74.1`、Docker Engine `29.6.1`、Docker Compose
 `5.3.0`、Docker Desktop 與 Supabase 本機容器可正常運作；目前 Supabase
 CLI 為 `2.109.1`。Biome 已全域安裝，但專案尚無 `biome.json`；
 pre-commit 也尚無專案設定檔。這兩者不得描述為已完整接入專案。
+
+PowerShell 7 作為 Windows 自動化腳本的優先 shell；jq 用於 JSON 查詢，
+yq 用於 YAML 查詢，fd 用於檔案名稱搜尋，fzf 主要供互動式終端搜尋。
+搜尋 repository 內文字仍優先使用 `rg`。
 
 Docker 工具狀態：`AVAILABLE`。可直接使用 `docker` 與 `docker compose`；
 本次已用 `docker info` 確認 CLI 可連線至 Docker Desktop Engine。
@@ -64,6 +74,22 @@ Docker 工具狀態：`AVAILABLE`。可直接使用 `docker` 與 `docker compose
 Ruff、basedpyright、Biome、actionlint、Gitleaks、SQLFluff、pip-audit 與 pre-commit 是可用或發布前工具，但目前沒有全部納入 `Project tests` required check。只有實際執行過的項目才能在交付報告中標示通過。
 
 ## 三、Windows 憑證
+
+### PATH 重新載入
+
+若工具剛由 WinGet 安裝，而目前 Codex／PowerShell 程序仍使用舊 PATH，
+先在該命令工作階段重新載入 Windows 的系統與使用者 PATH：
+
+```powershell
+$machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+$userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+$env:Path = "$machinePath;$userPath"
+```
+
+重新載入後仍找不到指令，才視為未安裝；不應在資料回補或 migration
+執行期間僅為更新 PATH 而重啟電腦。
+
+### TLS 與系統憑證
 
 uv 遇到憑證問題時使用：
 

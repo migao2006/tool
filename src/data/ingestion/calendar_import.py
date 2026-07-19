@@ -11,6 +11,10 @@ from src.data.providers.registry import build_provider_registry
 from src.data.providers.settings import ApiProviderSettings
 
 from .calendar_contracts import CalendarImportSummary
+from .calendar_observations import (
+    DATE_ONLY_REASON_CODES,
+    normalize_finmind_calendar_observations,
+)
 from .contracts import IngestionError
 from .normalizers import revision_version
 from .source_catalog import finmind_data_source_row
@@ -99,6 +103,11 @@ class TradingCalendarImporter:
             source_id=1,
             markets=markets,
         )
+        observations = normalize_finmind_calendar_observations(
+            payload,
+            normalized,
+            source_id=1,
+        )
 
         if not dry_run:
             returned_sources = self._writer().upsert(
@@ -138,10 +147,24 @@ class TradingCalendarImporter:
                 source_id=source_id,
                 markets=markets,
             )
+            observations = normalize_finmind_calendar_observations(
+                payload,
+                normalized,
+                source_id=source_id,
+            )
             _ = self._writer().upsert(
                 "trading_calendar",
                 normalized,
                 on_conflict="market,trading_date",
+                preserve_existing=True,
+            )
+            _ = self._writer().upsert(
+                "trading_calendar_observations",
+                observations,
+                on_conflict=(
+                    "source_id,source_dataset,source_event_id,market,"
+                    "trading_date,source_revision_hash"
+                ),
                 preserve_existing=True,
             )
             self._writer().refresh_home_data_status()
@@ -151,8 +174,7 @@ class TradingCalendarImporter:
         )
         reason_codes = [
             "TPEX_CALENDAR_SOURCE_NOT_VERIFIED",
-            "HISTORICAL_RELEASE_TIMES_UNAVAILABLE",
-            "CALENDAR_ROW_PROVENANCE_NOT_VERSIONED",
+            *DATE_ONLY_REASON_CODES,
         ]
         if (end_date - start_date).days < MINIMUM_RESEARCH_HISTORY_DAYS:
             reason_codes.append("HISTORICAL_RANGE_BELOW_SEVEN_YEARS")
@@ -168,6 +190,11 @@ class TradingCalendarImporter:
             normalized_records=len(normalized),
             database_count=(
                 None if dry_run else self._writer().count_rows("trading_calendar")
+            ),
+            observation_database_count=(
+                None
+                if dry_run
+                else self._writer().count_rows("trading_calendar_observations")
             ),
             source_uri=payload.source_url,
             source_version=revision_version(payload),

@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
+
+from .contracts import IngestionError
 
 
 BENCHMARK_DATASET = "benchmark_total_return"
@@ -15,6 +18,9 @@ BENCHMARK_REASON_CODES = (
     "NOT_EXECUTION_PATH_ALIGNED",
 )
 
+BENCHMARK_QUEUE_STATUSES = frozenset(
+    {"PENDING", "LEASED", "RETRY", "SUCCEEDED", "EXHAUSTED"}
+)
 
 @dataclass(frozen=True)
 class NormalizedHistoricalBenchmarkBatch:
@@ -55,6 +61,68 @@ class HistoricalBenchmarkLandingResult:
 
 
 @dataclass(frozen=True)
+class HistoricalBenchmarkBackfillState:
+    """Exact queue and immutable archive state for the fixed request."""
+
+    archive_exists: bool
+    task_id: int | None
+    task_status: str | None
+    last_error_code: str | None
+
+    @classmethod
+    def from_rows(
+        cls,
+        *,
+        task_rows: Sequence[Mapping[str, object]],
+        archive_rows: Sequence[Mapping[str, object]],
+    ) -> "HistoricalBenchmarkBackfillState":
+        if len(task_rows) > 1 or len(archive_rows) > 1:
+            raise IngestionError(
+                "HISTORICAL_BENCHMARK_STATE_INVALID",
+                "benchmark state lookup returned duplicate rows",
+            )
+        if not task_rows:
+            return cls(
+                archive_exists=bool(archive_rows),
+                task_id=None,
+                task_status=None,
+                last_error_code=None,
+            )
+        row = task_rows[0]
+        task_id = row.get("task_id")
+        task_status = row.get("status")
+        last_error_code = row.get("last_error_code")
+        if (
+            isinstance(task_id, bool)
+            or not isinstance(task_id, int)
+            or task_id <= 0
+            or not isinstance(task_status, str)
+            or task_status not in BENCHMARK_QUEUE_STATUSES
+            or (
+                last_error_code is not None
+                and (
+                    not isinstance(last_error_code, str)
+                    or not last_error_code.strip()
+                )
+            )
+        ):
+            raise IngestionError(
+                "HISTORICAL_BENCHMARK_STATE_INVALID",
+                "benchmark state lookup returned an invalid task row",
+            )
+        return cls(
+            archive_exists=bool(archive_rows),
+            task_id=task_id,
+            task_status=task_status,
+            last_error_code=(
+                last_error_code.strip()
+                if isinstance(last_error_code, str)
+                else None
+            ),
+        )
+
+
+@dataclass(frozen=True)
 class HistoricalBenchmarkBackfillSummary:
     outcome: str
     start_date: str
@@ -70,7 +138,8 @@ class HistoricalBenchmarkBackfillSummary:
     point_in_time_status: str = "UNVERIFIED"
     usage_scope: str = "RAW_LANDING_ONLY"
     system_status: str = "RESEARCH_ONLY"
-
+    queue_status: str | None = None
+    last_error_code: str | None = None
     def to_dict(self) -> dict[str, object]:
         result = asdict(self)
         result["reason_codes"] = list(self.reason_codes)

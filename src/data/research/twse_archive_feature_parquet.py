@@ -102,7 +102,9 @@ def twse_archive_feature_schema(
             ),
             b"availability.mode": b"RESEARCH_SCHEDULING_HINT",
             b"labels.status": b"LABELS_NOT_ASSEMBLED",
+            b"usage.scope": b"FEATURE_RESEARCH_ONLY",
             b"system.status": b"RESEARCH_ONLY",
+            b"horizon": b"5",
         },
     )
 

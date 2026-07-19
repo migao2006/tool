@@ -7,7 +7,12 @@ from typing import Any
 
 import pytest
 
+from src.data.ingestion import calendar_import
 from src.data.ingestion.calendar_import import TradingCalendarImporter
+from src.data.ingestion.calendar_observations import (
+    DATE_ONLY_REASON_CODES,
+    normalize_finmind_calendar_observations,
+)
 from src.data.ingestion.contracts import IngestionError
 from src.data.ingestion.trading_calendar import normalize_finmind_trading_calendar
 from src.data.providers.contracts import ProviderPayload
@@ -204,8 +209,38 @@ def test_calendar_importer_dry_run_does_not_touch_supabase() -> None:
     assert summary.system_status == "RESEARCH_ONLY"
     assert summary.status == "PASS"
     assert "HISTORICAL_RANGE_BELOW_SEVEN_YEARS" in summary.reason_codes
-    assert "CALENDAR_ROW_PROVENANCE_NOT_VERSIONED" in summary.reason_codes
+    assert set(DATE_ONLY_REASON_CODES).issubset(summary.reason_codes)
     assert summary.source_hash == provider.payload.payload_sha256
+
+
+def test_calendar_importer_dry_run_validates_observation_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _fail(*_: object, **__: object):
+        raise IngestionError(
+            "OBSERVATION_CONTRACT_REJECTED",
+            "test-only observation rejection",
+        )
+
+    monkeypatch.setattr(
+        calendar_import,
+        "normalize_finmind_calendar_observations",
+        _fail,
+    )
+    importer = TradingCalendarImporter(
+        settings=ApiProviderSettings(finmind_token="secret"),
+        registry={"FINMIND": FakeFinMind(calendar_payload(["2026-01-05"]))},
+        writer=FakeWriter(),
+    )
+
+    with pytest.raises(IngestionError) as captured:
+        _ = importer.run(
+            start_date=date(2026, 1, 1),
+            end_date=date(2026, 1, 10),
+            dry_run=True,
+        )
+
+    assert captured.value.reason_code == "OBSERVATION_CONTRACT_REJECTED"
 
 
 def test_calendar_importer_writes_source_then_idempotent_calendar_rows() -> None:
@@ -223,13 +258,63 @@ def test_calendar_importer_writes_source_then_idempotent_calendar_rows() -> None
     assert [call["table"] for call in writer.calls] == [
         "data_sources",
         "trading_calendar",
+        "trading_calendar_observations",
         "trading_calendar",
+        "trading_calendar_observations",
     ]
     calendar_call = writer.calls[1]
     assert calendar_call["on_conflict"] == "market,trading_date"
     assert calendar_call["preserve_existing"] is True
     assert {row["source_id"] for row in calendar_call["rows"]} == {77}
+    observation_call = writer.calls[2]
+    assert observation_call["on_conflict"] == (
+        "source_id,source_dataset,source_event_id,market,trading_date,"
+        "source_revision_hash"
+    )
+    assert observation_call["preserve_existing"] is True
+    assert {row["calendar_verification_status"] for row in observation_call["rows"]} == {
+        "UNRESOLVED"
+    }
+    assert {row["market_basis"] for row in observation_call["rows"]} == {
+        "SCHEDULING_HINT"
+    }
+    assert all(row["opens_at"] is None for row in observation_call["rows"])
     assert summary.database_count == 1_234
+    assert summary.observation_database_count == 1_234
     assert summary.normalized_records == 3
     assert summary.to_dict()["retrieved_at"] == RETRIEVED_AT.isoformat()
     assert writer.refresh_calls == 1
+
+
+def test_calendar_observations_preserve_exact_row_lineage_and_hashes() -> None:
+    payload = calendar_payload(["2026-01-05", "2026-01-06"])
+    sessions = normalize_finmind_trading_calendar(
+        payload,
+        start_date=date(2026, 1, 1),
+        end_date=date(2026, 1, 10),
+        source_id=77,
+    )
+
+    first = normalize_finmind_calendar_observations(
+        payload, sessions, source_id=77
+    )
+    second = normalize_finmind_calendar_observations(
+        payload, sessions, source_id=77
+    )
+
+    assert first == second
+    assert [row["source_row"] for row in first] == [
+        {"date": "2026-01-05"},
+        {"date": "2026-01-06"},
+    ]
+    assert all(len(str(row["source_revision_hash"])) == 64 for row in first)
+    assert {row["source_payload_hash"] for row in first} == {
+        payload.payload_sha256
+    }
+    assert {row["available_at"] for row in first} == {
+        RETRIEVED_AT.isoformat()
+    }
+    assert {row["usage_scope"] for row in first} == {
+        "CALENDAR_RESEARCH_ONLY"
+    }
+    assert all(set(row["reason_codes"]) == set(DATE_ONLY_REASON_CODES) for row in first)

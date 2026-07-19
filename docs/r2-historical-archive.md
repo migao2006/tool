@@ -43,6 +43,19 @@ uv run python -m scripts.audit_historical_r2_archive `
 
 - 完整性 `PASS` 只代表 manifest 與 R2 Parquet 一致，不代表 point-in-time、身分解析、模型或回測已通過；系統仍維持 `RESEARCH_ONLY`。
 
+2026-07-19 手動全量稽核 run `29677606085` 已成功完成：
+
+- object_count：1,971
+- row_count：2,183,917
+- byte_count：295,007,049
+- integrity_status：`PASS`
+- point_in_time_status：`UNVERIFIED`
+- system_status：`RESEARCH_ONLY`
+- manifest_snapshot_sha256：`fb926d3c43a2eca6345dd7771860100335c2ce9469d3de1f31b87283b73820be`
+
+資料就緒度報告為 `BLOCKED`，原因包含 verified listing period、verified calendar、security
+state、company action coverage 與 canonical contract 尚不可用，以及 843 筆下市身分仍未解析。
+
 ## GitHub Actions 設定名稱
 
 Repository variables：
@@ -92,11 +105,17 @@ HISTORICAL_BACKFILL_REFRESH_HOME_STATUS
 
 ## 資料集邊界
 
-2026-07-19 已實際出現在 Production R2 manifest 的 `source_dataset`：
+2026-07-19 已實際出現在 Production R2 manifest 的 dataset 仍只有：
 
 - `daily_bars`
 
-程式已支援、但 feature gate 未開且尚未執行的 raw dataset：
+實際完成範圍：
+
+- TWSE common stock：1,080 objects／1,205,606 rows。
+- TPEX common stock：891 objects／978,311 rows。
+- ETF：0 objects。
+
+尚未出現在 Production R2 manifest：
 
 - `adjusted_bars`
 - `institutional_flows`
@@ -104,6 +123,9 @@ HISTORICAL_BACKFILL_REFRESH_HOME_STATUS
 - `benchmark_total_return`
 
 每一類資料都必須以自己的 schema version、metadata 與 row validator 驗證；不得把 benchmark
-或籌碼資料套用日線 schema。研究 feature artifact 不是原始封存，也不得覆寫任何 raw object。
+或籌碼資料套用日線 schema。本次分支新增的 feature artifact typed manifest 與 provenance
+驗證不會修改原始 R2 object；目前 feature workflow 仍只規劃輸出 GitHub artifact，尚未產生正式
+Production feature dataset。
 
-目前歷史 campaign 的固定結束日為 2026-07-17；完成這批回補後不會自動把 R2 日線向後延伸。平日 current import 只保存 Supabase 近期資料。若要長期累積完整 R2 歷史，仍須新增可稽核、冪等的 daily delta archive 流程。
+目前 campaign 固定結束於 2026-07-17。既定 queue 已全部完成，但這不會讓 R2 自動向後累積。
+建立可稽核、冪等的 daily delta archive workflow 前，新交易日仍不會自動加入多年 R2 封存。

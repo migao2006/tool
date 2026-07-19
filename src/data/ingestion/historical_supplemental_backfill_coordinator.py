@@ -21,6 +21,9 @@ from .historical_supplemental_backfill_contracts import (
 from .historical_supplemental_backfill_repository import (
     HistoricalSupplementalBackfillRepository,
 )
+from .historical_supplemental_backfill_settings import (
+    HistoricalSupplementalBackfillSettings,
+)
 
 
 class SupplementalQuotaProvider(Protocol):
@@ -50,6 +53,7 @@ class HistoricalSupplementalBackfillCoordinator:
         repository: HistoricalSupplementalBackfillRepository,
         landing_service: SupplementalLandingService,
         settings: HistoricalBackfillSettings,
+        supplemental_settings: HistoricalSupplementalBackfillSettings | None = None,
         sleep_fn: Callable[[float], None] = sleep,
         monotonic_fn: Callable[[], float] = monotonic,
         now_fn: Callable[[], datetime] | None = None,
@@ -58,6 +62,9 @@ class HistoricalSupplementalBackfillCoordinator:
         self.repository = repository
         self.landing_service = landing_service
         self.settings = settings
+        self.supplemental_settings = (
+            supplemental_settings or HistoricalSupplementalBackfillSettings()
+        )
         self._sleep = sleep_fn
         self._monotonic = monotonic_fn
         self._now = now_fn or (lambda: datetime.now(timezone.utc))
@@ -153,6 +160,7 @@ class HistoricalSupplementalBackfillCoordinator:
                 worker_id=worker_id,
                 claim_token=claim_token,
                 lease_seconds=self.settings.lease_seconds,
+                allowed_datasets=self.supplemental_settings.allowed_datasets,
             )
             if task is None:
                 break
@@ -198,6 +206,11 @@ class HistoricalSupplementalBackfillCoordinator:
                     reason_codes.add("FINMIND_QUOTA_WAIT")
                     break
         after = self.repository.snapshot(start_date=start_date, end_date=end_date)
+        if (
+            "adjusted_bars" not in self.supplemental_settings.allowed_datasets
+            and after.adjusted_bars_remaining > 0
+        ):
+            reason_codes.add("ADJUSTED_BARS_PROVIDER_ACCESS_UNAVAILABLE")
         if after.exhausted > 0:
             outcome = "EXHAUSTED_TASKS"
             reason_codes.add("HISTORICAL_SUPPLEMENTAL_TASKS_EXHAUSTED")
@@ -215,6 +228,7 @@ class HistoricalSupplementalBackfillCoordinator:
             quarantined_rows=quarantined,
             quota_remaining_at_start=quota_remaining,
             request_budget=request_budget,
+            allowed_datasets=self.supplemental_settings.allowed_datasets,
             remaining_adjusted_bars=after.adjusted_bars_remaining,
             remaining_institutional_flows=after.institutional_flows_remaining,
             remaining_margin_short=after.margin_short_remaining,
@@ -222,8 +236,8 @@ class HistoricalSupplementalBackfillCoordinator:
             reason_codes=tuple(sorted(reason_codes)),
         )
 
-    @staticmethod
     def _summary(
+        self,
         *,
         outcome: str,
         start_date: date,
@@ -239,6 +253,12 @@ class HistoricalSupplementalBackfillCoordinator:
 
         if not isinstance(snapshot, HistoricalSupplementalBackfillSnapshot):
             raise TypeError("snapshot has an invalid type")
+        audited_reason_codes = set(reason_codes)
+        if (
+            "adjusted_bars" not in self.supplemental_settings.allowed_datasets
+            and snapshot.adjusted_bars_remaining > 0
+        ):
+            audited_reason_codes.add("ADJUSTED_BARS_PROVIDER_ACCESS_UNAVAILABLE")
         return HistoricalSupplementalBackfillSummary(
             outcome=outcome,
             start_date=start_date.isoformat(),
@@ -251,9 +271,10 @@ class HistoricalSupplementalBackfillCoordinator:
             quarantined_rows=0,
             quota_remaining_at_start=quota_remaining,
             request_budget=request_budget,
+            allowed_datasets=self.supplemental_settings.allowed_datasets,
             remaining_adjusted_bars=snapshot.adjusted_bars_remaining,
             remaining_institutional_flows=snapshot.institutional_flows_remaining,
             remaining_margin_short=snapshot.margin_short_remaining,
             exhausted_tasks=snapshot.exhausted,
-            reason_codes=reason_codes,
+            reason_codes=tuple(sorted(audited_reason_codes)),
         )

@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Sequence
-from datetime import date, datetime
+from datetime import date
 import json
 import sys
-from zoneinfo import ZoneInfo
+from typing import cast
 
 try:
     from scripts._bootstrap import add_project_root
@@ -28,12 +28,16 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Import the current official Taiwan security-state snapshot."
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--snapshot-date",
         type=date.fromisoformat,
-        default=datetime.now(ZoneInfo("Asia/Taipei")).date(),
+        default=None,
+        help=(
+            "Profile observation date; omitted resolves the coherent TWSE/TPEX "
+            "profile date without claiming a verified trading session"
+        ),
     )
-    parser.add_argument("--dry-run", action="store_true")
+    _ = parser.add_argument("--dry-run", action="store_true")
     return parser
 
 
@@ -42,7 +46,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         summary = SecuritySnapshotImporter(
             settings=ApiProviderSettings.from_env()
-        ).run(snapshot_date=args.snapshot_date, dry_run=args.dry_run)
+        ).run(
+            snapshot_date=cast(date | None, args.snapshot_date),
+            dry_run=cast(bool, args.dry_run),
+        )
         print(
             json.dumps(summary.to_dict(), ensure_ascii=False, indent=2, sort_keys=True)
         )

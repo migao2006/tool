@@ -8,6 +8,11 @@ on:
         required: true
         default: 100
         type: number
+      allowed_datasets:
+        description: Comma-separated FinMind datasets enabled for this credential tier
+        required: true
+        default: institutional_flows,margin_short
+        type: string
   schedule:
     - cron: "37 * * * *"
 
@@ -25,6 +30,7 @@ jobs:
     with:
       credential_slot: primary
       max_tasks: ${{ fromJSON(github.event.inputs.max_tasks || '100') }}
+      allowed_datasets: ${{ github.event.inputs.allowed_datasets || 'institutional_flows,margin_short' }}
       seed_tasks: true
     secrets:
       finmind_token: ${{ secrets.FINMIND_TOKEN }}
@@ -39,6 +45,7 @@ jobs:
     with:
       credential_slot: secondary
       max_tasks: ${{ fromJSON(github.event.inputs.max_tasks || '100') }}
+      allowed_datasets: ${{ github.event.inputs.allowed_datasets || 'institutional_flows,margin_short' }}
       # Seeding is idempotent. Let every worker ensure the queue exists so the
       # first campaign cannot race ahead of the primary worker's seed call.
       seed_tasks: true
@@ -55,6 +62,7 @@ jobs:
     with:
       credential_slot: tertiary
       max_tasks: ${{ fromJSON(github.event.inputs.max_tasks || '100') }}
+      allowed_datasets: ${{ github.event.inputs.allowed_datasets || 'institutional_flows,margin_short' }}
       seed_tasks: true
     secrets:
       finmind_token: ${{ secrets.FINMIND_TOKEN_TERTIARY }}

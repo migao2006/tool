@@ -20,6 +20,7 @@ from .parallel_fetch import PayloadFetchRequest, fetch_provider_payloads
 from .quality import MIN_SECURITIES_PER_MARKET
 from .security_snapshot import (
     normalize_current_security_snapshot,
+    resolve_coherent_profile_date,
     snapshot_revision_hash,
 )
 from .security_snapshot_contracts import (
@@ -56,7 +57,7 @@ class SnapshotWriter(Protocol):
 
 @final
 class SecuritySnapshotImporter:
-    """Import one retrieval-day snapshot; never infer historical intervals."""
+    """Import one profile-confirmed session; never infer historical intervals."""
 
     def __init__(
         self,
@@ -147,11 +148,12 @@ class SecuritySnapshotImporter:
     def run(
         self,
         *,
-        snapshot_date: date,
+        snapshot_date: date | None,
         dry_run: bool = False,
     ) -> SecuritySnapshotSummary:
         payloads = self._fetch_all()
         bundles = self._bundles(payloads)
+        snapshot_date = snapshot_date or resolve_coherent_profile_date(bundles)
         source_rows = [*data_source_rows(), *security_snapshot_source_rows()]
         provisional_sources = {
             "MOPS": 1,

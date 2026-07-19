@@ -42,6 +42,33 @@ EXPECTED_CONTRACTS = {
 }
 
 
+def resolve_coherent_profile_date(
+    payloads_by_market: Mapping[str, MarketSnapshotPayloads],
+) -> date:
+    """Resolve one coherent profile date without claiming calendar verification."""
+
+    if set(payloads_by_market) != set(EXPECTED_CONTRACTS):
+        raise IngestionError(
+            "SECURITY_SNAPSHOT_MARKETS_INCOMPLETE",
+            "Both TWSE and TPEX profiles are required to resolve the snapshot date",
+        )
+    profile_dates: dict[str, date] = {}
+    for market in EXPECTED_CONTRACTS:
+        profile = payloads_by_market[market].profile
+        retrieval_date = profile.retrieved_at.astimezone(TAIPEI).date()
+        _, profile_dates[market] = profile_state(
+            profile,
+            market=market,
+            snapshot_date=retrieval_date,
+        )
+    if len(set(profile_dates.values())) != 1:
+        raise IngestionError(
+            "SECURITY_SNAPSHOT_MARKET_DATE_MISMATCH",
+            "TWSE and TPEX profiles do not confirm the same completed session",
+        )
+    return next(iter(profile_dates.values()))
+
+
 def snapshot_revision_hash(payloads: MarketSnapshotPayloads) -> str:
     """Hash the complete source bundle while keeping the parser version stable."""
 
@@ -81,13 +108,13 @@ def _validate_bundle(
             "SECURITY_SNAPSHOT_SOURCE_INVALID",
             "Security snapshot provider or dataset contract does not match the market",
         )
-    if any(
-        payload.retrieved_at.astimezone(TAIPEI).date() != snapshot_date
-        for payload in bundle
-    ):
+    retrieval_dates = {
+        payload.retrieved_at.astimezone(TAIPEI).date() for payload in bundle
+    }
+    if len(retrieval_dates) != 1 or next(iter(retrieval_dates)) < snapshot_date:
         raise IngestionError(
             "SECURITY_SNAPSHOT_DATE_MISMATCH",
-            "Current security snapshots cannot be backdated",
+            "Security snapshot sources must share a retrieval date on or after the session",
         )
 
 

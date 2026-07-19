@@ -68,7 +68,12 @@ class HistoricalSupplementalBackfillRepository:
         return value
 
     def claim_one(
-        self, *, worker_id: str, claim_token: UUID, lease_seconds: int
+        self,
+        *,
+        worker_id: str,
+        claim_token: UUID,
+        lease_seconds: int,
+        allowed_datasets: tuple[str, ...],
     ) -> HistoricalBackfillTask | None:
         raw = self.writer.rpc(
             "claim_historical_supplemental_backfill_task",
@@ -77,6 +82,7 @@ class HistoricalSupplementalBackfillRepository:
                 "p_worker_id": worker_id,
                 "p_claim_token": str(claim_token),
                 "p_lease_seconds": lease_seconds,
+                "p_allowed_datasets": list(allowed_datasets),
             },
         )
         if not isinstance(raw, list):

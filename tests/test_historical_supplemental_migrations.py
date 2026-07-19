@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -13,6 +14,10 @@ CLAIMS = (
 SNAPSHOTS = (
     ROOT
     / "supabase/migrations/20260719045216_separate_historical_backfill_snapshots.sql"
+)
+FREE_TIER = (
+    ROOT
+    / "supabase/migrations/20260719081157_defer_unavailable_supplemental_datasets.sql"
 )
 
 
@@ -55,8 +60,30 @@ def test_supplemental_queue_is_twse_only_and_daily_claim_is_isolated() -> None:
 
 def test_new_internal_rpcs_remain_service_role_only() -> None:
     sql = "\n".join(
-        path.read_text(encoding="utf-8") for path in (EXPAND, CLAIMS, SNAPSHOTS)
+        path.read_text(encoding="utf-8")
+        for path in (EXPAND, CLAIMS, SNAPSHOTS, FREE_TIER)
     )
 
     assert sql.count("from public, anon, authenticated") >= 3
     assert sql.count("to service_role") >= 3
+
+
+def test_free_tier_claim_defers_adjusted_bars_without_exhausting_it() -> None:
+    sql = FREE_TIER.read_text(encoding="utf-8")
+
+    assert re.search(r"p_allowed_datasets text\s*\[\]\s+default array\[", sql)
+    assert "p_allowed_datasets is null" in sql
+    assert "'institutional_flows'" in sql
+    assert "'margin_short'" in sql
+    assert "'adjusted_bars' = any(p_allowed_datasets)" in sql
+    assert "next_attempt_at = 'infinity'::timestamptz" in sql
+    assert "ADJUSTED_BARS_PROVIDER_ACCESS_UNAVAILABLE" in sql
+    assert "FINMIND_DATASET_ACCESS_UNAVAILABLE" in sql
+    assert "PROVIDER_ACCESS_RESTORED" in sql
+    assert "enabled.status in ('RETRY', 'EXHAUSTED')" in sql
+    assert "attempt_count = 0" in sql
+    assert "and not (" in sql
+    assert "source_dataset = any(p_allowed_datasets)" in sql
+    assert "array_position(p_allowed_datasets, queued.source_dataset)" in sql
+    assert "status = 'SUCCEEDED'" not in sql
+    assert "delete from" not in sql.lower()

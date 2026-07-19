@@ -9,6 +9,9 @@ on:
       max_tasks:
         required: true
         type: number
+      allowed_datasets:
+        required: true
+        type: string
       seed_tasks:
         required: true
         type: boolean
@@ -62,6 +65,7 @@ jobs:
           HISTORICAL_BACKFILL_MAX_ARCHIVE_OBJECTS_PER_RUN: "100"
           HISTORICAL_BACKFILL_MAX_ARCHIVE_OBJECT_BYTES: "50000000"
           HISTORICAL_BACKFILL_SEED_COMMON_TASKS: ${{ inputs.seed_tasks }}
+          HISTORICAL_SUPPLEMENTAL_ALLOWED_DATASETS: ${{ inputs.allowed_datasets }}
         shell: bash
         run: |
           set -euo pipefail

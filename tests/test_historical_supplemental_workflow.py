@@ -15,6 +15,8 @@ def test_schedule_is_feature_gated_until_migration_is_deployed() -> None:
     assert "FINMIND_TOKEN_TERTIARY" in workflow
     assert "cancel-in-progress: false" in workflow
     assert workflow.count("seed_tasks: true") == 3
+    assert "default: institutional_flows,margin_short" in workflow
+    assert workflow.count("allowed_datasets:") == 4
 
 
 def test_worker_archives_to_r2_and_never_embeds_credentials() -> None:
@@ -22,6 +24,7 @@ def test_worker_archives_to_r2_and_never_embeds_credentials() -> None:
 
     assert "HISTORICAL_BACKFILL_STORAGE_TARGET: R2" in workflow
     assert "scripts.backfill_historical_supplemental" in workflow
+    assert "HISTORICAL_SUPPLEMENTAL_ALLOWED_DATASETS" in workflow
     assert "--start-date 2021-07-19" in workflow
     assert "--end-date 2026-07-17" in workflow
     assert "${{ secrets.finmind_token }}" in workflow

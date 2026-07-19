@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from datetime import date
+from dataclasses import replace
+from datetime import date, datetime, timezone
+from typing import cast
 
 import pytest
 
@@ -9,7 +11,7 @@ from src.data.ingestion.contracts import IngestionError
 from src.data.ingestion.security_snapshot_import import SecuritySnapshotImporter
 from src.data.providers.contracts import ProviderPayload
 from src.data.providers.settings import ApiProviderSettings
-from tests.support.security_snapshot_fixtures import import_payloads
+from tests.support.security_snapshot_fixtures import import_payloads, provider_payload
 
 
 SNAPSHOT_DATE = date(2026, 7, 18)
@@ -149,6 +151,54 @@ def test_snapshot_importer_writes_sources_securities_then_history() -> None:
         "security_history": 123,
     }
     assert writer.refresh_calls == 1
+
+
+def test_blank_date_resolves_coherent_profile_date_on_weekend() -> None:
+    retrieved_on_sunday = datetime(2026, 7, 19, 6, tzinfo=timezone.utc)
+    payloads = import_payloads(listed_profile_date="1150717")
+    otc_profile = payloads["MOPS"]["otc_company_profile"]
+    otc_rows = cast(list[dict[str, object]], otc_profile.payload)
+    payloads["MOPS"]["otc_company_profile"] = provider_payload(
+        "MOPS",
+        "otc_company_profile",
+        [{**row, "Date": "20260717"} for row in otc_rows],
+        retrieved_at=retrieved_on_sunday,
+    )
+    for datasets in payloads.values():
+        for dataset, payload in datasets.items():
+            datasets[dataset] = replace(payload, retrieved_at=retrieved_on_sunday)
+    providers = {
+        provider: FakeProvider(datasets) for provider, datasets in payloads.items()
+    }
+    writer = FakeWriter()
+
+    summary = SecuritySnapshotImporter(
+        settings=ApiProviderSettings(), registry=providers, writer=writer
+    ).run(snapshot_date=None)
+
+    history = next(
+        call for call in writer.calls if call.get("table") == "security_history"
+    )
+    history_rows = cast(list[dict[str, object]], history["rows"])
+    assert summary.snapshot_date == date(2026, 7, 17)
+    assert {row["snapshot_date"] for row in history_rows} == {"2026-07-17"}
+    assert summary.latest_available_at == retrieved_on_sunday
+
+
+def test_snapshot_importer_rejects_disagreeing_market_profile_dates() -> None:
+    payloads = import_payloads(listed_profile_date="1150717")
+    providers = {
+        provider: FakeProvider(datasets) for provider, datasets in payloads.items()
+    }
+    writer = FakeWriter()
+
+    with pytest.raises(IngestionError) as captured:
+        SecuritySnapshotImporter(
+            settings=ApiProviderSettings(), registry=providers, writer=writer
+        ).run(snapshot_date=None)
+
+    assert captured.value.reason_code == "SECURITY_SNAPSHOT_MARKET_DATE_MISMATCH"
+    assert writer.calls == []
 
 
 def test_incomplete_source_upsert_fails_before_security_write() -> None:

@@ -5,11 +5,17 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/publish-tpex-latest-research-snapshot.yml"
 
 
-def test_tpex_daily_publish_is_staging_scoped_and_scheduled_after_benchmark() -> None:
+def test_tpex_daily_publish_is_environment_scoped_and_scheduled_after_benchmark() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
 
     assert 'cron: "0 13 * * 1-5"' in workflow
-    assert "environment: staging" in workflow
+    assert "target_environment:" in workflow
+    assert "- staging" in workflow
+    assert "- production" in workflow
+    assert (
+        "environment: ${{ github.event_name == 'schedule' && 'staging' || "
+        "inputs.target_environment }}" in workflow
+    )
     assert "SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}" in workflow
     assert "SUPABASE_URL: ${{ vars.SUPABASE_URL }}" in workflow
     assert "SUPABASE_URL: ${{ secrets.SUPABASE_URL }}" not in workflow
@@ -17,11 +23,15 @@ def test_tpex_daily_publish_is_staging_scoped_and_scheduled_after_benchmark() ->
         "SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}"
         in workflow
     )
-    assert "ALPHA_LENS_TARGET_ENVIRONMENT: staging" in workflow
-    assert 'RESEARCH_PREDICTION_PRODUCTION_PUBLISH_ENABLED: "false"' in workflow
+    assert "ALPHA_LENS_TARGET_ENVIRONMENT: ${{" in workflow
+    assert "RESEARCH_PREDICTION_PRODUCTION_PUBLISH_ENABLED: ${{" in workflow
+    assert 'test "$GITHUB_EVENT_NAME" = "workflow_dispatch"' in workflow
+    assert 'test "$ALPHA_LENS_TARGET_ENVIRONMENT" = "staging"' in workflow
+    assert 'test "$RESEARCH_PREDICTION_PRODUCTION_PUBLISH_ENABLED" = "true"' in workflow
+    assert 'test "$RESEARCH_PREDICTION_PRODUCTION_PUBLISH_ENABLED" = "false"' in workflow
     assert "TPEX_DAILY_RESEARCH_PREDICTION_ENABLED == 'true'" in workflow
     assert '"https://${SUPABASE_PROJECT_REF}.supabase.co"' in workflow
-    assert "Supabase URL does not match the Staging project ref" in workflow
+    assert "Supabase URL does not match the selected project ref" in workflow
 
 
 def test_tpex_daily_publish_authenticates_exact_artifact_producers() -> None:

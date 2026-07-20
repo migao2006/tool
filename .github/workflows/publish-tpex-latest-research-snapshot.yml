@@ -18,6 +18,14 @@ on:
         description: Optional exact research date in YYYY-MM-DD format
         required: false
         type: string
+      target_environment:
+        description: Publish destination; scheduled runs always use staging
+        required: true
+        default: staging
+        type: choice
+        options:
+          - staging
+          - production
 
 permissions:
   actions: read
@@ -32,7 +40,7 @@ jobs:
     if: ${{ vars.TPEX_DAILY_RESEARCH_PREDICTION_ENABLED == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 150
-    environment: staging
+    environment: ${{ github.event_name == 'schedule' && 'staging' || inputs.target_environment }}
     env:
       REQUESTED_PREPARED_RUN_ID: ${{ inputs.prepared_run_id }}
       REQUESTED_FEATURE_RUN_ID: ${{ inputs.feature_run_id }}
@@ -40,9 +48,9 @@ jobs:
       SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
       SUPABASE_URL: ${{ vars.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-      ALPHA_LENS_TARGET_ENVIRONMENT: staging
+      ALPHA_LENS_TARGET_ENVIRONMENT: ${{ github.event_name == 'schedule' && 'staging' || inputs.target_environment }}
       RESEARCH_PREDICTION_SUPABASE_PUBLISH_ENABLED: "true"
-      RESEARCH_PREDICTION_PRODUCTION_PUBLISH_ENABLED: "false"
+      RESEARCH_PREDICTION_PRODUCTION_PUBLISH_ENABLED: ${{ github.event_name != 'schedule' && inputs.target_environment == 'production' && 'true' || 'false' }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -216,7 +224,7 @@ jobs:
       - name: Synchronize locked environment
         run: uv sync --frozen
 
-      - name: Require Staging credentials
+      - name: Require isolated target credentials
         shell: bash
         run: |
           set -euo pipefail
@@ -224,13 +232,27 @@ jobs:
           test -n "$SUPABASE_PROJECT_REF"
           test -n "$SUPABASE_URL"
           test -n "$SUPABASE_SERVICE_ROLE_KEY"
-          test "$ALPHA_LENS_TARGET_ENVIRONMENT" = "staging"
-          test "$RESEARCH_PREDICTION_PRODUCTION_PUBLISH_ENABLED" = "false"
+          case "$ALPHA_LENS_TARGET_ENVIRONMENT" in
+            staging)
+              test "$RESEARCH_PREDICTION_PRODUCTION_PUBLISH_ENABLED" = "false"
+              ;;
+            production)
+              test "$GITHUB_EVENT_NAME" = "workflow_dispatch"
+              test "$RESEARCH_PREDICTION_PRODUCTION_PUBLISH_ENABLED" = "true"
+              ;;
+            *)
+              echo "Unsupported publish environment" >&2
+              exit 1
+              ;;
+          esac
+          if [[ "$GITHUB_EVENT_NAME" == "schedule" ]]; then
+            test "$ALPHA_LENS_TARGET_ENVIRONMENT" = "staging"
+          fi
           case "$SUPABASE_URL" in
             "https://${SUPABASE_PROJECT_REF}.supabase.co"|\
             "https://${SUPABASE_PROJECT_REF}.supabase.co/") ;;
             *)
-              echo "Supabase URL does not match the Staging project ref" >&2
+              echo "Supabase URL does not match the selected project ref" >&2
               exit 1
               ;;
           esac

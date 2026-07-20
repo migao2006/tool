@@ -7,6 +7,7 @@ export function snapshotRows(): SnapshotRows {
       as_of_date: "2026-07-17",
       decision_at: "2026-07-17T06:00:00+00:00",
       horizon: 5,
+      market_scope: "TWSE",
       model_bundle_version: "rank-research-v1",
       feature_schema_hash: "feature-hash",
       cost_profile_version: "tw-stock-base-v1",

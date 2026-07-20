@@ -4,6 +4,7 @@ import type {
   JsonRecord,
   JsonValue,
   MarketPredictionRow,
+  MarketScope,
   PredictionRunRow,
   SecurityRow,
   SnapshotRows,
@@ -53,8 +54,9 @@ export function marketName(value: "TWSE" | "TPEX"): "LISTED" | "OTC" {
 export function mapMarket(
   run: PredictionRunRow,
   markets: MarketPredictionRow[],
+  marketScope: MarketScope,
 ): JsonRecord | null {
-  const market = markets.find((row) => row.market === "TWSE") ?? markets[0];
+  const market = markets.find((row) => row.market === marketScope);
   if (!market) return null;
   return {
     as_of_date: run.as_of_date,

@@ -1,7 +1,7 @@
 import { corsHeaders, type CorsPolicy } from "./cors.ts";
 import { ApiError } from "./errors.ts";
 import { API_CONTRACT_VERSION, buildSnapshot } from "./snapshot.ts";
-import type { SnapshotRepositoryContract } from "./types.ts";
+import type { MarketScope, SnapshotRepositoryContract } from "./types.ts";
 
 const RESEARCH_SETTINGS = new Set([
   "commission_discount",
@@ -31,7 +31,12 @@ function jsonResponse(
   return new Response(JSON.stringify(payload), { status, headers });
 }
 
-function validateQuery(url: URL): number {
+interface SnapshotQuery {
+  horizon: number;
+  marketScope: MarketScope;
+}
+
+function validateQuery(url: URL): SnapshotQuery {
   const horizon = url.searchParams.get("horizon");
   if (horizon === null) {
     throw new ApiError(422, "HORIZON_REQUIRED", "horizon is required");
@@ -41,6 +46,15 @@ function validateQuery(url: URL): number {
       422,
       "UNSUPPORTED_HORIZON",
       "Only horizon=5 is available",
+    );
+  }
+  const marketValues = url.searchParams.getAll("market");
+  const market = marketValues.length === 0 ? "TWSE" : marketValues[0];
+  if (marketValues.length > 1 || (market !== "TWSE" && market !== "TPEX")) {
+    throw new ApiError(
+      422,
+      "UNSUPPORTED_MARKET",
+      "market must be TWSE or TPEX",
     );
   }
   const settings = [...url.searchParams.keys()].filter((name) =>
@@ -54,7 +68,7 @@ function validateQuery(url: URL): number {
     );
   }
   const unknown = [...url.searchParams.keys()].filter((name) =>
-    name !== "horizon" && !RESEARCH_SETTINGS.has(name)
+    name !== "horizon" && name !== "market" && !RESEARCH_SETTINGS.has(name)
   );
   if (unknown.length) {
     throw new ApiError(
@@ -63,7 +77,7 @@ function validateQuery(url: URL): number {
       "Query contains unsupported parameters",
     );
   }
-  return 5;
+  return { horizon: 5, marketScope: market };
 }
 
 export function createHandler(
@@ -93,10 +107,11 @@ export function createHandler(
           "Requested API contract is not supported",
         );
       }
-      const horizon = validateQuery(new URL(request.url));
-      const rows = await options.repository.loadLatest(horizon);
+      const { horizon, marketScope } = validateQuery(new URL(request.url));
+      const rows = await options.repository.loadLatest(horizon, marketScope);
       const snapshot = buildSnapshot(
         rows,
+        marketScope,
         options.now?.() ?? new Date(),
         options.staleHours ?? 72,
       );

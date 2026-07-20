@@ -5,6 +5,7 @@ import type {
   DecisionGateRow,
   JsonRecord,
   MarketPredictionRow,
+  MarketScope,
   PredictionRunRow,
   SecurityRow,
   SnapshotRepositoryContract,
@@ -41,11 +42,15 @@ export class SnapshotRepository implements SnapshotRepositoryContract {
     this.#restUrl = `${config.supabaseUrl.replace(/\/$/u, "")}/rest/v1`;
   }
 
-  async loadLatest(horizon: number): Promise<SnapshotRows | null> {
+  async loadLatest(
+    horizon: number,
+    marketScope: MarketScope,
+  ): Promise<SnapshotRows | null> {
     const runs = await this.#select<PredictionRunRow>("prediction_runs", {
       select:
-        "prediction_run_id,as_of_date,decision_at,horizon,model_bundle_version,feature_schema_hash,cost_profile_version,training_end_date,system_validation_status,source_dates,latest_available_at,candidate_count,watch_count,no_trade_count,hard_fail_count,created_at",
+        "prediction_run_id,as_of_date,decision_at,horizon,market_scope,model_bundle_version,feature_schema_hash,cost_profile_version,training_end_date,system_validation_status,source_dates,latest_available_at,candidate_count,watch_count,no_trade_count,hard_fail_count,created_at",
       horizon: `eq.${horizon}`,
+      market_scope: `eq.${marketScope}`,
       order: "decision_at.desc,prediction_run_id.desc",
       limit: "1",
     });

@@ -2,7 +2,7 @@
 
 > 2026-07-19 現況：`supabase/functions/prediction-snapshot` 已建立可部署的唯讀實作；在 GitHub Staging／Production workflow 實際發布且前端設定 base URL 前，`predictionApiBaseUrl` 仍為空。Watchlist 持久化尚未上線。UI 必須維持真實系統狀態，不得使用示例資料冒充回應。
 
-目前前端固定使用 `horizon=5`，契約版本為 `prediction-snapshot.v1`。後端應使用 `src.api.PredictionSnapshotOutput` 產生回應，避免自行拼接欄位。
+目前前端固定使用 `horizon=5`，並以 `market=TWSE|TPEX` 分別取得上市與上櫃資料集；契約版本為 `prediction-snapshot.v1`。缺省 `market` 時只查詢 `TWSE`，不得回傳跨市場混合資料。後端應使用 `src.api.PredictionSnapshotOutput` 產生回應，避免自行拼接欄位。
 
 ## 公開設定
 
@@ -32,6 +32,13 @@ Function 以 server-side `SUPABASE_SERVICE_ROLE_KEY` 讀取私有 schema，該 k
 
 - `horizon=5`
 
+市場 query：
+
+- `market=TWSE`：上市資料集。
+- `market=TPEX`：上櫃資料集。
+- 未提供時向後相容為 `TWSE`。
+- `ALL`、空值、重複參數或其他值回 `422 UNSUPPORTED_MARKET`。
+
 允許的研究設定 query：
 
 - `commission_discount`
@@ -56,6 +63,7 @@ Function 以 server-side `SUPABASE_SERVICE_ROLE_KEY` 讀取私有 schema，該 k
 | `as_of_date` | 資料交易日，ISO 日期 |
 | `decision_at` | 含時區的決策時間 |
 | `horizon` | 第一版固定 `5` |
+| `market_scope` | 本快照唯一市場範圍：`TWSE` 或 `TPEX`；舊版未提供時前端僅可視為 `TWSE` |
 | `system_status` | `PASS`、`RESEARCH_ONLY` 或 `FAIL` |
 | `stale` | 資料是否逾期 |
 | `data_quality_hard_fail` | 整體快照是否有系統級關鍵資料失敗；個股 hard fail 僅列於 `excluded` |
@@ -69,10 +77,11 @@ Function 以 server-side `SUPABASE_SERVICE_ROLE_KEY` 讀取私有 schema，該 k
 | `cost_profile_version` | 成本契約版本 |
 | `validation` | Walk-forward、holdout、排名、校準與成本敏感度摘要 |
 
-若資料庫尚無任何 `prediction_run`，端點回 `200` 與真實空快照：
+若指定市場尚無任何 `prediction_run`，端點回 `200` 與該市場的真實空快照：
 `system_status=RESEARCH_ONLY`、`reason_codes=["NO_PREDICTION_SNAPSHOT"]`、
 `predictions/watchlist/excluded=[]`，且未知日期與版本欄位為 `null`。不得以目前日期
-或 placeholder 代替。
+或 placeholder 代替，也不得以另一市場的快照 fallback。若 run、prediction、security
+或 market prediction 的市場互相衝突，回 `409 PREDICTION_MARKET_SCOPE_MISMATCH`。
 
 Validation 不以「同版本最新一筆」任意拼接。只有同一
 `model_bundle_version + horizon`、`completed_at <= prediction_run.created_at`，且查詢
@@ -97,19 +106,19 @@ Validation 不以「同版本最新一筆」任意拼接。只有同一
 
 只有完整且通過 `PredictionSnapshotOutput` 驗證的 `PASS` 回應，才會在前端顯示正式候選。缺欄、錯誤 horizon、非單調分位數、錯誤機率、未知契約版本或缺少稽核欄位都會轉為 `FAIL`，不會以舊資料補上。
 
-## PUT watchlist/{symbol}
+## PUT watchlist/{market}/{symbol}
 
 用途：將股票加入目前使用者的自選股。
 
 此端點目前尚未部署；前端按鈕不得在後端缺席時模擬儲存成功。
 
 ```json
-{"symbol":"股票代號"}
+{"market":"TWSE","symbol":"股票代號"}
 ```
 
 必須驗證 `Authorization: Bearer <Supabase access token>`，以 JWT 的 `sub` 作為資料擁有者，不得接受 body 內的 user id。成功可回傳 JSON，或使用 `204 No Content`。
 
-## DELETE watchlist/{symbol}
+## DELETE watchlist/{market}/{symbol}
 
 用途：將股票移出目前使用者的自選股。必須使用相同的 Supabase JWT 驗證與資料擁有者限制。成功可回傳 JSON，或使用 `204 No Content`。
 
@@ -137,6 +146,7 @@ Validation 不以「同版本最新一筆」任意拼接。只有同一
 1. 後端以 `PredictionSnapshotOutput.to_dict()` 產生一份真實快照。
 2. 確認 `api_contract_version`、日期、horizon、模型版本與成本版本一致。
 3. 確認所有 `available_at <= decision_at`，hard fail 不會成為 `CANDIDATE`。
-4. 設定 `predictionApiBaseUrl`。
-5. 以未登入、已登入、逾時、401、錯誤 JSON、`RESEARCH_ONLY`、`FAIL` 與 `PASS` 各測一次。
-6. 確認總覽、候選、個股詳情及自選股都顯示相同 `as_of_date` 與模型版本。
+4. 分別驗證 `TWSE` 與 `TPEX`，確認任一市場為空或錯誤時不會回退或污染另一市場。
+5. 設定 `predictionApiBaseUrl`。
+6. 以未登入、已登入、逾時、401、錯誤 JSON、`RESEARCH_ONLY`、`FAIL` 與 `PASS` 各測一次。
+7. 確認同一市場的總覽、候選、個股詳情及自選股都顯示相同 `as_of_date` 與模型版本。

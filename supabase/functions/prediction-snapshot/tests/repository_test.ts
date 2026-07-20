@@ -19,10 +19,14 @@ Deno.test("repository keeps the service role key server-side", async () => {
     serviceRoleKey: secret,
   }, fakeFetch);
 
-  assertEquals(await repository.loadLatest(5), null);
+  assertEquals(await repository.loadLatest(5, "TPEX"), null);
   assertEquals(requests.length, 1);
   assertEquals(requests[0].headers.get("apikey"), secret);
   assertEquals(requests[0].headers.get("Accept-Profile"), "market_data");
+  assertEquals(
+    new URL(requests[0].url).searchParams.get("market_scope"),
+    "eq.TPEX",
+  );
   assert(
     !requests[0].url.includes(secret),
     "service role key must not enter the URL",
@@ -67,7 +71,7 @@ Deno.test("repository only links one validation completed before the prediction 
     serviceRoleKey: "server-only-service-role-key",
   }, fakeFetch);
 
-  const rows = await repository.loadLatest(5);
+  const rows = await repository.loadLatest(5, "TWSE");
   assert(rows !== null, "prediction run must be loaded");
   assertEquals(rows.validationLinkStatus, "AMBIGUOUS");
   assertEquals(rows.validationRun, null);
@@ -78,6 +82,14 @@ Deno.test("repository only links one validation completed before the prediction 
   const query = new URL(validationRequest.url).searchParams;
   assertEquals(query.get("completed_at"), "lte.2026-07-18T02:00:00+00:00");
   assertEquals(query.get("limit"), "2");
+  const runRequest = requests.find((request) =>
+    new URL(request.url).pathname.endsWith("/prediction_runs")
+  );
+  assert(runRequest, "prediction run query must be issued");
+  assertEquals(
+    new URL(runRequest.url).searchParams.get("market_scope"),
+    "eq.TWSE",
+  );
 });
 
 function validationRow(validationRunId: number, completedAt: string) {

@@ -83,6 +83,13 @@ declare
   v_twse_row jsonb;
   v_tpex_row jsonb;
   v_run jsonb;
+  v_base_decision_at timestamptz;
+  v_tpex_old_decision_at timestamptz;
+  v_tpex_stale_decision_at timestamptz;
+  v_base_as_of_date date;
+  v_tpex_old_as_of_date date;
+  v_tpex_stale_as_of_date date;
+  v_training_end_date date;
 begin
   select security_id
     into strict v_twse_security_id
@@ -93,6 +100,25 @@ begin
     into strict v_tpex_security_id
   from market_data.securities
   where market = 'TPEX' and symbol = '8811';
+
+  -- Always validate after the newest persisted 5-day stream. Fixed fixture
+  -- dates become stale as soon as Production has a newer research snapshot.
+  select coalesce(max(run.decision_at), transaction_timestamp())
+      + interval '3 days'
+    into v_base_decision_at
+  from market_data.prediction_runs as run
+  where run.horizon = 5
+    and run.market_scope in ('TWSE', 'TPEX');
+
+  v_tpex_old_decision_at := v_base_decision_at - interval '1 day';
+  v_tpex_stale_decision_at := v_base_decision_at - interval '2 days';
+  v_base_as_of_date :=
+    (v_base_decision_at at time zone 'Asia/Taipei')::date;
+  v_tpex_old_as_of_date :=
+    (v_tpex_old_decision_at at time zone 'Asia/Taipei')::date;
+  v_tpex_stale_as_of_date :=
+    (v_tpex_stale_decision_at at time zone 'Asia/Taipei')::date;
+  v_training_end_date := v_tpex_stale_as_of_date - 1;
 
   v_twse_row := jsonb_build_object(
     'security_id', v_twse_security_id,
@@ -136,21 +162,21 @@ begin
 
   -- Existing publishers omit market_scope. That exact payload remains TWSE.
   v_run := jsonb_build_object(
-    'as_of_date', '2026-01-10',
-    'decision_at', '2026-01-10T17:00:00+08:00',
+    'as_of_date', v_base_as_of_date,
+    'decision_at', v_base_decision_at,
     'horizon', 5,
     'model_bundle_version', 'market-scope-local-v1',
     'feature_schema_hash', repeat('a', 64),
     'benchmark_versions', jsonb_build_object('TWSE', 'local'),
     'cost_profile_version', 'prediction-scope-local-v1',
-    'training_end_date', '2025-12-31',
+    'training_end_date', v_training_end_date,
     'system_validation_status', 'RESEARCH_ONLY',
     'source_dates', jsonb_build_object(
       'prediction_scope', 'RETROSPECTIVE_RESEARCH_INFERENCE',
       'feature_snapshot', 'twse-local',
       'snapshot_sha256', repeat('1', 64)
     ),
-    'latest_available_at', '2026-01-10T16:00:00+08:00',
+    'latest_available_at', v_base_decision_at - interval '1 hour',
     'candidate_count', 0,
     'watch_count', 0,
     'no_trade_count', 1,
@@ -168,8 +194,8 @@ begin
   -- TPEX is explicit and can publish an older date than TWSE because stale
   -- ordering and the advisory lock are isolated by market_scope+horizon.
   v_run := v_run || jsonb_build_object(
-    'as_of_date', '2026-01-09',
-    'decision_at', '2026-01-09T17:00:00+08:00',
+    'as_of_date', v_tpex_old_as_of_date,
+    'decision_at', v_tpex_old_decision_at,
     'market_scope', 'TPEX',
     'benchmark_versions', jsonb_build_object('TPEX', 'local'),
     'source_dates', jsonb_build_object(
@@ -177,7 +203,7 @@ begin
       'feature_snapshot', 'tpex-local-old',
       'snapshot_sha256', repeat('2', 64)
     ),
-    'latest_available_at', '2026-01-09T16:00:00+08:00'
+    'latest_available_at', v_tpex_old_decision_at - interval '1 hour'
   );
   v_result := market_data.publish_research_prediction_snapshot(
     v_run,
@@ -187,14 +213,14 @@ begin
 
   -- The old identity may coexist in two markets.
   v_run := v_run || jsonb_build_object(
-    'as_of_date', '2026-01-10',
-    'decision_at', '2026-01-10T17:00:00+08:00',
+    'as_of_date', v_base_as_of_date,
+    'decision_at', v_base_decision_at,
     'source_dates', jsonb_build_object(
       'prediction_scope', 'RETROSPECTIVE_RESEARCH_INFERENCE',
       'feature_snapshot', 'tpex-local-same-identity',
       'snapshot_sha256', repeat('3', 64)
     ),
-    'latest_available_at', '2026-01-10T16:00:00+08:00'
+    'latest_available_at', v_base_decision_at - interval '1 hour'
   );
   v_result := market_data.publish_research_prediction_snapshot(
     v_run,
@@ -231,14 +257,14 @@ begin
   begin
     perform market_data.publish_research_prediction_snapshot(
       v_run || jsonb_build_object(
-        'as_of_date', '2026-01-08',
-        'decision_at', '2026-01-08T17:00:00+08:00',
+        'as_of_date', v_tpex_stale_as_of_date,
+        'decision_at', v_tpex_stale_decision_at,
         'source_dates', jsonb_build_object(
           'prediction_scope', 'RETROSPECTIVE_RESEARCH_INFERENCE',
           'feature_snapshot', 'tpex-local-stale',
           'snapshot_sha256', repeat('4', 64)
         ),
-        'latest_available_at', '2026-01-08T16:00:00+08:00'
+        'latest_available_at', v_tpex_stale_decision_at - interval '1 hour'
       ),
       jsonb_build_array(v_tpex_row)
     );
@@ -284,7 +310,7 @@ begin
       0.1,
       0.5,
       'local-v1',
-      date '2025-12-31'
+      v_training_end_date
     );
     raise exception 'market child scope mismatch was accepted';
   exception

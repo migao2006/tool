@@ -21,6 +21,9 @@ $guard$;
 drop function market_data.publish_research_prediction_snapshot(jsonb, jsonb);
 alter function
 market_data.publish_research_prediction_snapshot_twse_v1(jsonb, jsonb)
+reset "plpgsql_check.mode";
+alter function
+market_data.publish_research_prediction_snapshot_twse_v1(jsonb, jsonb)
 rename to publish_research_prediction_snapshot;
 
 revoke all on function market_data.publish_research_prediction_snapshot(

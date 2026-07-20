@@ -35,6 +35,14 @@ def test_tpex_research_workflow_is_manual_and_local_only() -> None:
 
     assert "workflow_dispatch:" in workflow
     assert "TPEX_RESEARCH_MODEL_ENABLED" in workflow
+    assert "actions/github-script@v8" in workflow
+    assert "getWorkflowRun" in workflow
+    assert "build-tpex-prepared-research-dataset.yml" in workflow
+    assert 'run.head_branch !== "main"' in workflow
+    assert 'run.conclusion !== "success"' in workflow
+    assert "compareCommitsWithBasehead" in workflow
+    assert "listWorkflowRunArtifacts" in workflow
+    assert "TPEX_PREPARED_SOURCE_RUN_SHA" in workflow
     assert "tpex-prepared-research-${{ inputs.prepared_run_id }}" in workflow
     assert "scripts.run_tpex_research_model" in workflow
     assert "SUPABASE_SERVICE_ROLE_KEY" not in workflow

@@ -4,6 +4,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from src.config.loader import load_mvp_config
 from src.core.research_prediction_contract import (
@@ -20,6 +21,14 @@ from src.pipeline.contracts import (
     PipelineStatus,
 )
 from src.pipeline.tpex_research_runner import TpexPriceResearchRunner
+from src.pipeline.research_run_provenance import (
+    ResearchRunProvenanceError,
+    research_run_provenance,
+)
+from src.pipeline.twse_prepared_research_contracts import (
+    PreparedResearchArtifactManifest,
+    prepared_dataset_snapshot_hash_for_market,
+)
 from src.pipeline.twse_research_evaluation_contracts import (
     DirectionEvaluation,
     QuantileEvaluation,
@@ -32,6 +41,51 @@ from src.pipeline.twse_research_prediction_publisher import (
 
 
 UTC = timezone.utc
+
+
+def _prepared_source_metadata() -> dict[str, object]:
+    feature_artifact = "1" * 64
+    daily_snapshot = "2" * 64
+    identity_snapshot = "3" * 64
+    benchmark_snapshot = "4" * 64
+    calendar_snapshot = "5" * 64
+    feature_dataset_snapshot = "6" * 64
+    label_version = "tpex-research-unadjusted-open-close-5d-v1"
+    cost_profile_version = "tw_stock_swing_v1:base_cost"
+    prepared_snapshot = prepared_dataset_snapshot_hash_for_market(
+        market="TPEX",
+        feature_artifact_sha256=feature_artifact,
+        daily_archive_snapshot_sha256=daily_snapshot,
+        current_identity_snapshot_sha256=identity_snapshot,
+        benchmark_archive_snapshot_sha256=benchmark_snapshot,
+        calendar_snapshot_sha256=calendar_snapshot,
+        feature_dataset_snapshot_id=feature_dataset_snapshot,
+        label_version=label_version,
+        cost_profile_version=cost_profile_version,
+        horizon=5,
+    )
+    manifest = PreparedResearchArtifactManifest(
+        parquet_sha256="a" * 64,
+        schema_sha256="7" * 64,
+        byte_size=1,
+        row_count=2,
+        prepared_dataset_snapshot_sha256=prepared_snapshot,
+        dataset_snapshot_id=feature_dataset_snapshot,
+        daily_archive_snapshot_sha256=daily_snapshot,
+        current_identity_snapshot_sha256=identity_snapshot,
+        feature_artifact_sha256=feature_artifact,
+        calendar_snapshot_sha256=calendar_snapshot,
+        source_hash="8" * 64,
+        benchmark_snapshot_sha256=benchmark_snapshot,
+        benchmark_id="TPEX_PRICE_INDEX",
+        benchmark_version="tpex-price-index-v1",
+        feature_schema_hash=TPEX_PRICE_VOLUME_FEATURE_SCHEMA_HASH,
+        label_version=label_version,
+        cost_profile_version=cost_profile_version,
+        market="TPEX",
+        artifact_version="tpex-prepared-research-5d.v1",
+    )
+    return {"prepared_artifact_manifest": manifest.to_dict()}
 
 
 def _frame(*, market: str = "TPEX") -> pd.DataFrame:
@@ -88,6 +142,7 @@ def test_tpex_runner_accepts_venue_schema_before_history_gate(tmp_path: Path) ->
             records=_frame(),
             source_uri="memory://tpex-research",
             source_hash="a" * 64,
+            source_metadata=_prepared_source_metadata(),
         ),
         _context(tmp_path),
     )
@@ -104,11 +159,79 @@ def test_tpex_runner_rejects_twse_rows(tmp_path: Path) -> None:
             records=_frame(market="TWSE"),
             source_uri="memory://wrong-market",
             source_hash="a" * 64,
+            source_metadata=_prepared_source_metadata(),
         ),
         _context(tmp_path),
     )
 
     assert result.reason_codes == ("TPEX_RESEARCH_DATASET_INVALID",)
+
+
+def test_tpex_runner_requires_full_prepared_provenance(tmp_path: Path) -> None:
+    result = TpexPriceResearchRunner().train(
+        PipelineBatch(
+            records=_frame(),
+            source_uri="memory://missing-prepared-provenance",
+            source_hash="a" * 64,
+        ),
+        _context(tmp_path),
+    )
+
+    assert result.reason_codes == ("PREPARED_ARTIFACT_PROVENANCE_MISSING",)
+
+
+def test_github_run_requires_verified_source_run_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GITHUB_SHA", "f" * 40)
+    monkeypatch.delenv("TPEX_PREPARED_SOURCE_RUN_ID", raising=False)
+    monkeypatch.delenv("TPEX_PREPARED_SOURCE_RUN_SHA", raising=False)
+    batch = PipelineBatch(
+        records=_frame(),
+        source_uri="memory://github-provenance",
+        source_hash="a" * 64,
+        source_metadata=_prepared_source_metadata(),
+    )
+
+    with pytest.raises(ResearchRunProvenanceError) as error:
+        research_run_provenance(batch, expected_market="TPEX")
+
+    assert error.value.reason_code == "PREPARED_SOURCE_RUN_PROVENANCE_MISSING"
+
+
+def test_github_run_retains_all_prepared_snapshot_hashes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GITHUB_SHA", "f" * 40)
+    monkeypatch.setenv("TPEX_PREPARED_SOURCE_RUN_ID", "29722499185")
+    monkeypatch.setenv("TPEX_PREPARED_SOURCE_RUN_SHA", "e" * 40)
+    batch = PipelineBatch(
+        records=_frame(),
+        source_uri="memory://github-provenance",
+        source_hash="a" * 64,
+        source_metadata=_prepared_source_metadata(),
+    )
+
+    provenance = research_run_provenance(batch, expected_market="TPEX").to_dict()
+    manifest = provenance["prepared_artifact_manifest"]
+
+    assert isinstance(manifest, dict)
+    assert provenance["git_commit"] == "f" * 40
+    assert provenance["git_commit_source"] == "GITHUB_SHA"
+    assert provenance["source_prepared_run_id"] == "29722499185"
+    assert provenance["source_prepared_run_sha"] == "e" * 40
+    for field_name in (
+        "prepared_dataset_snapshot_sha256",
+        "daily_archive_snapshot_sha256",
+        "current_identity_snapshot_sha256",
+        "calendar_snapshot_sha256",
+        "benchmark_snapshot_sha256",
+        "feature_artifact_sha256",
+    ):
+        assert isinstance(manifest[field_name], str)
+        assert len(manifest[field_name]) == 64
 
 
 def test_fold_prediction_preserves_tpex_market() -> None:

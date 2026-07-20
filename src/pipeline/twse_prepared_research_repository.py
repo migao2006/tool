@@ -166,6 +166,7 @@ class PreparedResearchArtifactRepository:
             records=dataset.frame,
             source_uri=self.parquet_path.resolve().as_uri(),
             source_hash=manifest.parquet_sha256,
+            source_metadata={"prepared_artifact_manifest": manifest.to_dict()},
         )
 
 

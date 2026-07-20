@@ -35,8 +35,8 @@ class WalkForwardBlocked(RuntimeError):
         metrics: dict[str, object] | None = None,
     ) -> None:
         super().__init__(reason_code)
-        self.reason_code = reason_code
-        self.metrics = metrics or {}
+        self.reason_code: str = reason_code
+        self.metrics: dict[str, object] = metrics or {}
 
 
 @dataclass(frozen=True)

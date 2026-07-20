@@ -16,6 +16,11 @@ from .contracts import (
     PipelineStatus,
 )
 from .research_dataset import PreparedResearchDataset, ResearchDatasetError
+from .research_run_provenance import (
+    ResearchRunProvenance,
+    ResearchRunProvenanceError,
+    research_run_provenance,
+)
 from .twse_research_prediction_publisher import TwseResearchPredictionPublisher
 from .venue_research_bundle_contract import ResearchBundlePublisher
 from .venue_research_cost import (
@@ -35,10 +40,23 @@ class VenuePriceResearchRunner:
         *,
         bundle_publisher: ResearchBundlePublisher | None = None,
     ) -> None:
-        self.profile = profile
-        self.bundle_publisher = bundle_publisher
+        self.profile: VenuePriceResearchProfile = profile
+        self.bundle_publisher: ResearchBundlePublisher | None = bundle_publisher
 
     def train(self, batch: PipelineBatch, context: PipelineContext) -> PipelineResult:
+        run_provenance: ResearchRunProvenance | None = None
+        try:
+            run_provenance = research_run_provenance(
+                batch,
+                expected_market=self.profile.market,
+            )
+        except ResearchRunProvenanceError as error:
+            if self.profile.require_prepared_run_provenance:
+                return self._result(
+                    batch,
+                    context,
+                    reason_codes=(error.reason_code,),
+                )
         try:
             dataset = PreparedResearchDataset.from_frame(
                 batch.records,
@@ -94,6 +112,8 @@ class VenuePriceResearchRunner:
             )
 
         metrics = evaluated.metrics
+        if run_provenance is not None:
+            metrics["research_run_provenance"] = run_provenance.to_dict()
         library_versions = {
             "lightgbm": version("lightgbm"),
             "scikit-learn": version("scikit-learn"),
@@ -146,6 +166,11 @@ class VenuePriceResearchRunner:
                 "quantile_model": "LightGBM quantile 0.10/0.50/0.90",
                 "random_seed": context.config.rank.seed,
                 "library_versions": library_versions,
+                "research_run_provenance": (
+                    run_provenance.to_dict()
+                    if run_provenance is not None
+                    else None
+                ),
             },
             cost_metadata=research_cost_metadata(context, cost_identity),
             validation=metrics,
@@ -161,7 +186,13 @@ class VenuePriceResearchRunner:
             published.snapshot.as_of_date.isoformat()
         )
         metrics["research_prediction_count"] = len(published.snapshot.predictions)
-        report_path = self._write_report(batch, context, dataset, metrics)
+        report_path = self._write_report(
+            batch,
+            context,
+            dataset,
+            metrics,
+            run_provenance=run_provenance,
+        )
         artifacts.update(
             {
                 "walk_forward_report": report_path.resolve().as_uri(),
@@ -206,6 +237,8 @@ class VenuePriceResearchRunner:
         context: PipelineContext,
         dataset: PreparedResearchDataset,
         metrics: dict[str, object],
+        *,
+        run_provenance: ResearchRunProvenance | None,
     ) -> Path:
         target = self._artifact_path(batch, context, "price", "json")
         payload = {
@@ -216,6 +249,9 @@ class VenuePriceResearchRunner:
             "source_hash": batch.source_hash,
             "feature_schema_hash": self.profile.feature_schema_hash,
             "provenance": dataset.provenance,
+            "research_run_provenance": (
+                run_provenance.to_dict() if run_provenance is not None else None
+            ),
             "metrics": metrics,
         }
         _ = target.write_text(

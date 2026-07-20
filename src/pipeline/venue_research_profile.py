@@ -20,6 +20,7 @@ class VenuePriceResearchProfile:
     dataset_invalid_reason_code: str
     artifact_stem: str
     bundle_unavailable_reason_code: str | None = None
+    require_prepared_run_provenance: bool = False
 
     def __post_init__(self) -> None:
         if self.market not in {"TWSE", "TPEX"}:

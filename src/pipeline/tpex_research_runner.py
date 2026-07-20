@@ -25,6 +25,7 @@ TPEX_PRICE_RESEARCH_PROFILE = VenuePriceResearchProfile(
     dataset_invalid_reason_code="TPEX_RESEARCH_DATASET_INVALID",
     artifact_stem="tpex",
     bundle_unavailable_reason_code="TPEX_RESEARCH_MODEL_BUNDLE_NOT_IMPLEMENTED",
+    require_prepared_run_provenance=True,
 )
 
 

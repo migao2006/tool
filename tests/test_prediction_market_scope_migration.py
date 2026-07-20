@@ -90,6 +90,16 @@ def test_market_scope_functions_are_security_invoker_and_service_role_only() -> 
 def test_validation_covers_market_isolation_upsert_stale_and_privileges() -> None:
     sql = read_lower(VALIDATION)
 
+    assert "coalesce(max(run.decision_at), transaction_timestamp())" in sql
+    assert "+ interval '3 days'" in sql
+    assert "where run.horizon = 5" in sql
+    assert "v_tpex_old_decision_at := v_base_decision_at - interval '1 day'" in sql
+    assert "v_tpex_stale_decision_at := v_base_decision_at - interval '2 days'" in sql
+    assert "v_training_end_date := v_tpex_stale_as_of_date - 1" in sql
+    assert "2026-01-10" not in sql
+    assert "2026-01-09" not in sql
+    assert "2026-01-08" not in sql
+    assert "2025-12-31" not in sql
     assert "legacy twse payload did not default to twse" in sql
     assert "tpex payload without explicit market_scope was accepted" in sql
     assert "older tpex snapshot was accepted" in sql

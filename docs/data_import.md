@@ -89,15 +89,20 @@ gate 仍應保持關閉。
 - 12 檔來源股票沒有產生完整 feature row；現行 audit 只有隔離列與不足歷史的彙總，沒有逐檔
   排除原因，不能把 891 檔誤稱為全部完成。
 - Artifact typed read-back、Parquet SHA-256 與 schema SHA-256 已驗證通過。
-- 本次分支新增 TPEX 官方月 OHLC 的獨立 queue／RPC、Parquet、immutable R2 read-back、CLI 與
-  GitHub Actions workflow；Local migration、validation、rollback 與 schema lint 已通過。
-  Production gate `TPEX_PRICE_INDEX_OHLC_BACKFILL_ENABLED` 仍應保持關閉，直到 migration 經
-  GitHub 發布並完成單月 smoke test。
-- 這份 OHLC 是櫃買價格指數，不是總報酬指數；Production 尚無 object，5 日標籤、模型與 UI
-  也尚未建立。
+- 已新增 TPEX 官方月 OHLC 的獨立 queue／RPC、Parquet、immutable R2 read-back、CLI 與 GitHub
+  Actions workflow；Local migration、validation、rollback 與 schema lint 已通過。截至
+  2026-07-20，Production 同契約已有 2018-04～2026-06 共 99 個 manifests／objects、2,006 列。
+- 這份 OHLC 是櫃買價格指數，不是總報酬指數。
+- 本次新增 `build-tpex-prepared-research-dataset.yml` 與 bounded CLI，只接受 `horizon=5`，並以
+  `TPEX_PREPARED_RESEARCH_DATASET_ENABLED` 控制。它會驗證 feature artifact、daily-bar／benchmark
+  manifest snapshot、R2 bytes、SHA-256、Parquet schema 與每列 lineage，再以相同
+  `t+1 open → 第 5 個交易日 close` 路徑輸出 read-back verified GitHub artifact。
+- TPEX session snapshot 暫由已驗證 benchmark rows 決定，明確保留
+  `TRADING_CALENDAR_DERIVED_FROM_BENCHMARK_RESEARCH_ONLY`；因此尚不能升級為正式 PIT 資料集，
+  也尚未建立模型或 UI 輸出。
 
-以上資料與程式均維持 `RESEARCH_ONLY`；完成 feature artifact 不等於完成 point-in-time、
-基準交易路徑、標籤或正式模型驗證。
+以上資料與程式均維持 `RESEARCH_ONLY`；完成 feature 或 prepared artifact 不等於完成
+point-in-time、正式交易日曆、公司行動、可交易性或模型驗收。
 
 上述程式、測試與 GitHub feature artifact 仍不等於正式訓練資料。真實標籤組裝仍必須同時提供原始可執行 OHLC、公司行動／停牌區間與
 交易成本設定；缺任一項時 fail closed，不發布模型績效。

@@ -146,12 +146,17 @@ v2 新增並驗證 `decision_close_price`，供每日推論依真實收盤價重
 - Parquet SHA-256 為 `7e12dac2707e7dea17559ffe6b69f74f08ae4790c712c52bd33de1564eb3da8b`，
   schema SHA-256 為 `a53d4976fb779f89054786e2f960d355f4f4426a90eb4a46eadce251c1c22dad`；
   feature schema 為 `b9fbc304b7cd22310b62b291953440d231a44d554c93021aaae62d154f9acf96`。
-- 本次分支已建立櫃買價格指數月 OHLC 的獨立 Parquet／R2 immutable archive、Supabase
-  queue／RPC、CLI 與 GitHub Actions workflow。Local 已通過完整 migration、validation、
-  rollback 再套用及 schema lint；正式環境 gate 仍關閉，Production 尚無 TPEX benchmark
-  object 或 manifest。
-- 這份基準固定標示為 `PRICE_INDEX_NOT_TOTAL_RETURN`，目前仍未建立 TPEX 5 日標籤、模型或
-  UI 輸出。
+- 已建立櫃買價格指數月 OHLC 的獨立 Parquet／R2 immutable archive、Supabase queue／RPC、CLI
+  與 GitHub Actions workflow。Local 已通過完整 migration、validation、rollback 再套用及
+  schema lint；截至 2026-07-20，Production 同契約已有 2018-04～2026-06 共 99 個 manifests／
+  objects、2,006 列 benchmark OHLC。
+- 這份基準固定標示為 `PRICE_INDEX_NOT_TOTAL_RETURN`。本次新增獨立、手動且 feature-gated 的
+  `horizon=5` prepared research dataset 管線：它會從 typed feature artifact、精確 TPEX daily-bar
+  manifests 與官方櫃買指數 manifests 讀取 R2，逐一驗證 object／hash／row lineage 後，才按相同
+  `t+1 open → 第 5 個交易日 close` 路徑建立研究標籤。
+- 管線輸出仍固定為 `RESEARCH_ONLY / MODEL_RESEARCH_ONLY`；交易日 session snapshot 是由已驗證
+  benchmark bytes 派生，不是獨立官方 calendar，且 PIT 身分、公司行動與完整交易狀態尚未驗證。
+  尚未執行正式 prepared artifact、模型或 UI 發布。
 
 上述完成的是可執行且 fail-closed 的研究管線，不是正式上櫃模型；系統狀態維持
 `RESEARCH_ONLY`。

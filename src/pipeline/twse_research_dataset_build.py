@@ -21,7 +21,10 @@ from src.data.research.twse_trading_calendar_snapshot import (
 from src.trading.transaction_cost import TransactionCostModel
 
 from .twse_feature_artifact_input import feature_artifact_assembly_input
-from .twse_prepared_research_contracts import prepared_dataset_snapshot_hash
+from .twse_prepared_research_contracts import (
+    prepared_dataset_snapshot_hash,
+    prepared_dataset_snapshot_hash_for_market,
+)
 from .twse_research_archive_inputs import (
     DAILY_BAR_FILTERS,
     TAIEX_OHLC_FILTERS,
@@ -75,11 +78,12 @@ class TwseResearchDatasetBuildResult:
         if any(len(value) != 64 for value in hashes):
             raise ValueError("research input snapshot SHA-256 is invalid")
         audit = self.assembly.audit
-        expected = prepared_dataset_snapshot_hash(
+        expected = prepared_dataset_snapshot_hash_for_market(
+            market=audit.market,
             feature_artifact_sha256=self.feature_artifact_sha256,
             daily_archive_snapshot_sha256=self.daily_archive_snapshot_sha256,
             current_identity_snapshot_sha256=self.current_identity_snapshot_sha256,
-            taiex_archive_snapshot_sha256=self.benchmark_snapshot_sha256,
+            benchmark_archive_snapshot_sha256=self.benchmark_snapshot_sha256,
             calendar_snapshot_sha256=self.calendar_snapshot_sha256,
             feature_dataset_snapshot_id=audit.dataset_snapshot_id,
             label_version=audit.label_version,
@@ -128,6 +132,9 @@ class TwseResearchDatasetBuildResult:
             "security_state_history_verified": False,
             "feature_point_in_time_verified": False,
         }
+
+
+ResearchDatasetBuildResult = TwseResearchDatasetBuildResult
 
 
 @final
@@ -238,4 +245,5 @@ __all__ = [
     "TwseResearchDatasetBuildError",
     "TwseResearchDatasetBuildResult",
     "TwseResearchDatasetBuilder",
+    "ResearchDatasetBuildResult",
 ]

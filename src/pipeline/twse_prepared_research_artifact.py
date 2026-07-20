@@ -1,4 +1,4 @@
-"""Write and read-back verify one TWSE prepared research Parquet artifact."""
+"""Write and read-back verify one venue-scoped prepared research artifact."""
 
 # pyright: reportAny=false, reportExplicitAny=false, reportMissingTypeStubs=false
 # pyright: reportUnknownArgumentType=false, reportUnknownLambdaType=false
@@ -15,8 +15,9 @@ from .twse_prepared_research_contracts import (
     PREPARED_ARTIFACT_VERSION,
     PreparedResearchArtifactError,
     PreparedResearchArtifactManifest,
+    artifact_version_for_market,
 )
-from .twse_research_dataset_build import TwseResearchDatasetBuildResult
+from .twse_research_dataset_build import ResearchDatasetBuildResult
 
 
 def _modules() -> tuple[Any, Any]:
@@ -44,13 +45,13 @@ def _schema_digest(schema: Any) -> str:
     return sha256(encoded).hexdigest()
 
 
-def _metadata(result: TwseResearchDatasetBuildResult) -> dict[bytes, bytes]:
+def _metadata(result: ResearchDatasetBuildResult) -> dict[bytes, bytes]:
     audit = result.assembly.audit
     return {
-        b"artifact.version": PREPARED_ARTIFACT_VERSION.encode(),
+        b"artifact.version": artifact_version_for_market(audit.market).encode(),
         b"system.status": b"RESEARCH_ONLY",
         b"usage.scope": b"MODEL_RESEARCH_ONLY",
-        b"market": b"TWSE",
+        b"market": audit.market.encode(),
         b"horizon": b"5",
         b"benchmark.path": b"T_PLUS_ONE_OPEN_TO_H_CLOSE",
         b"benchmark.semantics": b"PRICE_INDEX_NOT_TOTAL_RETURN",
@@ -77,9 +78,14 @@ def _metadata(result: TwseResearchDatasetBuildResult) -> dict[bytes, bytes]:
     }
 
 
-def _table_for_result(result: TwseResearchDatasetBuildResult) -> Any:
+def _table_for_result(result: ResearchDatasetBuildResult) -> Any:
     pa, _ = _modules()
-    dataset = PreparedResearchDataset.from_frame(result.assembly.prepared_rows)
+    audit = result.assembly.audit
+    dataset = PreparedResearchDataset.from_frame(
+        result.assembly.prepared_rows,
+        market=audit.market,
+        feature_schema_hash=audit.feature_schema_hash,
+    )
     frame = dataset.frame.copy()
     frame["reason_codes"] = frame["reason_codes"].map(
         lambda value: json.dumps(
@@ -130,7 +136,11 @@ def _digest(path: Path) -> tuple[str, int]:
     return digest.hexdigest(), size
 
 
-def _manifest(path: Path, table: Any, result: TwseResearchDatasetBuildResult) -> PreparedResearchArtifactManifest:
+def _manifest(
+    path: Path,
+    table: Any,
+    result: ResearchDatasetBuildResult,
+) -> PreparedResearchArtifactManifest:
     audit = result.assembly.audit
     digest, size = _digest(path)
     return PreparedResearchArtifactManifest(
@@ -155,6 +165,8 @@ def _manifest(path: Path, table: Any, result: TwseResearchDatasetBuildResult) ->
         feature_schema_hash=audit.feature_schema_hash,
         label_version=audit.label_version,
         cost_profile_version=audit.cost_profile_version,
+        market=audit.market,
+        artifact_version=artifact_version_for_market(audit.market),
     )
 
 
@@ -182,7 +194,10 @@ def _read_table(path: Path) -> Any:
         ) from error
 
 
-def _decoded_dataset(table: Any) -> PreparedResearchDataset:
+def _decoded_dataset(
+    table: Any,
+    expected: PreparedResearchArtifactManifest,
+) -> PreparedResearchDataset:
     frame = table.to_pandas()
     try:
         frame["reason_codes"] = frame["reason_codes"].map(
@@ -194,7 +209,11 @@ def _decoded_dataset(table: Any) -> PreparedResearchDataset:
             "Prepared research reason codes are invalid",
         ) from error
     try:
-        return PreparedResearchDataset.from_frame(frame)
+        return PreparedResearchDataset.from_frame(
+            frame,
+            market=expected.market,
+            feature_schema_hash=expected.feature_schema_hash,
+        )
     except ValueError as error:
         raise PreparedResearchArtifactError(
             "PREPARED_RESEARCH_ARTIFACT_ROWS_INVALID",
@@ -209,7 +228,7 @@ class PreparedResearchArtifactWriter:
     def write(
         self,
         path: str | Path,
-        result: TwseResearchDatasetBuildResult,
+        result: ResearchDatasetBuildResult,
     ) -> PreparedResearchArtifactManifest:
         output = Path(path)
         table = _table_for_result(result)
@@ -231,7 +250,7 @@ class PreparedResearchArtifactWriter:
                 "Prepared research bytes do not match their manifest",
             )
         table = _read_table(artifact_path)
-        dataset = _decoded_dataset(table)
+        dataset = _decoded_dataset(table, expected)
         observed_result_metadata = cast(dict[bytes, bytes], table.schema.metadata or {})
         expected_metadata = {
             b"artifact.version": expected.artifact_version.encode(),

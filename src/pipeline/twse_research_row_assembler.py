@@ -1,4 +1,4 @@
-"""Fail-closed assembly of one TWSE five-session research label row."""
+"""Fail-closed assembly of one venue-scoped five-session research label row."""
 
 # pyright: reportMissingTypeStubs=false, reportUnknownArgumentType=false
 
@@ -11,11 +11,6 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from src.features.twse_price_volume_schema import (
-    TWSE_PRICE_VOLUME_AVAILABILITY_MODES,
-    TWSE_PRICE_VOLUME_FEATURE_SCHEMA_HASH,
-    TWSE_RESEARCH_SCHEDULING_HINT_REASON,
-)
 from src.labels.direction_label import (
     NoTradeBandConfig,
     make_direction_label,
@@ -26,7 +21,6 @@ from src.trading.transaction_cost import TransactionCostModel
 from .twse_research_assembly_contracts import ResearchRowExclusion
 from .twse_research_assembly_inputs import (
     BenchmarkSeries,
-    FEATURE_INPUTS,
     EvidenceInterval,
     ResearchAssemblyInputError,
     aware_timestamp,
@@ -34,15 +28,20 @@ from .twse_research_assembly_inputs import (
     positive_number,
     reason_codes,
 )
+from .research_assembly_profile import (
+    ResearchAssemblyProfile,
+    TWSE_RESEARCH_ASSEMBLY_PROFILE,
+)
 
 
 HORIZON = 5
-LABEL_VERSION = "twse-research-unadjusted-open-close-5d-v1"
+LABEL_VERSION = TWSE_RESEARCH_ASSEMBLY_PROFILE.label_version
 TAIPEI = ZoneInfo("Asia/Taipei")
 
 
 @dataclass(frozen=True)
 class RowAssemblyContext:
+    profile: ResearchAssemblyProfile
     bars: pd.DataFrame
     duplicate_bar_keys: set[tuple[str, date]]
     benchmark: BenchmarkSeries
@@ -69,9 +68,13 @@ class RowAssemblyOutcome:
     scheduling_hint_used: bool
 
 
-def _feature_values(feature: dict[str, object], reasons: list[str]) -> dict[str, float]:
+def _feature_values(
+    feature: dict[str, object],
+    reasons: list[str],
+    profile: ResearchAssemblyProfile,
+) -> dict[str, float]:
     output: dict[str, float] = {}
-    for name in FEATURE_INPUTS:
+    for name in profile.feature_names:
         value = positive_number(feature[name]) if name == "adv20_ntd" else None
         if name != "adv20_ntd":
             try:
@@ -90,6 +93,7 @@ def _availability(
     feature: dict[str, object],
     decision_at: datetime,
     reasons: list[str],
+    profile: ResearchAssemblyProfile,
 ) -> tuple[datetime | None, datetime | None, str, bool, tuple[str, ...]]:
     mode = str(feature["availability_mode"])
     limitations = reason_codes(feature["research_limitation_reason_codes"])
@@ -107,7 +111,7 @@ def _availability(
         )
     except (ResearchAssemblyInputError, ValueError, TypeError):
         reasons.append("FEATURE_OBSERVED_AVAILABLE_AT_MISSING")
-    if mode not in TWSE_PRICE_VOLUME_AVAILABILITY_MODES:
+    if mode not in profile.availability_modes:
         reasons.append("FEATURE_AVAILABILITY_MODE_INVALID")
         return (
             effective_available_at,
@@ -132,7 +136,7 @@ def _availability(
             False,
             limitations,
         )
-    if TWSE_RESEARCH_SCHEDULING_HINT_REASON not in limitations:
+    if profile.scheduling_hint_reason not in limitations:
         reasons.append("SCHEDULING_HINT_LIMITATION_MISSING")
     if effective_available_at is not None and effective_available_at > decision_at:
         reasons.append("SCHEDULING_HINT_AFTER_DECISION")
@@ -183,8 +187,11 @@ def _path_reasons(
         for key in ((symbol, decision_date), *path_keys)
         if key in context.bars.index
     ]
-    if any(context.bars.loc[key, "market"] != "TWSE" for key in existing_keys):
-        reasons.append("TWSE_MARKET_REQUIRED")
+    if any(
+        context.bars.loc[key, "market"] != context.profile.market
+        for key in existing_keys
+    ):
+        reasons.append(f"{context.profile.market}_MARKET_REQUIRED")
     if decision_date in context.duplicate_benchmark_dates or any(
         session in context.duplicate_benchmark_dates for session in path_dates
     ):
@@ -234,9 +241,9 @@ def assemble_research_row(
     reasons: list[str] = []
     if (symbol, decision_date) in context.duplicate_feature_keys:
         reasons.append("DUPLICATE_FEATURE_ROW")
-    if str(feature["market"]).upper() != "TWSE":
-        reasons.append("TWSE_MARKET_REQUIRED")
-    if feature["feature_schema_hash"] != TWSE_PRICE_VOLUME_FEATURE_SCHEMA_HASH:
+    if str(feature["market"]).upper() != context.profile.market:
+        reasons.append(f"{context.profile.market}_MARKET_REQUIRED")
+    if feature["feature_schema_hash"] != context.profile.feature_schema_hash:
         reasons.append("FEATURE_SCHEMA_HASH_MISMATCH")
     if feature["hard_fail"]:
         feature_reasons = reason_codes(feature["hard_fail_reason_codes"])
@@ -262,8 +269,8 @@ def assemble_research_row(
         availability_basis,
         used_hint,
         feature_limitations,
-    ) = _availability(feature, decision_at, reasons)
-    values = _feature_values(feature, reasons)
+    ) = _availability(feature, decision_at, reasons, context.profile)
+    values = _feature_values(feature, reasons, context.profile)
     path_dates = _path_dates(decision_date, context, reasons)
     reasons.extend(
         _path_reasons(
@@ -347,7 +354,7 @@ def assemble_research_row(
         row_reasons += ("SCHEDULING_HINT_NOT_OFFICIAL_PIT",)
     prepared_row: dict[str, object] = {
         "symbol": symbol,
-        "market": "TWSE",
+        "market": context.profile.market,
         "horizon": HORIZON,
         "decision_date": decision_date,
         "decision_at": decision_at,
@@ -362,8 +369,8 @@ def assemble_research_row(
         "net_alpha": net_return - benchmark_return,
         "round_trip_cost_rate": cost_rate,
         "cost_profile_version": cost_version,
-        "feature_schema_hash": TWSE_PRICE_VOLUME_FEATURE_SCHEMA_HASH,
-        "label_version": LABEL_VERSION,
+        "feature_schema_hash": context.profile.feature_schema_hash,
+        "label_version": context.profile.label_version,
         "benchmark_id": context.benchmark_id,
         "benchmark_version": context.benchmark_version,
         "dataset_snapshot_id": context.dataset_snapshot_id,

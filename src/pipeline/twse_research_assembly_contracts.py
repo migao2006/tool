@@ -1,4 +1,4 @@
-"""Contracts for the conservative TWSE research-dataset assembly step."""
+"""Contracts for conservative venue-scoped research-dataset assembly."""
 
 # pyright: reportExplicitAny=false
 
@@ -66,8 +66,8 @@ class ResearchAssemblyAudit:
             raise ValueError(
                 "prepared and excluded counts must cover every feature row"
             )
-        if self.horizon != 5 or self.market != "TWSE":
-            raise ValueError("this assembler supports only TWSE horizon=5")
+        if self.horizon != 5 or self.market not in {"TWSE", "TPEX"}:
+            raise ValueError("this assembler supports only TWSE/TPEX horizon=5")
         if self.usage_scope != "MODEL_RESEARCH_ONLY":
             raise ValueError("assembled rows cannot be marked production eligible")
         if self.system_status != "RESEARCH_ONLY":
@@ -90,7 +90,7 @@ class ResearchAssemblyAudit:
 
 
 @dataclass(frozen=True)
-class TwseResearchAssemblyResult:
+class ResearchAssemblyResult:
     """Prepared pandas rows, fail-closed exclusions, and immutable audit summary."""
 
     prepared_rows: Any
@@ -98,8 +98,13 @@ class TwseResearchAssemblyResult:
     audit: ResearchAssemblyAudit
 
 
+# Backward-compatible public name used by the existing TWSE pipeline.
+TwseResearchAssemblyResult = ResearchAssemblyResult
+
+
 __all__ = [
     "ResearchAssemblyAudit",
+    "ResearchAssemblyResult",
     "ResearchRowExclusion",
     "TwseResearchAssemblyResult",
 ]

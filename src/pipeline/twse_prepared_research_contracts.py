@@ -1,4 +1,4 @@
-"""Frozen manifest contract for prepared TWSE research artifacts."""
+"""Frozen manifest contract for venue-scoped prepared research artifacts."""
 
 from __future__ import annotations
 
@@ -9,7 +9,65 @@ import re
 
 
 PREPARED_ARTIFACT_VERSION = "twse-prepared-research-5d.v1"
+TPEX_PREPARED_ARTIFACT_VERSION = "tpex-prepared-research-5d.v1"
+_ARTIFACT_VERSIONS = {
+    "TWSE": PREPARED_ARTIFACT_VERSION,
+    "TPEX": TPEX_PREPARED_ARTIFACT_VERSION,
+}
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
+
+
+def artifact_version_for_market(market: str) -> str:
+    try:
+        return _ARTIFACT_VERSIONS[market.strip().upper()]
+    except KeyError as error:
+        raise ValueError("prepared artifacts support only TWSE or TPEX") from error
+
+
+def prepared_dataset_snapshot_hash_for_market(
+    *,
+    market: str,
+    feature_artifact_sha256: str,
+    daily_archive_snapshot_sha256: str,
+    current_identity_snapshot_sha256: str,
+    benchmark_archive_snapshot_sha256: str,
+    calendar_snapshot_sha256: str,
+    feature_dataset_snapshot_id: str,
+    label_version: str,
+    cost_profile_version: str,
+    horizon: int,
+) -> str:
+    """Hash every versioned venue input that changes dataset meaning."""
+
+    normalized = market.strip().upper()
+    if normalized not in _ARTIFACT_VERSIONS:
+        raise ValueError("prepared dataset market is unsupported")
+    benchmark_key = (
+        "taiex_archive_snapshot_sha256"
+        if normalized == "TWSE"
+        else "tpex_archive_snapshot_sha256"
+    )
+    payload = {
+        "calendar_snapshot_sha256": calendar_snapshot_sha256,
+        "cost_profile_version": cost_profile_version,
+        "current_identity_snapshot_sha256": current_identity_snapshot_sha256,
+        "daily_archive_snapshot_sha256": daily_archive_snapshot_sha256,
+        "feature_artifact_sha256": feature_artifact_sha256,
+        "feature_dataset_snapshot_id": feature_dataset_snapshot_id,
+        "horizon": horizon,
+        "label_version": label_version,
+        "snapshot_contract": (
+            f"{normalized.lower()}-prepared-dataset-inputs.v1"
+        ),
+        benchmark_key: benchmark_archive_snapshot_sha256,
+    }
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    return sha256(encoded).hexdigest()
 
 
 def prepared_dataset_snapshot_hash(
@@ -26,25 +84,18 @@ def prepared_dataset_snapshot_hash(
 ) -> str:
     """Hash every versioned input that changes prepared-dataset meaning."""
 
-    payload = {
-        "calendar_snapshot_sha256": calendar_snapshot_sha256,
-        "cost_profile_version": cost_profile_version,
-        "current_identity_snapshot_sha256": current_identity_snapshot_sha256,
-        "daily_archive_snapshot_sha256": daily_archive_snapshot_sha256,
-        "feature_artifact_sha256": feature_artifact_sha256,
-        "feature_dataset_snapshot_id": feature_dataset_snapshot_id,
-        "horizon": horizon,
-        "label_version": label_version,
-        "snapshot_contract": "twse-prepared-dataset-inputs.v1",
-        "taiex_archive_snapshot_sha256": taiex_archive_snapshot_sha256,
-    }
-    encoded = json.dumps(
-        payload,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode()
-    return sha256(encoded).hexdigest()
+    return prepared_dataset_snapshot_hash_for_market(
+        market="TWSE",
+        feature_artifact_sha256=feature_artifact_sha256,
+        daily_archive_snapshot_sha256=daily_archive_snapshot_sha256,
+        current_identity_snapshot_sha256=current_identity_snapshot_sha256,
+        benchmark_archive_snapshot_sha256=taiex_archive_snapshot_sha256,
+        calendar_snapshot_sha256=calendar_snapshot_sha256,
+        feature_dataset_snapshot_id=feature_dataset_snapshot_id,
+        label_version=label_version,
+        cost_profile_version=cost_profile_version,
+        horizon=horizon,
+    )
 
 
 class PreparedResearchArtifactError(RuntimeError):
@@ -101,12 +152,12 @@ class PreparedResearchArtifactManifest:
             raise ValueError("prepared artifact byte and row counts must be positive")
         if (
             self.horizon != 5
-            or self.market != "TWSE"
+            or self.market not in _ARTIFACT_VERSIONS
             or self.benchmark_path != "T_PLUS_ONE_OPEN_TO_H_CLOSE"
             or self.benchmark_semantics != "PRICE_INDEX_NOT_TOTAL_RETURN"
             or self.usage_scope != "MODEL_RESEARCH_ONLY"
             or self.system_status != "RESEARCH_ONLY"
-            or self.artifact_version != PREPARED_ARTIFACT_VERSION
+            or self.artifact_version != artifact_version_for_market(self.market)
         ):
             raise ValueError("prepared artifact exceeds the research-only contract")
         text = (
@@ -118,11 +169,12 @@ class PreparedResearchArtifactManifest:
         )
         if any(not value.strip() for value in text):
             raise ValueError("prepared artifact provenance is incomplete")
-        expected_snapshot = prepared_dataset_snapshot_hash(
+        expected_snapshot = prepared_dataset_snapshot_hash_for_market(
+            market=self.market,
             feature_artifact_sha256=self.feature_artifact_sha256,
             daily_archive_snapshot_sha256=self.daily_archive_snapshot_sha256,
             current_identity_snapshot_sha256=self.current_identity_snapshot_sha256,
-            taiex_archive_snapshot_sha256=self.benchmark_snapshot_sha256,
+            benchmark_archive_snapshot_sha256=self.benchmark_snapshot_sha256,
             calendar_snapshot_sha256=self.calendar_snapshot_sha256,
             feature_dataset_snapshot_id=self.dataset_snapshot_id,
             label_version=self.label_version,
@@ -138,7 +190,10 @@ class PreparedResearchArtifactManifest:
 
 __all__ = [
     "PREPARED_ARTIFACT_VERSION",
+    "TPEX_PREPARED_ARTIFACT_VERSION",
     "PreparedResearchArtifactError",
     "PreparedResearchArtifactManifest",
+    "artifact_version_for_market",
     "prepared_dataset_snapshot_hash",
+    "prepared_dataset_snapshot_hash_for_market",
 ]

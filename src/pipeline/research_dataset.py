@@ -1,4 +1,4 @@
-"""Validated input contract for the TWSE five-day research trainer.
+"""Validated input contract for venue-scoped five-day research datasets.
 
 This module deliberately accepts only already assembled, auditable rows.  It
 does not read R2, Supabase, or provider APIs; those concerns remain in data
@@ -22,8 +22,8 @@ from typing import Any
 
 from src.features.twse_price_volume_schema import (
     TWSE_PRICE_VOLUME_FEATURE_NAMES,
-    TWSE_PRICE_VOLUME_FEATURE_SCHEMA_HASH,
 )
+from src.features.price_volume_schema import price_volume_feature_spec
 from src.validation.purged_walk_forward import LabeledObservation
 
 
@@ -93,7 +93,7 @@ def _date_series(series: Any, name: str) -> Any:
 
 @dataclass(frozen=True)
 class PreparedResearchDataset:
-    """A fail-closed TWSE-only frame plus its immutable feature contract."""
+    """A fail-closed single-venue frame plus its immutable feature contract."""
 
     frame: Any
     feature_names: tuple[str, ...]
@@ -105,6 +105,8 @@ class PreparedResearchDataset:
         *,
         feature_names: Sequence[str] = TWSE_PRICE_RESEARCH_FEATURES,
         horizon: int = 5,
+        market: str = "TWSE",
+        feature_schema_hash: str | None = None,
     ) -> "PreparedResearchDataset":
         try:
             import pandas as pd
@@ -175,9 +177,14 @@ class PreparedResearchDataset:
         horizons = pd.to_numeric(prepared["horizon"], errors="coerce")
         if horizons.isna().any() or not (horizons == horizon).all():
             raise ResearchDatasetError("prepared rows must all use horizon=5")
-        if not (prepared["market"].astype(str).str.upper() == "TWSE").all():
+        normalized_market = market.strip().upper()
+        if normalized_market not in {"TWSE", "TPEX"}:
+            raise ResearchDatasetError("research dataset market is unsupported")
+        if not (
+            prepared["market"].astype(str).str.upper() == normalized_market
+        ).all():
             raise ResearchDatasetError(
-                "the first research trainer accepts TWSE rows only"
+                f"prepared rows must belong to {normalized_market}"
             )
         if (
             prepared["symbol"].isna().any()
@@ -216,10 +223,12 @@ class PreparedResearchDataset:
                 raise ResearchDatasetError(
                     f"{name} must contain one non-empty batch value"
                 )
-        if (
-            prepared["feature_schema_hash"].iloc[0]
-            != TWSE_PRICE_VOLUME_FEATURE_SCHEMA_HASH
-        ):
+        expected_schema_hash = (
+            feature_schema_hash
+            if feature_schema_hash is not None
+            else price_volume_feature_spec(normalized_market).schema_hash
+        )
+        if prepared["feature_schema_hash"].iloc[0] != expected_schema_hash:
             raise ResearchDatasetError(
                 "feature_schema_hash does not match frozen schema"
             )

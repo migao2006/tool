@@ -151,3 +151,16 @@
 		border-top: 0.5px solid var(--separator-soft);
 	}
 }
+
+@media (max-width: 480px) {
+	.home-data-summary > div {
+		grid-template-columns: minmax(0, 1fr);
+		align-items: start;
+		gap: 3px;
+	}
+	.home-data-summary strong {
+		grid-row: auto;
+		grid-column: auto;
+		text-align: left;
+	}
+}

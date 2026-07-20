@@ -90,12 +90,13 @@
 
 .market-probabilities {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 5rem), 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(5rem, 1fr));
   gap: 7px;
   margin-top: 14px;
 }
 
 .market-probabilities > div {
+  min-width: 0;
   padding: 12px;
   border-radius: 12px;
   background: var(--surface-2);
@@ -120,6 +121,16 @@
 .decision-hero span { color: var(--muted); font-size: 0.7rem; }
 .decision-hero strong { max-width: 100%; overflow-wrap: anywhere; word-break: break-word; }
 .decision-hero code { max-width: 100%; color: var(--amber); font-size: 0.67rem; overflow-wrap: anywhere; word-break: break-word; }
+.decision-hero > .decision-reasons {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+}
+.decision-reasons code {
+  width: 100%;
+  min-width: 0;
+  white-space: normal;
+}
 .decision-hero dl { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; margin: 14px 0 0; }
 .decision-hero dl div { padding: 9px; border-radius: 10px; background: var(--surface-2); }
 .decision-hero dd { margin-top: 3px; text-align: left; }
@@ -137,10 +148,16 @@
 .decision-gates dl div { padding: 8px; border-radius: 9px; background: var(--surface-2); }
 .decision-gates dd { margin-top: 2px; text-align: left; }
 
-.detail-section-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 10px; }
-.detail-section-grid > .panel { min-width: 0; }
+.detail-section-grid {
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 10px;
+}
+.detail-section-grid > .panel { width: 100%; max-width: 100%; min-width: 0; }
 .detail-wide { grid-column: 1 / -1; }
-.quantile-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 5rem), 1fr)); gap: 7px; margin: 13px 0 0; }
+.quantile-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(5rem, 1fr)); gap: 7px; margin: 13px 0 0; }
 .quantile-fields div { min-width: 0; min-height: 68px; display: flex; flex-direction: column; justify-content: center; padding: 10px; border-radius: 11px; background: var(--surface-2); }
 .quantile-fields small { overflow-wrap: anywhere; word-break: break-word; }
 .quantile-fields dd { margin-top: 3px; text-align: left; }
@@ -167,12 +184,41 @@
   .wide-filter-grid { grid-template-columns: 1fr; }
   .filter-grid input,
   .filter-grid select { min-height: 44px; font-size: 1rem; }
-  .decision-hero > .decision-reasons {
-    flex-direction: column;
-    align-items: flex-start;
-  }
   .decision-hero dl { grid-template-columns: 1fr; }
   .inline-fields { grid-template-columns: 1fr; }
   .watch-filters { display: grid; overflow: visible; }
   .watch-filters button { min-width: 0; }
 }
+
+@media (max-width: 480px) {
+  [data-page="opportunities"] > .page-heading {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+  [data-page="opportunities"] > .page-heading > .date-badge {
+    width: 100%;
+    max-width: 100%;
+    justify-self: stretch;
+    text-align: left;
+  }
+  [data-page="home"] .overview-facts > div,
+  [data-page="stock"] .field-list > div,
+  [data-page="stock"] .audit-list > div {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+    gap: 3px;
+    padding: 8px 0;
+  }
+  [data-page="home"] .overview-facts dd,
+  [data-page="stock"] .field-list dd,
+  [data-page="stock"] .audit-list dd { text-align: left; }
+  [data-page="stock"] .panel-heading {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    justify-items: start;
+  }
+  [data-page="stock"] .decision-gates dl { grid-template-columns: minmax(0, 1fr); }
+}
+
+.candidate-filter-content :is(button, input, select) { min-height: 44px; }

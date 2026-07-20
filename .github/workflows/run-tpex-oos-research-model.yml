@@ -92,20 +92,23 @@ jobs:
               core.setFailed("prepared dataset run must contain one unexpired expected artifact");
               return;
             }
+            core.setOutput("run_id", String(runId));
             core.setOutput("head_sha", run.head_sha);
             core.setOutput("artifact_id", String(matches[0].id));
 
       - name: Download verified TPEX prepared artifact
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
-          name: tpex-prepared-research-${{ inputs.prepared_run_id }}
+          artifact-ids: ${{ steps.prepared-source.outputs.artifact_id }}
           path: inputs/prepared
+          merge-multiple: true
+          digest-mismatch: error
           github-token: ${{ github.token }}
-          run-id: ${{ inputs.prepared_run_id }}
+          run-id: ${{ steps.prepared-source.outputs.run_id }}
 
       - name: Run isolated purged walk-forward research
         env:
-          TPEX_PREPARED_SOURCE_RUN_ID: ${{ inputs.prepared_run_id }}
+          TPEX_PREPARED_SOURCE_RUN_ID: ${{ steps.prepared-source.outputs.run_id }}
           TPEX_PREPARED_SOURCE_RUN_SHA: ${{ steps.prepared-source.outputs.head_sha }}
         run: >-
           uv run python -m scripts.run_tpex_research_model

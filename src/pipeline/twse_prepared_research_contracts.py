@@ -15,6 +15,9 @@ _ARTIFACT_VERSIONS = {
     "TPEX": TPEX_PREPARED_ARTIFACT_VERSION,
 }
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_GIT_SHA = re.compile(r"^[0-9a-f]{40}$")
+_POSITIVE_INTEGER = re.compile(r"^[1-9][0-9]*$")
+_ARTIFACT_DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
 def artifact_version_for_market(market: str) -> str:
@@ -56,9 +59,7 @@ def prepared_dataset_snapshot_hash_for_market(
         "feature_dataset_snapshot_id": feature_dataset_snapshot_id,
         "horizon": horizon,
         "label_version": label_version,
-        "snapshot_contract": (
-            f"{normalized.lower()}-prepared-dataset-inputs.v1"
-        ),
+        "snapshot_contract": (f"{normalized.lower()}-prepared-dataset-inputs.v1"),
         benchmark_key: benchmark_archive_snapshot_sha256,
     }
     encoded = json.dumps(
@@ -107,6 +108,32 @@ class PreparedResearchArtifactError(RuntimeError):
 
 
 @dataclass(frozen=True)
+class FeatureArtifactSourceProvenance:
+    """Trusted GitHub identity of the feature artifact consumed by a build."""
+
+    run_id: str
+    run_sha: str
+    artifact_id: str
+    artifact_digest: str | None = None
+
+    def __post_init__(self) -> None:
+        if _POSITIVE_INTEGER.fullmatch(self.run_id) is None:
+            raise ValueError("feature source run_id must be a positive integer")
+        if _GIT_SHA.fullmatch(self.run_sha) is None:
+            raise ValueError("feature source run_sha must be a lowercase Git SHA")
+        if _POSITIVE_INTEGER.fullmatch(self.artifact_id) is None:
+            raise ValueError("feature source artifact_id must be a positive integer")
+        if (
+            self.artifact_digest is not None
+            and _ARTIFACT_DIGEST.fullmatch(self.artifact_digest) is None
+        ):
+            raise ValueError("feature source artifact_digest must be a SHA-256 digest")
+
+    def to_dict(self) -> dict[str, str | None]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
 class PreparedResearchArtifactManifest:
     parquet_sha256: str
     schema_sha256: str
@@ -132,6 +159,10 @@ class PreparedResearchArtifactManifest:
     usage_scope: str = "MODEL_RESEARCH_ONLY"
     system_status: str = "RESEARCH_ONLY"
     artifact_version: str = PREPARED_ARTIFACT_VERSION
+    feature_source_run_id: str | None = None
+    feature_source_run_sha: str | None = None
+    feature_source_artifact_id: str | None = None
+    feature_source_artifact_digest: str | None = None
 
     def __post_init__(self) -> None:
         hashes = (
@@ -169,6 +200,24 @@ class PreparedResearchArtifactManifest:
         )
         if any(not value.strip() for value in text):
             raise ValueError("prepared artifact provenance is incomplete")
+        feature_source_values = (
+            self.feature_source_run_id,
+            self.feature_source_run_sha,
+            self.feature_source_artifact_id,
+        )
+        if any(value is not None for value in feature_source_values) and any(
+            value is None for value in feature_source_values
+        ):
+            raise ValueError("prepared artifact feature source provenance is partial")
+        if self.feature_source_run_id is not None:
+            _ = FeatureArtifactSourceProvenance(
+                run_id=self.feature_source_run_id,
+                run_sha=self.feature_source_run_sha or "",
+                artifact_id=self.feature_source_artifact_id or "",
+                artifact_digest=self.feature_source_artifact_digest,
+            )
+        elif self.feature_source_artifact_digest is not None:
+            raise ValueError("feature artifact digest requires source identity")
         expected_snapshot = prepared_dataset_snapshot_hash_for_market(
             market=self.market,
             feature_artifact_sha256=self.feature_artifact_sha256,
@@ -191,6 +240,7 @@ class PreparedResearchArtifactManifest:
 __all__ = [
     "PREPARED_ARTIFACT_VERSION",
     "TPEX_PREPARED_ARTIFACT_VERSION",
+    "FeatureArtifactSourceProvenance",
     "PreparedResearchArtifactError",
     "PreparedResearchArtifactManifest",
     "artifact_version_for_market",

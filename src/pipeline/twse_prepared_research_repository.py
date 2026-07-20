@@ -16,6 +16,7 @@ from .contracts import PipelineBatch, PipelineMode
 from .repositories import DataSourceError
 from .twse_prepared_research_artifact import PreparedResearchArtifactWriter
 from .twse_prepared_research_contracts import (
+    FeatureArtifactSourceProvenance,
     PreparedResearchArtifactError,
     PreparedResearchArtifactManifest,
 )
@@ -76,32 +77,75 @@ def _manifest(
         )
     values = cast(Mapping[str, object], raw)
     expected_fields = {field.name for field in fields(PreparedResearchArtifactManifest)}
-    if set(values) != expected_fields:
+    optional_fields = {
+        "feature_source_run_id",
+        "feature_source_run_sha",
+        "feature_source_artifact_id",
+        "feature_source_artifact_digest",
+    }
+    required_fields = expected_fields.difference(optional_fields)
+    if not required_fields.issubset(values) or not set(values).issubset(
+        expected_fields
+    ):
         raise PreparedResearchArtifactSourceError(
             "PREPARED_RESEARCH_ARTIFACT_MANIFEST_INVALID",
             "Prepared research artifact manifest fields do not match the contract",
         )
     integer_fields = {"byte_size", "row_count", "horizon"}
-    if any(
-        not isinstance(values[name], int) or isinstance(values[name], bool)
-        for name in integer_fields
-    ) or any(
-        not isinstance(values[name], str)
-        for name in expected_fields.difference(integer_fields)
+    if (
+        any(
+            not isinstance(values[name], int) or isinstance(values[name], bool)
+            for name in integer_fields
+        )
+        or any(
+            not isinstance(values[name], str)
+            for name in required_fields.difference(integer_fields)
+        )
+        or any(
+            name in values
+            and values[name] is not None
+            and not isinstance(values[name], str)
+            for name in optional_fields
+        )
     ):
         raise PreparedResearchArtifactSourceError(
             "PREPARED_RESEARCH_ARTIFACT_MANIFEST_INVALID",
             "Prepared research artifact manifest types do not match the contract",
         )
     try:
-        return PreparedResearchArtifactManifest(
-            **dict(values)  # pyright: ignore[reportArgumentType]
+        normalized = dict(values)
+        for name in optional_fields:
+            _ = normalized.setdefault(name, None)
+        manifest = PreparedResearchArtifactManifest(
+            **normalized  # pyright: ignore[reportArgumentType]
         )
     except (TypeError, ValueError) as error:
         raise PreparedResearchArtifactSourceError(
             "PREPARED_RESEARCH_ARTIFACT_MANIFEST_INVALID",
             "Prepared research artifact manifest fails its frozen contract",
         ) from error
+    raw_feature_source = audit.get("feature_source_provenance")
+    if manifest.feature_source_run_id is not None:
+        expected_feature_source = FeatureArtifactSourceProvenance(
+            run_id=manifest.feature_source_run_id,
+            run_sha=manifest.feature_source_run_sha or "",
+            artifact_id=manifest.feature_source_artifact_id or "",
+            artifact_digest=manifest.feature_source_artifact_digest,
+        ).to_dict()
+        if (
+            not isinstance(raw_feature_source, Mapping)
+            or dict(raw_feature_source) != expected_feature_source
+        ):
+            raise PreparedResearchArtifactSourceError(
+                "PREPARED_RESEARCH_ARTIFACT_AUDIT_INVALID",
+                "Prepared feature source provenance does not match its manifest",
+            )
+    elif raw_feature_source is not None:
+        raise PreparedResearchArtifactSourceError(
+            "PREPARED_RESEARCH_ARTIFACT_AUDIT_INVALID",
+            "Prepared feature source provenance has no manifest identity",
+        )
+    return manifest
 
 
 @final

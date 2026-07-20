@@ -13,6 +13,7 @@ from typing import Any, cast, final
 from .research_dataset import PreparedResearchDataset
 from .twse_prepared_research_contracts import (
     PREPARED_ARTIFACT_VERSION,
+    FeatureArtifactSourceProvenance,
     PreparedResearchArtifactError,
     PreparedResearchArtifactManifest,
     artifact_version_for_market,
@@ -45,9 +46,12 @@ def _schema_digest(schema: Any) -> str:
     return sha256(encoded).hexdigest()
 
 
-def _metadata(result: ResearchDatasetBuildResult) -> dict[bytes, bytes]:
+def _metadata(
+    result: ResearchDatasetBuildResult,
+    feature_source: FeatureArtifactSourceProvenance | None,
+) -> dict[bytes, bytes]:
     audit = result.assembly.audit
-    return {
+    metadata = {
         b"artifact.version": artifact_version_for_market(audit.market).encode(),
         b"system.status": b"RESEARCH_ONLY",
         b"usage.scope": b"MODEL_RESEARCH_ONLY",
@@ -76,9 +80,25 @@ def _metadata(result: ResearchDatasetBuildResult) -> dict[bytes, bytes]:
         b"cost.profile_version": audit.cost_profile_version.encode(),
         b"reason_codes.encoding": b"canonical-json-v1",
     }
+    if feature_source is not None:
+        metadata.update(
+            {
+                b"feature.source_run_id": feature_source.run_id.encode(),
+                b"feature.source_run_sha": feature_source.run_sha.encode(),
+                b"feature.source_artifact_id": feature_source.artifact_id.encode(),
+            }
+        )
+        if feature_source.artifact_digest is not None:
+            metadata[b"feature.source_artifact_digest"] = (
+                feature_source.artifact_digest.encode()
+            )
+    return metadata
 
 
-def _table_for_result(result: ResearchDatasetBuildResult) -> Any:
+def _table_for_result(
+    result: ResearchDatasetBuildResult,
+    feature_source: FeatureArtifactSourceProvenance | None,
+) -> Any:
     pa, _ = _modules()
     audit = result.assembly.audit
     dataset = PreparedResearchDataset.from_frame(
@@ -95,7 +115,7 @@ def _table_for_result(result: ResearchDatasetBuildResult) -> Any:
         )
     )
     table = pa.Table.from_pandas(frame, preserve_index=False)
-    return table.replace_schema_metadata(_metadata(result))
+    return table.replace_schema_metadata(_metadata(result, feature_source))
 
 
 def _write(path: Path, table: Any) -> None:
@@ -140,6 +160,7 @@ def _manifest(
     path: Path,
     table: Any,
     result: ResearchDatasetBuildResult,
+    feature_source: FeatureArtifactSourceProvenance | None,
 ) -> PreparedResearchArtifactManifest:
     audit = result.assembly.audit
     digest, size = _digest(path)
@@ -148,14 +169,10 @@ def _manifest(
         schema_sha256=_schema_digest(table.schema),
         byte_size=size,
         row_count=table.num_rows,
-        prepared_dataset_snapshot_sha256=(
-            result.prepared_dataset_snapshot_sha256
-        ),
+        prepared_dataset_snapshot_sha256=(result.prepared_dataset_snapshot_sha256),
         dataset_snapshot_id=audit.dataset_snapshot_id,
         daily_archive_snapshot_sha256=result.daily_archive_snapshot_sha256,
-        current_identity_snapshot_sha256=(
-            result.current_identity_snapshot_sha256
-        ),
+        current_identity_snapshot_sha256=(result.current_identity_snapshot_sha256),
         feature_artifact_sha256=result.feature_artifact_sha256,
         calendar_snapshot_sha256=result.calendar_snapshot_sha256,
         source_hash=audit.source_hash,
@@ -167,6 +184,14 @@ def _manifest(
         cost_profile_version=audit.cost_profile_version,
         market=audit.market,
         artifact_version=artifact_version_for_market(audit.market),
+        feature_source_run_id=(feature_source.run_id if feature_source else None),
+        feature_source_run_sha=(feature_source.run_sha if feature_source else None),
+        feature_source_artifact_id=(
+            feature_source.artifact_id if feature_source else None
+        ),
+        feature_source_artifact_digest=(
+            feature_source.artifact_digest if feature_source else None
+        ),
     )
 
 
@@ -229,11 +254,13 @@ class PreparedResearchArtifactWriter:
         self,
         path: str | Path,
         result: ResearchDatasetBuildResult,
+        *,
+        feature_source: FeatureArtifactSourceProvenance | None = None,
     ) -> PreparedResearchArtifactManifest:
         output = Path(path)
-        table = _table_for_result(result)
+        table = _table_for_result(result, feature_source)
         _write(output, table)
-        manifest = _manifest(output, _read_table(output), result)
+        manifest = _manifest(output, _read_table(output), result, feature_source)
         _ = self.verify(output, manifest)
         return manifest
 
@@ -281,12 +308,31 @@ class PreparedResearchArtifactWriter:
             b"cost.profile_version": expected.cost_profile_version.encode(),
             b"reason_codes.encoding": b"canonical-json-v1",
         }
+        optional_source_metadata = {
+            b"feature.source_run_id": expected.feature_source_run_id,
+            b"feature.source_run_sha": expected.feature_source_run_sha,
+            b"feature.source_artifact_id": expected.feature_source_artifact_id,
+            b"feature.source_artifact_digest": (
+                expected.feature_source_artifact_digest
+            ),
+        }
+        expected_metadata.update(
+            {
+                key: value.encode()
+                for key, value in optional_source_metadata.items()
+                if value is not None
+            }
+        )
         if (
             table.num_rows != expected.row_count
             or _schema_digest(table.schema) != expected.schema_sha256
             or any(
                 observed_result_metadata.get(key) != value
                 for key, value in expected_metadata.items()
+            )
+            or any(
+                value is None and key in observed_result_metadata
+                for key, value in optional_source_metadata.items()
             )
         ):
             raise PreparedResearchArtifactError(

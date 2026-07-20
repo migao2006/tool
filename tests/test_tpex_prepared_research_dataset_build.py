@@ -43,7 +43,11 @@ from src.pipeline.tpex_research_dataset_build import (
     TpexResearchDatasetBuilder,
 )
 from src.pipeline.twse_prepared_research_artifact import (
+    PreparedResearchArtifactError,
     PreparedResearchArtifactWriter,
+)
+from src.pipeline.twse_prepared_research_contracts import (
+    FeatureArtifactSourceProvenance,
 )
 from src.pipeline.twse_prepared_research_repository import (
     PreparedResearchArtifactRepository,
@@ -61,6 +65,12 @@ DATASET_SNAPSHOT = dataset_snapshot_hash(
 BUCKET = "alpha-lens-archive"
 DAILY_KEY = "raw/v1/daily/6488.parquet"
 DAILY_HASH = "d" * 64
+FEATURE_SOURCE = FeatureArtifactSourceProvenance(
+    run_id="29716316791",
+    run_sha="1" * 40,
+    artifact_id="8450000001",
+    artifact_digest="sha256:" + "2" * 64,
+)
 
 
 def _manifest(
@@ -306,25 +316,38 @@ def test_tpex_prepared_artifact_is_market_typed_and_read_back_verified(
     output = tmp_path / "tpex-prepared.parquet"
     audit = tmp_path / "tpex-prepared-audit.json"
     writer = PreparedResearchArtifactWriter()
-    manifest = writer.write(output, result)
+    manifest = writer.write(output, result, feature_source=FEATURE_SOURCE)
     payload = result.audit_payload()
     payload.update(
         {
             "output_file": output.name,
             "prepared_artifact_manifest": manifest.to_dict(),
             "prepared_artifact_read_back_verified": True,
+            "feature_source_provenance": FEATURE_SOURCE.to_dict(),
         }
     )
     _ = audit.write_text(json.dumps(payload), encoding="utf-8")
 
     assert manifest.market == "TPEX"
     assert manifest.artifact_version == "tpex-prepared-research-5d.v1"
+    assert manifest.feature_source_run_id == FEATURE_SOURCE.run_id
+    assert manifest.feature_source_run_sha == FEATURE_SOURCE.run_sha
+    assert manifest.feature_source_artifact_id == FEATURE_SOURCE.artifact_id
+    assert manifest.feature_source_artifact_digest == FEATURE_SOURCE.artifact_digest
     batch = PreparedResearchArtifactRepository(
         output, audit, expected_market="TPEX"
     ).load(mode=PipelineMode.TRAIN, horizon=5, as_of_date=None)
     assert len(batch.records) == 1
     with pytest.raises(ValueError):
         _ = replace(manifest, benchmark_snapshot_sha256="7" * 64)
+    with pytest.raises(PreparedResearchArtifactError) as source_mismatch:
+        _ = writer.verify(
+            output,
+            replace(manifest, feature_source_artifact_id="8450000002"),
+        )
+    assert source_mismatch.value.reason_code == (
+        "PREPARED_RESEARCH_ARTIFACT_MANIFEST_MISMATCH"
+    )
 
 
 def test_tpex_manifest_filters_are_exact_and_snapshots_change(tmp_path: Path) -> None:

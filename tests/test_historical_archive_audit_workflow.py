@@ -13,6 +13,8 @@ def test_archive_audit_workflow_is_private_complete_and_auditable() -> None:
     assert "permissions:\n  contents: read" in workflow
     assert "cancel-in-progress: false" in workflow
     assert "scripts.audit_historical_r2_archive" in workflow
+    assert "--workers 8" in workflow
+    assert "--batch-size 64" in workflow
     assert "scripts.audit_historical_dataset_readiness" in workflow
     assert "--archive-audit historical-r2-audit.json" in workflow
     assert "--output historical-dataset-readiness.json" in workflow

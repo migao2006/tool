@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from hashlib import sha256
 import re
@@ -204,12 +205,37 @@ def _audit_reader_result(
         reasons.append("HISTORICAL_ARCHIVE_SCHEMA_MISMATCH")
 
 
+def _inspect_record(
+    record: _ManifestRecord,
+    reader: HistoricalArchiveObjectReader,
+) -> tuple[str, ...]:
+    reasons: list[str] = []
+    try:
+        inspection = reader.read(record.raw)
+        _audit_reader_result(record, inspection, reasons)
+    except HistoricalArchiveReadError as error:
+        reasons.append(error.reason_code)
+    except Exception:
+        reasons.append("HISTORICAL_ARCHIVE_OBJECT_READ_FAILED")
+    return tuple(reasons)
+
+
 def audit_historical_archive(
     manifest_rows: Iterable[Mapping[str, object]],
     *,
     reader: HistoricalArchiveObjectReader,
+    max_workers: int = 1,
+    batch_size: int = 64,
+    progress_callback: (
+        Callable[[int, int | None, int, int, tuple[str, ...]], None] | None
+    ) = None,
 ) -> HistoricalArchiveAuditResult:
-    """Audit every manifest and object; any malformed or unreadable row fails."""
+    """Audit every object with bounded parallelism and deterministic evidence."""
+
+    if not 1 <= max_workers <= 16:
+        raise ValueError("max_workers must be between 1 and 16")
+    if not max_workers <= batch_size <= 1_000:
+        raise ValueError("batch_size must be between max_workers and 1000")
 
     rows = list(manifest_rows)
     reasons: list[str] = []
@@ -242,14 +268,30 @@ def audit_historical_archive(
         object_locations.add(location)
         records.append(record)
 
-    for record in records:
-        try:
-            inspection = reader.read(record.raw)
-            _audit_reader_result(record, inspection, reasons)
-        except HistoricalArchiveReadError as error:
-            reasons.append(error.reason_code)
-        except Exception:
-            reasons.append("HISTORICAL_ARCHIVE_OBJECT_READ_FAILED")
+    inspected = inspected_rows = inspected_bytes = 0
+
+    def inspect(record: _ManifestRecord) -> tuple[str, ...]:
+        return _inspect_record(record, reader)
+
+    with ThreadPoolExecutor(
+        max_workers=max_workers,
+        thread_name_prefix="historical-r2-audit",
+    ) as executor:
+        for offset in range(0, len(records), batch_size):
+            batch = records[offset : offset + batch_size]
+            for record, batch_reasons in zip(batch, executor.map(inspect, batch)):
+                reasons.extend(batch_reasons)
+                inspected_rows += record.row_count
+                inspected_bytes += record.byte_size
+            inspected += len(batch)
+            if progress_callback is not None:
+                progress_callback(
+                    inspected,
+                    _integer(batch[-1].raw, "archive_id"),
+                    inspected_rows,
+                    inspected_bytes,
+                    tuple(dict.fromkeys(reasons)),
+                )
 
     unique_reasons = tuple(dict.fromkeys(reasons))
     return HistoricalArchiveAuditResult(

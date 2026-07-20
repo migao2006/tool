@@ -65,6 +65,7 @@ class HistoricalArchiveManifestSnapshot:
     rows: tuple[Mapping[str, object], ...]
     snapshot_sha256: str
     complete: bool
+    high_water_archive_id: int | None = None
 
     @property
     def object_count(self) -> int:
@@ -110,9 +111,12 @@ class HistoricalArchiveManifestRepository:
         *,
         max_objects: int | None = None,
         filters: Mapping[str, str] | None = None,
+        through_archive_id: int | None = None,
     ) -> HistoricalArchiveManifestSnapshot:
         if max_objects is not None and max_objects <= 0:
             raise ValueError("max_objects must be positive when provided")
+        if through_archive_id is not None and through_archive_id < 0:
+            raise ValueError("through_archive_id must not be negative")
 
         fixed_filters = dict(filters or {})
         if {"archive_id", "order"}.intersection(fixed_filters):
@@ -122,8 +126,35 @@ class HistoricalArchiveManifestRepository:
         identities: list[str] = []
         last_archive_id = 0
         complete = True
+        high_water_archive_id = through_archive_id
+        high_water_page: list[dict[str, object]] = []
+        if through_archive_id is None:
+            high_water_page = self.source.select_rows(
+                "historical_archive_objects",
+                select="archive_id",
+                filters={**fixed_filters, "order": "archive_id.desc"},
+                limit=1,
+            )
+        if len(high_water_page) > 1:
+            raise HistoricalArchiveReadError(
+                "HISTORICAL_ARCHIVE_MANIFEST_PAGE_INVALID",
+                "Supabase returned more high-water rows than requested",
+            )
+        if high_water_page:
+            candidate = high_water_page[0].get("archive_id")
+            if (
+                isinstance(candidate, bool)
+                or not isinstance(candidate, int)
+                or candidate <= 0
+            ):
+                raise HistoricalArchiveReadError(
+                    "HISTORICAL_ARCHIVE_MANIFEST_ORDER_INVALID",
+                    "Archive manifest high-water archive_id is invalid",
+                )
+            high_water_archive_id = candidate
 
-        while True:
+        reached_high_water = False
+        while high_water_archive_id is not None:
             remaining = None if max_objects is None else max_objects - len(rows)
             if remaining is not None and remaining <= 0:
                 complete = False
@@ -160,13 +191,20 @@ class HistoricalArchiveManifestRepository:
                         "HISTORICAL_ARCHIVE_MANIFEST_ORDER_INVALID",
                         "Archive manifests are not strictly ordered by archive_id",
                     )
+                if archive_id > high_water_archive_id:
+                    reached_high_water = True
+                    break
                 manifest = HistoricalArchiveManifest.from_mapping(raw)
                 last_archive_id = archive_id
                 canonical = _canonical_manifest_mapping(archive_id, manifest)
                 rows.append(MappingProxyType(canonical))
                 identities.append(_snapshot_identity(canonical))
 
-            if len(page) < request_limit:
+            if (
+                reached_high_water
+                or last_archive_id >= high_water_archive_id
+                or len(page) < request_limit
+            ):
                 break
 
         digest = sha256("\n".join(identities).encode("utf-8")).hexdigest()
@@ -174,4 +212,5 @@ class HistoricalArchiveManifestRepository:
             rows=tuple(rows),
             snapshot_sha256=digest,
             complete=complete,
+            high_water_archive_id=high_water_archive_id,
         )

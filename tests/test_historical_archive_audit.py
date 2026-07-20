@@ -3,7 +3,10 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from hashlib import sha256
+from threading import Barrier, Lock
 from typing import final
+
+import pytest
 
 from src.data.archive.contracts import HistoricalArchiveReadError
 from src.quality.historical_archive_audit import audit_historical_archive
@@ -164,3 +167,61 @@ def test_reader_preserves_stable_archive_failure_reason() -> None:
 
     assert result.status == "FAIL"
     assert result.reason_codes == ("HISTORICAL_ARCHIVE_CONTENT_MISMATCH",)
+
+
+@final
+class ConcurrentReader:
+    def __init__(self, parties: int) -> None:
+        self.barrier = Barrier(parties)
+        self.lock = Lock()
+        self.active = 0
+        self.peak = 0
+
+    def read(self, manifest: Mapping[str, object]) -> Inspection:
+        with self.lock:
+            self.active += 1
+            self.peak = max(self.peak, self.active)
+        try:
+            _ = self.barrier.wait(timeout=2)
+            return Inspection(
+                str(manifest["parquet_sha256"]),
+                100,
+                10,
+            )
+        finally:
+            with self.lock:
+                self.active -= 1
+
+
+def test_audit_uses_bounded_parallel_batches_and_emits_exact_progress() -> None:
+    manifests = [_manifest(f"history/{symbol}.parquet") for symbol in (1, 2, 3)]
+    for archive_id, manifest in enumerate(manifests, start=1):
+        manifest["archive_id"] = archive_id
+    reader = ConcurrentReader(3)
+    progress: list[tuple[int, int | None, int, int, tuple[str, ...]]] = []
+
+    result = audit_historical_archive(
+        manifests,
+        reader=reader,
+        max_workers=3,
+        batch_size=3,
+        progress_callback=lambda count, archive_id, rows, size, reasons: (
+            progress.append((count, archive_id, rows, size, reasons))
+        ),
+    )
+
+    assert result.status == "PASS"
+    assert reader.peak == 3
+    assert progress == [(3, 3, 30, 300, ())]
+
+
+def test_audit_rejects_unbounded_parallel_configuration() -> None:
+    with pytest.raises(ValueError, match="max_workers"):
+        _ = audit_historical_archive([], reader=RecordingReader({}), max_workers=17)
+    with pytest.raises(ValueError, match="batch_size"):
+        _ = audit_historical_archive(
+            [],
+            reader=RecordingReader({}),
+            max_workers=4,
+            batch_size=3,
+        )

@@ -136,7 +136,11 @@ def _context(tmp_path: Path) -> PipelineContext:
     )
 
 
-def test_tpex_runner_accepts_venue_schema_before_history_gate(tmp_path: Path) -> None:
+def test_tpex_runner_accepts_venue_schema_before_history_gate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GITHUB_ACTIONS", "false")
     result = TpexPriceResearchRunner().train(
         PipelineBatch(
             records=_frame(),
@@ -153,7 +157,11 @@ def test_tpex_runner_accepts_venue_schema_before_history_gate(tmp_path: Path) ->
     assert result.feature_schema_hash == TPEX_PRICE_VOLUME_FEATURE_SCHEMA_HASH
 
 
-def test_tpex_runner_rejects_twse_rows(tmp_path: Path) -> None:
+def test_tpex_runner_rejects_twse_rows(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GITHUB_ACTIONS", "false")
     result = TpexPriceResearchRunner().train(
         PipelineBatch(
             records=_frame(market="TWSE"),

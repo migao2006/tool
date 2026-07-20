@@ -117,6 +117,22 @@ v2 新增並驗證 `decision_close_price`，供每日推論依真實收盤價重
 - `label_status=LABELS_NOT_ASSEMBLED`
 - `system_status=RESEARCH_ONLY`
 
+### 上櫃普通股研究特徵（2026-07-20 新增）
+
+- R2 已有 891 檔上櫃普通股 `daily_bars` 原始封存；其狀態仍是
+  `RAW_LANDING_ONLY / POINT_IN_TIME_UNVERIFIED / RESEARCH_ONLY`。
+- 2026-07-20 新增獨立的 TPEX 17 個價量特徵建置 workflow、Parquet artifact 契約與 typed
+  read-back 驗證，不會混用上市或 ETF 股票池。
+- 同日新增櫃買中心官方指數 OHLC provider 與 normalizer，資料來源契約對應
+  [櫃買中心指數歷史資料](https://www.tpex.org.tw/en-us/indices/stock-index/industrial/inxh.html)。
+- Repository variable 名稱為 `TPEX_RESEARCH_FEATURE_DATASET_ENABLED`；必須明確開啟後，
+  workflow 才可執行。
+- 尚未執行 Production workflow，因此目前沒有可引用的 TPEX feature run、artifact 數量或
+  hash；也尚未建立 TPEX benchmark R2 archive、5 日標籤、模型或 UI 輸出。
+
+上述完成的是可執行且 fail-closed 的研究管線，不是正式上櫃模型；系統狀態維持
+`RESEARCH_ONLY`。
+
 ### 上市 5 日歷史 OOS 研究結果
 
 [GitHub Actions run `29690820942`](https://github.com/migao2006/tool/actions/runs/29690820942) 已於 2026-07-19 成功完成完整訓練與發布：
@@ -254,6 +270,7 @@ point-in-time 或正式模型可用度。
 2. 補齊歷史 listing periods、代號重用、ISIN、產業 vintage 與下市解析，不得把 current snapshot 當歷史真相。
 3. 完成剩餘融資券任務，建立可驗證的 adjusted price／公司行動／交易狀態來源，再把 supplemental 資料納入 fold 內特徵工程。
 4. 補齊可驗證交易日曆、可成交性及 TAIEX total-return benchmark 契約，讓 tradability 與 market exposure gate 能使用正式輸入。
-5. 上市資料與正式標籤達標後，以相同介面建立上櫃獨立股票池、櫃買基準與模型；ETF 另用獨立追蹤基準、成本及模型，不與普通股混訓。
+5. 執行並稽核已建立的上櫃獨立價量 feature workflow；之後才建立櫃買基準 R2 archive、
+   5 日標籤與獨立模型。ETF 另用獨立追蹤基準、成本及模型，不與普通股混訓。
 6. 建立正式 horizon=5 executable total-return labels，重新執行 purged walk-forward 並改善未通過的排名模型。
 7. 研究設計、特徵與門檻凍結且排名通過基準後，才執行一次 locked holdout 與完整成本回測；未達門檻時繼續維持 `RESEARCH_ONLY` 或標示 `FAIL`。

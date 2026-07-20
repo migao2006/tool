@@ -74,6 +74,21 @@ gate 仍應保持關閉。
   `decision_close_price` 成本稽核欄；該欄不屬於 17 個模型特徵，不改變 feature schema
   hash。未通過驗證的 artifact 不得進入資料組裝器。
 
+## 上櫃普通股研究特徵流程
+
+- R2 已有 891 檔 TPEX 普通股 `daily_bars` 原始封存；不需為建立價量特徵重抓相同資料。
+- 2026-07-20 新增獨立 TPEX 17 個價量特徵 workflow、Parquet artifact 契約與 typed read-back；
+  股票池固定為 TPEX 普通股，ETF 與 TWSE 資料會 fail closed。
+- 官方櫃買指數 OHLC provider／normalizer 使用
+  [櫃買中心指數歷史資料](https://www.tpex.org.tw/en-us/indices/stock-index/industrial/inxh.html)
+  的獨立契約，不以 TAIEX 代替上櫃基準。
+- Repository variable `TPEX_RESEARCH_FEATURE_DATASET_ENABLED` 是手動啟用 gate。
+- Production workflow 尚未執行，因此尚無 TPEX feature artifact 的實際 run、列數或 hash；
+  TPEX benchmark 尚未封存至 R2，5 日標籤、模型與 UI 也尚未建立。
+
+以上資料與程式均維持 `RESEARCH_ONLY`；完成 feature artifact 不等於完成 point-in-time、
+基準交易路徑、標籤或正式模型驗證。
+
 上述程式與測試尚未等於 Production artifact 或正式訓練資料。歷史基準與 feature artifact
 的產生程式已具備相容契約，但目前沒有 Production artifact。真實標籤組裝仍必須同時提供原始可執行 OHLC、公司行動／停牌區間與
 交易成本設定；缺任一項時 fail closed，不發布模型績效。

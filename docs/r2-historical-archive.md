@@ -68,6 +68,7 @@ HISTORICAL_BENCHMARK_BACKFILL_ENABLED
 HISTORICAL_SUPPLEMENTAL_BACKFILL_ENABLED
 FINMIND_HISTORICAL_EVIDENCE_ENABLED
 TWSE_RESEARCH_FEATURE_DATASET_ENABLED
+TPEX_RESEARCH_FEATURE_DATASET_ENABLED
 FUGLE_ADJUSTED_BACKFILL_ENABLED
 FUGLE_ADJUSTED_MIGRATION_READY
 ```
@@ -140,6 +141,19 @@ R2 client 或呼叫 provider。
 或籌碼資料套用日線 schema。本次分支新增的 feature artifact typed manifest 與 provenance
 驗證不會修改原始 R2 object；目前 feature workflow 仍只規劃輸出 GitHub artifact，尚未產生正式
 Production feature dataset。
+
+## TPEX 研究 artifact 邊界
+
+- R2 已有 891 檔 TPEX 普通股 `daily_bars`，但仍是
+  `RAW_LANDING_ONLY / POINT_IN_TIME_UNVERIFIED / RESEARCH_ONLY`。
+- 2026-07-20 新增的 TPEX 17 個價量特徵 workflow 只讀取並驗證既有 immutable raw objects，輸出
+  GitHub Parquet artifact 與 audit；typed read-back 驗證失敗時不得釋出 artifact。
+- `TPEX_RESEARCH_FEATURE_DATASET_ENABLED` 未明確設為 `true` 時，workflow 不得執行。
+- Production workflow 尚未執行，不能宣稱已有 TPEX feature artifact、run、列數或 hash。
+- 官方 TPEX OHLC provider／normalizer 已建立，但 TPEX benchmark 尚未封存至 R2；5 日標籤、
+  獨立模型與 UI 也不屬於本次已完成範圍。
+
+因此 TPEX 目前只有 raw archive 與研究建置契約，狀態維持 `RESEARCH_ONLY`。
 
 目前 campaign 固定結束於 2026-07-17。既定 queue 已全部完成，但這不會讓 R2 自動向後累積。
 建立可稽核、冪等的 daily delta archive workflow 前，新交易日仍不會自動加入多年 R2 封存。

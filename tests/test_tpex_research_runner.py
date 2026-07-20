@@ -84,6 +84,10 @@ def _prepared_source_metadata() -> dict[str, object]:
         cost_profile_version=cost_profile_version,
         market="TPEX",
         artifact_version="tpex-prepared-research-5d.v1",
+        feature_source_run_id="29716316791",
+        feature_source_run_sha="c" * 40,
+        feature_source_artifact_id="8450000001",
+        feature_source_artifact_digest="sha256:" + "d" * 64,
     )
     return {"prepared_artifact_manifest": manifest.to_dict()}
 
@@ -188,6 +192,58 @@ def test_tpex_runner_requires_full_prepared_provenance(tmp_path: Path) -> None:
     assert result.reason_codes == ("PREPARED_ARTIFACT_PROVENANCE_MISSING",)
 
 
+def test_tpex_runner_rejects_prepared_artifact_without_feature_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GITHUB_ACTIONS", "false")
+    metadata = _prepared_source_metadata()
+    raw_manifest = metadata["prepared_artifact_manifest"]
+    assert isinstance(raw_manifest, dict)
+    manifest = raw_manifest.copy()
+    for name in (
+        "feature_source_run_id",
+        "feature_source_run_sha",
+        "feature_source_artifact_id",
+        "feature_source_artifact_digest",
+    ):
+        manifest[name] = None
+    result = TpexPriceResearchRunner().train(
+        PipelineBatch(
+            records=_frame(),
+            source_uri="memory://missing-feature-source",
+            source_hash="a" * 64,
+            source_metadata={"prepared_artifact_manifest": manifest},
+        ),
+        _context(tmp_path),
+    )
+
+    assert result.reason_codes == ("PREPARED_FEATURE_SOURCE_PROVENANCE_MISSING",)
+
+
+def test_tpex_runner_rejects_feature_source_without_digest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GITHUB_ACTIONS", "false")
+    metadata = _prepared_source_metadata()
+    raw_manifest = metadata["prepared_artifact_manifest"]
+    assert isinstance(raw_manifest, dict)
+    manifest = raw_manifest.copy()
+    manifest["feature_source_artifact_digest"] = None
+    result = TpexPriceResearchRunner().train(
+        PipelineBatch(
+            records=_frame(),
+            source_uri="memory://missing-feature-digest",
+            source_hash="a" * 64,
+            source_metadata={"prepared_artifact_manifest": manifest},
+        ),
+        _context(tmp_path),
+    )
+
+    assert result.reason_codes == ("PREPARED_FEATURE_SOURCE_PROVENANCE_MISSING",)
+
+
 def test_github_run_requires_verified_source_run_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -230,6 +286,10 @@ def test_github_run_retains_all_prepared_snapshot_hashes(
     assert provenance["git_commit_source"] == "GITHUB_SHA"
     assert provenance["source_prepared_run_id"] == "29722499185"
     assert provenance["source_prepared_run_sha"] == "e" * 40
+    assert provenance["source_feature_run_id"] == "29716316791"
+    assert provenance["source_feature_run_sha"] == "c" * 40
+    assert provenance["source_feature_artifact_id"] == "8450000001"
+    assert provenance["source_feature_artifact_digest"] == "sha256:" + "d" * 64
     for field_name in (
         "prepared_dataset_snapshot_sha256",
         "daily_archive_snapshot_sha256",

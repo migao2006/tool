@@ -460,12 +460,20 @@ def test_prepared_repository_requires_sidecar_and_decodes_reason_codes(
     output = tmp_path / "prepared.parquet"
     audit = tmp_path / "prepared-audit.json"
     manifest = PreparedResearchArtifactWriter().write(output, result)
+    legacy_manifest = manifest.to_dict()
+    for name in (
+        "feature_source_run_id",
+        "feature_source_run_sha",
+        "feature_source_artifact_id",
+        "feature_source_artifact_digest",
+    ):
+        legacy_manifest.pop(name)
     payload = result.audit_payload()
     payload.update(
         {
             "build_status": "COMPLETED_RESEARCH_ONLY",
             "output_file": output.name,
-            "prepared_artifact_manifest": manifest.to_dict(),
+            "prepared_artifact_manifest": legacy_manifest,
             "prepared_artifact_read_back_verified": True,
         }
     )

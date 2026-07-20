@@ -43,7 +43,9 @@ def test_tpex_research_workflow_is_manual_and_local_only() -> None:
     assert "compareCommitsWithBasehead" in workflow
     assert "listWorkflowRunArtifacts" in workflow
     assert "TPEX_PREPARED_SOURCE_RUN_SHA" in workflow
-    assert "tpex-prepared-research-${{ inputs.prepared_run_id }}" in workflow
+    assert "actions/download-artifact@v8" in workflow
+    assert "artifact-ids: ${{ steps.prepared-source.outputs.artifact_id }}" in workflow
+    assert "digest-mismatch: error" in workflow
     assert "scripts.run_tpex_research_model" in workflow
     assert "SUPABASE_SERVICE_ROLE_KEY" not in workflow
     assert "publish" not in workflow.lower()

@@ -29,7 +29,7 @@ export function createCandidateFilterDrawer() {
             <button class="text-button" type="button" data-reset-candidate-filters>清除全部</button>
           </div>
           <div class="candidate-filter-grid">
-            ${choiceField({ id: "candidate-industry", label: "目前產業分類", name: "industry", options: '<option value="">尚無產業分類</option>' })}
+            ${choiceField({ id: "candidate-industry", label: "最新產業分類", name: "industry", options: '<option value="">尚無產業分類</option>' })}
             ${choiceField({ id: "candidate-decision", label: "決策", name: "decision", options: '<option value="">尚無決策分類</option>' })}
             ${choiceField({ id: "candidate-data-quality", label: "資料品質", name: "data_quality", options: '<option value="">尚無資料品質分類</option>' })}
             ${choiceField({ id: "candidate-liquidity", label: "流動性分組", name: "liquidity_bucket", options: '<option value="">全部流動性</option>' })}

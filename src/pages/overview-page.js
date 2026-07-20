@@ -1,5 +1,5 @@
 import { createEmptyState } from "../components/empty-state.js";
-import { createCandidateCard } from "../components/candidate-card.js?v=classification-1";
+import { createCandidateCard } from "../components/candidate-card.js?v=classification-2";
 import { createResearchSettingsDrawer } from "../components/research-settings-drawer.js?v=debug-1";
 import { createStatusBanner } from "../components/status-banner.js";
 import { createHomeDataStatusPanel } from "../components/home-data-status.js?v=mobile-ui-1";

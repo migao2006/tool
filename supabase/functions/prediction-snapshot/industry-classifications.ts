@@ -49,7 +49,7 @@ const TPEX_INDUSTRY_OVERRIDES: Readonly<Record<string, string>> = Object.freeze(
 );
 
 export const CURRENT_INDUSTRY_CLASSIFICATION_BASIS =
-  "TW_EXCHANGE_CURRENT_INDUSTRY_CODE_2026_V1";
+  "TW_EXCHANGE_LATEST_SECURITY_SNAPSHOT_2026_V1";
 
 export function resolveCurrentIndustryName(
   market: MarketScope,

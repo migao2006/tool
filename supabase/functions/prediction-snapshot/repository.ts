@@ -7,8 +7,8 @@ import type {
   MarketPredictionRow,
   MarketScope,
   PredictionRunRow,
-  SecurityRow,
   SecurityHistoryRow,
+  SecurityRow,
   SnapshotRepositoryContract,
   SnapshotRows,
   StockPredictionRow,
@@ -104,7 +104,13 @@ export class SnapshotRepository implements SnapshotRepositoryContract {
     const validationRun = validationLinkStatus === "LINKED"
       ? validationRuns[0]
       : null;
-    const [securities, currentSecurityHistory, gates, validationMetrics, backtests] = await Promise.all(
+    const [
+      securities,
+      currentSecurityHistory,
+      gates,
+      validationMetrics,
+      backtests,
+    ] = await Promise.all(
       [
         this.#selectIn<SecurityRow>(
           "securities",

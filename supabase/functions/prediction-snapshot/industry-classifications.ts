@@ -38,13 +38,15 @@ const COMMON_INDUSTRIES: Readonly<Record<string, string>> = Object.freeze({
   "38": "居家生活",
 });
 
-const TPEX_INDUSTRY_OVERRIDES: Readonly<Record<string, string>> = Object.freeze({
-  "17": "金融業",
-  "32": "文化創意業",
-  "33": "農業科技業",
-  "34": "電子商務",
-  "80": "管理股票",
-});
+const TPEX_INDUSTRY_OVERRIDES: Readonly<Record<string, string>> = Object.freeze(
+  {
+    "17": "金融業",
+    "32": "文化創意業",
+    "33": "農業科技業",
+    "34": "電子商務",
+    "80": "管理股票",
+  },
+);
 
 export const CURRENT_INDUSTRY_CLASSIFICATION_BASIS =
   "TW_EXCHANGE_CURRENT_INDUSTRY_CODE_2026_V1";

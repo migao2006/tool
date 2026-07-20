@@ -6,8 +6,8 @@ import type {
   MarketPredictionRow,
   MarketScope,
   PredictionRunRow,
-  SecurityRow,
   SecurityHistoryRow,
+  SecurityRow,
   SnapshotRows,
   StockPredictionRow,
 } from "./types.ts";
@@ -153,8 +153,8 @@ export function mapPrediction(
       )
       : null,
     current_industry_code: currentHistory?.industry_code ?? null,
-    industry_classification_effective_from:
-      currentHistory?.effective_from ?? null,
+    industry_classification_effective_from: currentHistory?.effective_from ??
+      null,
     industry_classification_available_at: currentHistory?.available_at ?? null,
     industry_classification_basis: currentHistory
       ? CURRENT_INDUSTRY_CLASSIFICATION_BASIS

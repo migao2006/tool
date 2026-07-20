@@ -16,6 +16,7 @@ async function routeThreeStockSnapshot(page) {
 				...template,
 				symbol: "6515",
 				name: "穎崴",
+				decision: "CANDIDATE",
 				global_rank: 1,
 				industry_rank: 1,
 				rank_score: 99,
@@ -24,6 +25,7 @@ async function routeThreeStockSnapshot(page) {
 				...template,
 				symbol: "2330",
 				name: "台積電",
+				decision: "WATCH",
 				global_rank: 2,
 				industry_rank: 2,
 				rank_score: 98,
@@ -32,6 +34,7 @@ async function routeThreeStockSnapshot(page) {
 				...template,
 				symbol: "2454",
 				name: "聯發科",
+				decision: "NO_TRADE",
 				global_rank: 3,
 				industry_rank: 3,
 				rank_score: 97,
@@ -121,6 +124,42 @@ test("320px 與 200% 大字仍可操作搜尋且沒有水平溢位", async ({ pa
 	}));
 	expect(layout.scrollWidth).toBeLessThanOrEqual(layout.clientWidth + 1);
 	expect(layout.searchRight).toBeLessThanOrEqual(layout.clientWidth + 1);
+});
+
+test("iPhone 使用自訂底部選單篩選，選完即關閉且可清除", async ({ page }) => {
+	await routeThreeStockSnapshot(page);
+	await openCandidates(page);
+
+	const opener = page.locator('[data-open-drawer="candidate-filters"]');
+	await expect(opener).toContainText("產業、風險與門檻");
+	await opener.click();
+	const drawer = page.getByRole("dialog", { name: "篩選候選股" });
+	await expect(drawer).toBeVisible();
+
+	const nativeSelect = drawer.locator('select[name="decision"]');
+	const decisionTrigger = drawer.locator('[data-choice-for="decision"]');
+	await expect(nativeSelect).toBeHidden();
+	await verifyTouchTarget(decisionTrigger);
+	await decisionTrigger.click();
+
+	const choiceSheet = page.getByRole("dialog", { name: "選擇決策" });
+	await expect(choiceSheet).toBeVisible();
+	const watchOption = choiceSheet.getByRole("button", { name: "觀察" });
+	await verifyTouchTarget(watchOption);
+	await watchOption.click();
+	await expect(choiceSheet).toBeHidden();
+	await expect(decisionTrigger).toContainText("觀察");
+	await expect(opener).toContainText("已套用 1 項");
+	await expect(page.locator("[data-candidate-list] .candidate-card")).toHaveCount(1);
+	await expect(page.locator('[data-candidate-list] .candidate-card[data-symbol="2330"]')).toBeVisible();
+
+	await drawer.getByRole("button", { name: "清除全部" }).click();
+	await expect(decisionTrigger).toContainText("全部");
+	await expect(opener).toContainText("產業、風險與門檻");
+	await expect(page.locator("[data-candidate-list] .candidate-card")).toHaveCount(3);
+	await drawer.getByRole("button", { name: "完成", exact: true }).click();
+	await expect(drawer).toBeHidden();
+	await expect(opener).toBeFocused();
 });
 
 test("API 錯誤時搜尋功能會停用", async ({ page }) => {

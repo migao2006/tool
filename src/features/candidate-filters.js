@@ -1,3 +1,18 @@
+import { initializeChoiceSheet } from "../components/choice-sheet.js";
+
+const FILTER_VALUE_LABELS = Object.freeze({
+  base_cost: "基準成本",
+  extreme_cost: "極端成本",
+  high: "高流動性",
+  large: "高流動性",
+  low: "低流動性",
+  low_cost: "低成本",
+  medium: "中流動性",
+  mid: "中流動性",
+  small: "低流動性",
+  stressed_cost: "壓力成本",
+});
+
 function numberValue(root, name) {
   const rawValue = root.querySelector(`[name="${name}"]`)?.value ?? "";
   if (rawValue.trim() === "") return null;
@@ -33,7 +48,7 @@ function replaceOptions(select, values, allLabel) {
   [...new Set(values.filter(Boolean))].sort((a, b) => a.localeCompare(b, "zh-Hant")).forEach((value) => {
     const option = document.createElement("option");
     option.value = value;
-    option.textContent = value;
+    option.textContent = FILTER_VALUE_LABELS[String(value).toLocaleLowerCase()] ?? value;
     select.append(option);
   });
   if ([...select.options].some((option) => option.value === previous)) select.value = previous;
@@ -63,8 +78,25 @@ export function initializeCandidateFilters({ onChange } = {}) {
 
   const searchInput = root.querySelector('[name="stock_search"]');
   const clearSearchButton = root.querySelector("[data-clear-candidate-search]");
+  const choiceSheet = initializeChoiceSheet(root);
   const syncSearchClearButton = () => {
     if (clearSearchButton) clearSearchButton.hidden = !normalizeSearchText(searchInput?.value);
+  };
+  const syncFilterSummary = () => {
+    const filters = currentFilters(root);
+    const activeCount = [
+      filters.industry,
+      filters.decision,
+      filters.dataQuality,
+      filters.liquidityBucket,
+      filters.rankScoreMin,
+      filters.pUpMin,
+      filters.costProfile,
+    ].filter((value) => value !== "" && value !== null).length;
+    const summary = root.querySelector("[data-candidate-filter-summary]");
+    const count = root.querySelector("[data-candidate-filter-count]");
+    if (summary) summary.textContent = activeCount ? `已套用 ${activeCount} 項` : "產業、風險與門檻";
+    if (count) count.textContent = activeCount ? `目前套用 ${activeCount} 項篩選` : "尚未套用篩選";
   };
 
   root.addEventListener("click", (event) => {
@@ -75,13 +107,27 @@ export function initializeCandidateFilters({ onChange } = {}) {
       onChange?.(currentFilters(root));
       return;
     }
+    if (event.target.closest("[data-reset-candidate-filters]")) {
+      root.querySelectorAll('[data-choice-select], input[type="number"]').forEach((control) => {
+        control.value = "";
+      });
+      choiceSheet.syncAll();
+      syncFilterSummary();
+      onChange?.(currentFilters(root));
+    }
   });
   root.addEventListener("input", () => {
     syncSearchClearButton();
+    syncFilterSummary();
     onChange?.(currentFilters(root));
   });
-  root.addEventListener("change", () => onChange?.(currentFilters(root)));
+  root.addEventListener("change", () => {
+    choiceSheet.syncAll();
+    syncFilterSummary();
+    onChange?.(currentFilters(root));
+  });
   syncSearchClearButton();
+  syncFilterSummary();
 
   return Object.freeze({
     getFilters: () => currentFilters(root),
@@ -89,6 +135,8 @@ export function initializeCandidateFilters({ onChange } = {}) {
       replaceOptions(root.querySelector('[name="industry"]'), records.map((record) => record.industry), "全部產業");
       replaceOptions(root.querySelector('[name="liquidity_bucket"]'), records.map((record) => record.liquidity_bucket), "全部流動性");
       replaceOptions(root.querySelector('[name="cost_profile"]'), records.map((record) => record.cost_profile), "全部成本設定");
+      choiceSheet.syncAll();
+      syncFilterSummary();
     },
   });
 }

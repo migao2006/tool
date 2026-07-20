@@ -14,6 +14,10 @@ on:
         description: Optional successful TPEX feature dataset run ID
         required: false
         type: string
+      as_of_date:
+        description: Optional exact research date in YYYY-MM-DD format
+        required: false
+        type: string
 
 permissions:
   actions: read
@@ -32,7 +36,9 @@ jobs:
     env:
       REQUESTED_PREPARED_RUN_ID: ${{ inputs.prepared_run_id }}
       REQUESTED_FEATURE_RUN_ID: ${{ inputs.feature_run_id }}
-      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      REQUESTED_AS_OF_DATE: ${{ inputs.as_of_date }}
+      SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
+      SUPABASE_URL: ${{ vars.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       ALPHA_LENS_TARGET_ENVIRONMENT: staging
       RESEARCH_PREDICTION_SUPABASE_PUBLISH_ENABLED: "true"
@@ -75,18 +81,21 @@ jobs:
             local head_sha
             local head_repository
             local repository
+            local status
             local workflow_path
-            local artifact_count
+            local artifact_id
+            local artifact_digest
+            local artifact_rows
 
             if [[ ! "$run_id" =~ ^[1-9][0-9]*$ ]]; then
-              echo "No trusted ${label} workflow run is available"
+              echo "No trusted ${label} workflow run is available" >&2
               return 1
             fi
             IFS=$'\t' read -r \
-              conclusion event head_branch head_sha workflow_path repository head_repository < <(
+              status conclusion event head_branch head_sha workflow_path repository head_repository < <(
               gh api \
                 "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" \
-                --jq '[.conclusion // "", .event // "", .head_branch // "", .head_sha // "", .path // "", .repository.full_name // "", .head_repository.full_name // ""] | @tsv'
+                --jq '[.status // "", .conclusion // "", .event // "", .head_branch // "", .head_sha // "", .path // "", .repository.full_name // "", .head_repository.full_name // ""] | @tsv'
             )
             workflow_path="${workflow_path%%@*}"
             if [[
@@ -94,36 +103,45 @@ jobs:
               "$repository" != "$GITHUB_REPOSITORY" ||
               "$head_repository" != "$GITHUB_REPOSITORY"
             ]]; then
-              echo "Untrusted ${label} workflow path"
+              echo "Untrusted ${label} workflow path" >&2
               return 1
             fi
             if [[
+              "$status" != "completed" ||
               "$conclusion" != "success" ||
               "$event" != "workflow_dispatch" ||
               "$head_branch" != "main"
             ]]; then
-              echo "Untrusted ${label} workflow result or branch"
+              echo "Untrusted ${label} workflow result or branch" >&2
               return 1
             fi
             if [[ ! "$head_sha" =~ ^[0-9a-f]{40}$ ]]; then
-              echo "Invalid ${label} workflow head SHA"
+              echo "Invalid ${label} workflow head SHA" >&2
               return 1
             fi
             if ! git merge-base --is-ancestor "$head_sha" "$GITHUB_SHA"; then
-              echo "Untrusted ${label} workflow head is not an ancestor of this run"
+              echo "Untrusted ${label} workflow head is not an ancestor of this run" >&2
               return 1
             fi
-            artifact_count="$(
-              gh api \
-                "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts?per_page=100" |
-                jq --arg name "$expected_artifact" \
-                  '[.artifacts[] | select(.name == $name and .expired == false)] | length'
+            artifact_rows="$(
+              gh api --paginate \
+                "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts?per_page=100" \
+                --jq ".artifacts[] | select(.name == \"${expected_artifact}\" and .expired == false) | [.id, .digest // \"\"] | @tsv"
             )"
-            if [[ "$artifact_count" != "1" ]]; then
-              echo "Trusted ${label} workflow must expose one expected artifact"
+            if [[ -z "$artifact_rows" || "$(printf '%s\n' "$artifact_rows" | wc -l)" != "1" ]]; then
+              echo "Trusted ${label} workflow must expose one expected artifact" >&2
               return 1
             fi
-            printf '%s' "$head_sha"
+            IFS=$'\t' read -r artifact_id artifact_digest <<< "$artifact_rows"
+            if [[ ! "$artifact_id" =~ ^[1-9][0-9]*$ ]]; then
+              echo "Trusted ${label} artifact ID is invalid" >&2
+              return 1
+            fi
+            if [[ ! "$artifact_digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "Trusted ${label} artifact digest is missing or invalid" >&2
+              return 1
+            fi
+            printf '%s\t%s\t%s' "$head_sha" "$artifact_id" "$artifact_digest"
           }
 
           prepared_run_id="$(resolve_run \
@@ -133,24 +151,57 @@ jobs:
             "$REQUESTED_FEATURE_RUN_ID" \
             "build-tpex-research-feature-dataset.yml")"
 
-          prepared_run_sha="$(verify_run \
+          prepared_artifact_identity="$(verify_run \
             "prepared dataset" \
             "$prepared_run_id" \
             ".github/workflows/build-tpex-prepared-research-dataset.yml" \
             "tpex-prepared-research-${prepared_run_id}")"
-          feature_run_sha="$(verify_run \
+          IFS=$'\t' read -r \
+            prepared_run_sha prepared_artifact_id prepared_artifact_digest \
+            <<< "$prepared_artifact_identity"
+          feature_artifact_identity="$(verify_run \
             "feature dataset" \
             "$feature_run_id" \
             ".github/workflows/build-tpex-research-feature-dataset.yml" \
             "tpex-research-features-${feature_run_id}")"
+          IFS=$'\t' read -r \
+            feature_run_sha feature_artifact_id feature_artifact_digest \
+            <<< "$feature_artifact_identity"
 
           echo "PREPARED_RUN_ID=$prepared_run_id" >> "$GITHUB_ENV"
           echo "FEATURE_RUN_ID=$feature_run_id" >> "$GITHUB_ENV"
+          echo "PREPARED_ARTIFACT_ID=$prepared_artifact_id" >> "$GITHUB_ENV"
+          echo "PREPARED_ARTIFACT_DIGEST=$prepared_artifact_digest" >> "$GITHUB_ENV"
+          echo "FEATURE_ARTIFACT_ID=$feature_artifact_id" >> "$GITHUB_ENV"
+          echo "FEATURE_ARTIFACT_DIGEST=$feature_artifact_digest" >> "$GITHUB_ENV"
           echo "TPEX_PREPARED_SOURCE_RUN_ID=$prepared_run_id" >> "$GITHUB_ENV"
           echo "TPEX_PREPARED_SOURCE_RUN_SHA=$prepared_run_sha" >> "$GITHUB_ENV"
+          echo "TPEX_PREPARED_SOURCE_ARTIFACT_ID=$prepared_artifact_id" >> "$GITHUB_ENV"
+          echo "TPEX_PREPARED_SOURCE_ARTIFACT_DIGEST=$prepared_artifact_digest" >> "$GITHUB_ENV"
           echo "TPEX_FEATURE_SOURCE_RUN_ID=$feature_run_id" >> "$GITHUB_ENV"
           echo "TPEX_FEATURE_SOURCE_RUN_SHA=$feature_run_sha" >> "$GITHUB_ENV"
-          echo "REQUIRED_AS_OF_DATE=$(TZ=Asia/Taipei date +%F)" >> "$GITHUB_ENV"
+          echo "TPEX_FEATURE_SOURCE_ARTIFACT_ID=$feature_artifact_id" >> "$GITHUB_ENV"
+          echo "TPEX_FEATURE_SOURCE_ARTIFACT_DIGEST=$feature_artifact_digest" >> "$GITHUB_ENV"
+          if [[ "$GITHUB_EVENT_NAME" == "schedule" ]]; then
+            required_as_of_date="$(TZ=Asia/Taipei date +%F)"
+          elif [[ -z "$REQUESTED_AS_OF_DATE" ]]; then
+            required_as_of_date="$(TZ=Asia/Taipei date +%F)"
+          else
+            if [[ ! "$REQUESTED_AS_OF_DATE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+              echo "as_of_date must use YYYY-MM-DD" >&2
+              exit 1
+            fi
+            normalized_as_of_date="$(date -u -d "$REQUESTED_AS_OF_DATE" +%F 2>/dev/null)" || {
+              echo "as_of_date is not a valid calendar date" >&2
+              exit 1
+            }
+            if [[ "$normalized_as_of_date" != "$REQUESTED_AS_OF_DATE" ]]; then
+              echo "as_of_date is not canonical YYYY-MM-DD" >&2
+              exit 1
+            fi
+            required_as_of_date="$REQUESTED_AS_OF_DATE"
+          fi
+          echo "REQUIRED_AS_OF_DATE=$required_as_of_date" >> "$GITHUB_ENV"
 
       - uses: actions/setup-python@v6
         with:
@@ -170,24 +221,37 @@ jobs:
         run: |
           set -euo pipefail
           test "$GITHUB_REF" = "refs/heads/main"
+          test -n "$SUPABASE_PROJECT_REF"
           test -n "$SUPABASE_URL"
           test -n "$SUPABASE_SERVICE_ROLE_KEY"
           test "$ALPHA_LENS_TARGET_ENVIRONMENT" = "staging"
           test "$RESEARCH_PREDICTION_PRODUCTION_PUBLISH_ENABLED" = "false"
+          case "$SUPABASE_URL" in
+            "https://${SUPABASE_PROJECT_REF}.supabase.co"|\
+            "https://${SUPABASE_PROJECT_REF}.supabase.co/") ;;
+            *)
+              echo "Supabase URL does not match the Staging project ref" >&2
+              exit 1
+              ;;
+          esac
 
       - name: Download verified TPEX prepared research dataset
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
-          name: tpex-prepared-research-${{ env.PREPARED_RUN_ID }}
+          artifact-ids: ${{ env.PREPARED_ARTIFACT_ID }}
           path: inputs/prepared
+          merge-multiple: true
+          digest-mismatch: error
           github-token: ${{ github.token }}
           run-id: ${{ env.PREPARED_RUN_ID }}
 
       - name: Download verified TPEX feature-only dataset
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
-          name: tpex-research-features-${{ env.FEATURE_RUN_ID }}
+          artifact-ids: ${{ env.FEATURE_ARTIFACT_ID }}
           path: inputs/features
+          merge-multiple: true
+          digest-mismatch: error
           github-token: ${{ github.token }}
           run-id: ${{ env.FEATURE_RUN_ID }}
 

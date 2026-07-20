@@ -12,21 +12,14 @@ import json
 
 from src.core.horizon import require_production_horizon
 
+from .research_provenance_binding import (
+    validate_research_run_provenance_binding,
+)
+
 
 TWSE_RESEARCH_BUNDLE_CONTRACT_VERSION = "twse-research-model-bundle-v1"
 TPEX_RESEARCH_BUNDLE_CONTRACT_VERSION = "tpex-research-model-bundle-v1"
 MECHANICAL_LAST_FOLD_POLICY = "MECHANICAL_LAST_WALK_FORWARD_FOLD"
-_REQUIRED_PREPARED_HASHES = (
-    "parquet_sha256",
-    "prepared_dataset_snapshot_sha256",
-    "daily_archive_snapshot_sha256",
-    "current_identity_snapshot_sha256",
-    "feature_artifact_sha256",
-    "calendar_snapshot_sha256",
-    "source_hash",
-    "benchmark_snapshot_sha256",
-    "feature_schema_hash",
-)
 BUNDLE_FILE_NAMES = {
     "rank_booster": "rank.txt",
     "direction_booster": "direction.txt",
@@ -69,58 +62,6 @@ def _integer(value: object, field_name: str) -> int:
         return int(value)
     except ValueError as error:
         raise ValueError(f"{field_name} must be an integer") from error
-
-
-def _validate_research_run_provenance(
-    value: Mapping[str, object] | None,
-    *,
-    market: str,
-    input_artifact_sha256: str,
-    git_commit: str | None,
-) -> None:
-    if value is None:
-        if market == "TPEX":
-            raise ValueError("TPEX bundle requires research_run_provenance")
-        return
-    prepared = value.get("prepared_artifact_manifest")
-    if not isinstance(prepared, Mapping) or prepared.get("market") != market:
-        raise ValueError("research run prepared provenance market is invalid")
-    for field_name in _REQUIRED_PREPARED_HASHES:
-        digest = prepared.get(field_name)
-        if not isinstance(digest, str):
-            raise ValueError("research run prepared provenance is incomplete")
-        _require_sha256(digest, field_name)
-    if prepared.get("parquet_sha256") != input_artifact_sha256:
-        raise ValueError("research run prepared Parquet hash does not match bundle")
-    provenance_git = value.get("git_commit")
-    if (
-        not isinstance(provenance_git, str)
-        or len(provenance_git) != 40
-        or any(character not in "0123456789abcdef" for character in provenance_git)
-        or provenance_git != git_commit
-    ):
-        raise ValueError("research run Git commit does not match bundle")
-    environment = value.get("execution_environment")
-    git_source = value.get("git_commit_source")
-    if environment not in {"LOCAL", "GITHUB_ACTIONS"}:
-        raise ValueError("research run execution environment is invalid")
-    if git_source not in {"LOCAL_GIT_HEAD", "GITHUB_SHA"}:
-        raise ValueError("research run Git commit source is invalid")
-    run_id = value.get("source_prepared_run_id")
-    run_sha = value.get("source_prepared_run_sha")
-    if environment == "GITHUB_ACTIONS":
-        if (
-            not isinstance(run_id, str)
-            or not run_id.isdigit()
-            or run_id.startswith("0")
-            or not isinstance(run_sha, str)
-            or len(run_sha) != 40
-            or any(character not in "0123456789abcdef" for character in run_sha)
-            or git_source != "GITHUB_SHA"
-        ):
-            raise ValueError("research run workflow provenance is incomplete")
-    elif run_id is not None or run_sha is not None or git_source != "LOCAL_GIT_HEAD":
-        raise ValueError("local research run provenance is inconsistent")
 
 
 @dataclass(frozen=True)
@@ -245,7 +186,7 @@ class TwseResearchModelBundleManifest:
             raise ValueError("bundle artifact filenames are fixed by the contract")
         if not self.reason_codes or any(not value for value in self.reason_codes):
             raise ValueError("research bundle requires explicit reason_codes")
-        _validate_research_run_provenance(
+        validate_research_run_provenance_binding(
             self.research_run_provenance,
             market=self.market,
             input_artifact_sha256=self.input_artifact_sha256,

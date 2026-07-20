@@ -45,6 +45,14 @@ from src.pipeline.twse_research_snapshot_writer import (  # noqa: E402
 )
 
 
+class TpexDailyResearchPublishError(RuntimeError):
+    """Stable fail-closed reason exposed by the CLI report."""
+
+    def __init__(self, reason_code: str, message: str) -> None:
+        super().__init__(message)
+        self.reason_code: str = reason_code
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
@@ -143,7 +151,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         bundle_uri = training.artifacts.get("research_model_bundle")
         if training.status is not PipelineStatus.RESEARCH_ONLY or not bundle_uri:
-            raise ValueError("TPEX_RESEARCH_MODEL_BUNDLE_NOT_CREATED")
+            reason_code = next(
+                iter(training.reason_codes),
+                "TPEX_RESEARCH_MODEL_BUNDLE_NOT_CREATED",
+            )
+            raise TpexDailyResearchPublishError(
+                reason_code,
+                "TPEX research training did not produce a verified bundle",
+            )
         bundle_dir = _local_path(bundle_uri, directory=True)
         bundle = TwseResearchBundleReader.read(bundle_dir, expected_market="TPEX")
         features = LatestTpexFeatureRepository().load(

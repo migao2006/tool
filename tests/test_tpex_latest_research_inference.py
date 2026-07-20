@@ -56,6 +56,10 @@ def _training_provenance() -> dict[str, object]:
         "git_commit_source": "LOCAL_GIT_HEAD",
         "source_prepared_run_id": None,
         "source_prepared_run_sha": None,
+        "source_feature_run_id": "29716316791",
+        "source_feature_run_sha": "9" * 40,
+        "source_feature_artifact_id": "8450000001",
+        "source_feature_artifact_digest": "sha256:" + "a" * 64,
         "prepared_artifact_manifest": {
             "market": "TPEX",
             "parquet_sha256": "e" * 64,
@@ -67,6 +71,10 @@ def _training_provenance() -> dict[str, object]:
             "source_hash": "6" * 64,
             "benchmark_snapshot_sha256": "8" * 64,
             "feature_schema_hash": TPEX_PRICE_VOLUME_FEATURE_SCHEMA_HASH,
+            "feature_source_run_id": "29716316791",
+            "feature_source_run_sha": "9" * 40,
+            "feature_source_artifact_id": "8450000001",
+            "feature_source_artifact_digest": "sha256:" + "a" * 64,
         },
     }
 

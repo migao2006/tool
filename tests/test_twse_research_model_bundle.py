@@ -36,6 +36,10 @@ def _tpex_research_run_provenance() -> dict[str, object]:
         "git_commit_source": "LOCAL_GIT_HEAD",
         "source_prepared_run_id": None,
         "source_prepared_run_sha": None,
+        "source_feature_run_id": "29716316791",
+        "source_feature_run_sha": "8" * 40,
+        "source_feature_artifact_id": "8450000001",
+        "source_feature_artifact_digest": "sha256:" + "9" * 64,
         "prepared_artifact_manifest": {
             "market": "TPEX",
             "parquet_sha256": "a" * 64,
@@ -47,6 +51,10 @@ def _tpex_research_run_provenance() -> dict[str, object]:
             "source_hash": "6" * 64,
             "benchmark_snapshot_sha256": "7" * 64,
             "feature_schema_hash": "e" * 64,
+            "feature_source_run_id": "29716316791",
+            "feature_source_run_sha": "8" * 40,
+            "feature_source_artifact_id": "8450000001",
+            "feature_source_artifact_digest": "sha256:" + "9" * 64,
         },
     }
 
@@ -303,5 +311,12 @@ def test_tpex_bundle_has_explicit_market_identity_and_cannot_load_as_twse(
     assert loaded.manifest.contract_version == TPEX_RESEARCH_BUNDLE_CONTRACT_VERSION
     assert loaded.manifest.to_dict()["market"] == "TPEX"
     assert loaded.manifest.research_run_provenance == (_tpex_research_run_provenance())
+    mismatched_provenance = _tpex_research_run_provenance()
+    mismatched_provenance["source_feature_artifact_id"] = "8450000002"
+    with pytest.raises(ValueError, match="feature source provenance"):
+        _ = replace(
+            loaded.manifest,
+            research_run_provenance=mismatched_provenance,
+        )
     with pytest.raises(ValueError, match="requested venue"):
         _ = TwseResearchBundleReader.read(written.bundle_dir)

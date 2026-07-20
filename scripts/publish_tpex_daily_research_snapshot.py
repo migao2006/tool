@@ -8,6 +8,7 @@ from datetime import date
 import json
 import os
 from pathlib import Path
+import re
 import sys
 from typing import cast
 from urllib.parse import unquote, urlparse
@@ -28,7 +29,7 @@ from src.data.research.twse_research_prediction_supabase import (  # noqa: E402
 from src.pipeline.contracts import PipelineMode, PipelineStatus  # noqa: E402
 from src.pipeline.orchestrator import PipelineOrchestrator  # noqa: E402
 from src.pipeline.tpex_latest_feature_repository import (  # noqa: E402
-    LatestTpexFeatureRepository,
+    LatestTpexDailyFeatureRepository,
 )
 from src.pipeline.tpex_research_daily_inference import (  # noqa: E402
     TpexDailyResearchInference,
@@ -51,6 +52,45 @@ class TpexDailyResearchPublishError(RuntimeError):
     def __init__(self, reason_code: str, message: str) -> None:
         super().__init__(message)
         self.reason_code: str = reason_code
+
+
+_RUN_ID = re.compile(r"^[1-9][0-9]*$")
+_GIT_SHA = re.compile(r"^[0-9a-f]{40}$")
+_ARTIFACT_DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
+
+
+def _inference_feature_source() -> dict[str, object] | None:
+    if os.environ.get("GITHUB_ACTIONS", "").strip().lower() != "true":
+        return None
+    values = {
+        "run_id": os.environ.get("TPEX_INFERENCE_FEATURE_SOURCE_RUN_ID", "").strip(),
+        "run_sha": os.environ.get("TPEX_INFERENCE_FEATURE_SOURCE_RUN_SHA", "")
+        .strip()
+        .lower(),
+        "artifact_id": os.environ.get(
+            "TPEX_INFERENCE_FEATURE_SOURCE_ARTIFACT_ID", ""
+        ).strip(),
+        "artifact_digest": os.environ.get(
+            "TPEX_INFERENCE_FEATURE_SOURCE_ARTIFACT_DIGEST", ""
+        )
+        .strip()
+        .lower(),
+    }
+    if (
+        _RUN_ID.fullmatch(values["run_id"]) is None
+        or _GIT_SHA.fullmatch(values["run_sha"]) is None
+        or _RUN_ID.fullmatch(values["artifact_id"]) is None
+        or _ARTIFACT_DIGEST.fullmatch(values["artifact_digest"]) is None
+    ):
+        raise TpexDailyResearchPublishError(
+            "TPEX_INFERENCE_FEATURE_SOURCE_PROVENANCE_INVALID",
+            "TPEX inference feature workflow provenance is incomplete",
+        )
+    return {
+        "artifact_kind": "TPEX_DAILY_FEATURE_DELTA",
+        "producer_workflow": (".github/workflows/build-tpex-daily-feature-delta.yml"),
+        **values,
+    }
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -161,7 +201,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         bundle_dir = _local_path(bundle_uri, directory=True)
         bundle = TwseResearchBundleReader.read(bundle_dir, expected_market="TPEX")
-        features = LatestTpexFeatureRepository().load(
+        features = LatestTpexDailyFeatureRepository().load(
             cast(Path, arguments.feature_input),
             cast(Path, arguments.feature_audit),
             as_of_date=cast(date | None, arguments.required_as_of_date),
@@ -176,6 +216,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             features,
             bundle,
             load_mvp_config(config_path),
+            feature_source_provenance=_inference_feature_source(),
         )
         output = (
             artifact_root

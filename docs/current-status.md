@@ -143,6 +143,13 @@ v2 新增並驗證 `decision_close_price`，供每日推論依真實收盤價重
 
 - 12 檔來源股票沒有產生 feature row；現行 audit 只保存彙總原因，包括 33,044 筆隔離列與
   各視窗的不足歷史，沒有逐檔排除清單，因此不得捏造這 12 檔的個別原因。
+- 本次分支新增獨立的 exact-date TPEX daily feature delta：它會從 immutable R2 歷史日線讀取
+  每檔最近 61 個 session，再串接 Supabase 同日最新且完整的 TPEX `daily_bars` revision，輸出
+  版本化 Parquet、composite snapshot SHA-256 與 read-back audit。成功的每日行情匯入後才會觸發，
+  且 `TPEX_DAILY_FEATURE_DELTA_ENABLED` 未設為 `true` 時不執行。
+- Daily delta 只驗證實際取用的 canonical DB rows、R2 歷史 object 與衍生 artifact；目前 DB
+  `source_version` 不是完整官方 payload digest，亦尚未連接 immutable publication snapshot，故固定保留
+  `CANONICAL_DAILY_BAR_ROWS_NOT_RAW_PAYLOAD_VERIFIED / RESEARCH_ONLY / UNVERIFIED`，不得升級為正式 PIT。
 - Parquet SHA-256 為 `7e12dac2707e7dea17559ffe6b69f74f08ae4790c712c52bd33de1564eb3da8b`，
   schema SHA-256 為 `a53d4976fb779f89054786e2f960d355f4f4426a90eb4a46eadce251c1c22dad`；
   feature schema 為 `b9fbc304b7cd22310b62b291953440d231a44d554c93021aaae62d154f9acf96`。
@@ -298,7 +305,8 @@ point-in-time 或正式模型可用度。
 2. 補齊歷史 listing periods、代號重用、ISIN、產業 vintage 與下市解析，不得把 current snapshot 當歷史真相。
 3. 完成剩餘融資券任務，建立可驗證的 adjusted price／公司行動／交易狀態來源，再把 supplemental 資料納入 fold 內特徵工程。
 4. 補齊可驗證交易日曆、可成交性及 TAIEX total-return benchmark 契約，讓 tradability 與 market exposure gate 能使用正式輸入。
-5. 執行並稽核已建立的上櫃獨立價量 feature workflow；之後才建立櫃買基準 R2 archive、
-   5 日標籤與獨立模型。ETF 另用獨立追蹤基準、成本及模型，不與普通股混訓。
+5. 等同日上櫃行情成功匯入後執行並稽核 daily feature delta，並先在 Staging 補齊可解析的 TPEX
+   securities，再重跑已建立的上櫃每日研究推論；失敗時維持 fail closed。ETF 另用獨立追蹤基準、
+   成本及模型，不與普通股混訓。
 6. 建立正式 horizon=5 executable total-return labels，重新執行 purged walk-forward 並改善未通過的排名模型。
 7. 研究設計、特徵與門檻凍結且排名通過基準後，才執行一次 locked holdout 與完整成本回測；未達門檻時繼續維持 `RESEARCH_ONLY` 或標示 `FAIL`。

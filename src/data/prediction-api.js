@@ -3,6 +3,10 @@ import {
   isReleasedHorizon,
   normalizeHorizon,
 } from "../core/five-day-contract.js";
+import {
+  DEFAULT_MARKET_SCOPE,
+  normalizeMarketScope,
+} from "../core/market-scope.js";
 import { publicConfig } from "../core/public-config.js?v=api-3";
 import {
   PredictionApiError,
@@ -15,21 +19,31 @@ import { isSupabaseSdkLoadError } from "./supabase-sdk-loader.js?v=auth-1";
 
 export { PredictionApiError };
 
-function predictionQuery(horizon) {
-  return { horizon };
+function predictionQuery(horizon, marketScope) {
+  return { horizon, market: marketScope };
 }
 
 export async function loadPredictionSnapshot({
   horizon = CURRENT_HORIZON,
+  market = DEFAULT_MARKET_SCOPE,
   signal,
   config = publicConfig,
 } = {}) {
   const normalizedHorizon = normalizeHorizon(horizon);
+  const normalizedMarket = normalizeMarketScope(market);
   if (!isReleasedHorizon(normalizedHorizon)) {
-    return createUnavailableSnapshot({ horizon: normalizedHorizon, reasonCode: "MODEL_NOT_RELEASED" });
+    return createUnavailableSnapshot({
+      horizon: normalizedHorizon,
+      marketScope: normalizedMarket,
+      reasonCode: "MODEL_NOT_RELEASED",
+    });
   }
   if (!resolvePredictionApiBaseUrl(config)) {
-    return createUnavailableSnapshot({ horizon: normalizedHorizon, reasonCode: "PREDICTION_API_NOT_CONFIGURED" });
+    return createUnavailableSnapshot({
+      horizon: normalizedHorizon,
+      marketScope: normalizedMarket,
+      reasonCode: "PREDICTION_API_NOT_CONFIGURED",
+    });
   }
   let accessToken = null;
   try {
@@ -43,13 +57,13 @@ export async function loadPredictionSnapshot({
     // The current endpoint reads an immutable stored snapshot. Device research
     // preferences remain local until the API can produce a separately versioned
     // result for those settings; forwarding them would invalidate the request.
-    query: predictionQuery(normalizedHorizon),
+    query: predictionQuery(normalizedHorizon, normalizedMarket),
     accessToken,
     signal,
     config,
   });
   try {
-    return normalizePredictionSnapshot(payload, normalizedHorizon);
+    return normalizePredictionSnapshot(payload, normalizedHorizon, normalizedMarket);
   } catch (error) {
     throw new PredictionApiError(
       "PREDICTION_API_CONTRACT_ERROR",

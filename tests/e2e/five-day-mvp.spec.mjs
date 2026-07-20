@@ -199,7 +199,7 @@ test("歷史 OOS 研究快照的 NO_TRADE 排序與已完成輸出仍可檢視",
   await expect(banner).toHaveClass(/is-badge-only/u);
   await expect(banner.locator("[data-system-status-label]")).toHaveText("RESEARCH_ONLY");
   await expect(banner.locator("[data-status-copy]")).toBeHidden();
-  await expect(page.locator("[data-overview-list-title]")).toHaveText("5 日歷史研究排序");
+  await expect(page.locator("[data-overview-list-title]")).toHaveText("上市 5 日歷史研究排序");
   const overviewCard = page.locator('[data-overview-candidates] .candidate-card[data-symbol="OOS1"]');
   await expect(overviewCard).toBeVisible();
   await expect(overviewCard).toContainText("Rank Score 97.0");
@@ -211,8 +211,10 @@ test("歷史 OOS 研究快照的 NO_TRADE 排序與已完成輸出仍可檢視",
   const navigation = page.getByRole("navigation", { name: "主要導覽" });
   await navigation.getByRole("button", { name: "5 日候選" }).click();
   await expect(page.locator('[data-candidate-filters] select[name="decision"]')).toBeEnabled();
-  await expect(page.locator('[data-candidate-filters] button[data-value="TWSE"]')).toBeEnabled();
-  await expect(page.locator("[data-candidate-list-title]")).toHaveText("5 日歷史研究結果");
+  await expect(
+    page.locator('[data-market-scope-switch][aria-label="候選股市場資料集"] button[data-market-scope="TWSE"]'),
+  ).toBeEnabled();
+  await expect(page.locator("[data-candidate-list-title]")).toHaveText("上市 5 日歷史研究結果");
   const researchCard = page.locator('[data-candidate-list] .candidate-card[data-symbol="OOS1"]');
   await expect(researchCard).toBeVisible();
   await expect(researchCard.locator(".decision-badge")).toHaveText("NO_TRADE");

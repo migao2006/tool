@@ -95,7 +95,7 @@ def build_snapshot() -> dict[str, object]:
         previous_decision="WATCH",
         gates=gates,
     )
-    return PredictionSnapshotOutput(
+    payload = PredictionSnapshotOutput(
         as_of_date=AS_OF_DATE,
         decision_at=DECISION_AT,
         horizon=5,
@@ -119,7 +119,7 @@ def build_snapshot() -> dict[str, object]:
                 as_of_date=AS_OF_DATE,
                 symbol="FAIL1",
                 name="API 排除測試標的",
-                market="OTC",
+                market="LISTED",
                 horizon=5,
                 reason_codes=("DATA_QUALITY_HARD_FAIL",),
                 latest_available_at=DECISION_AT,
@@ -130,6 +130,30 @@ def build_snapshot() -> dict[str, object]:
         cost_profile_version="tw-stock-base-v1",
         validation={"ndcg_10": 0.42, "known_limitations": ["TEST_ONLY_FIXTURE"]},
     ).to_dict()
+    payload["market_scope"] = "TWSE"
+    return payload
+
+
+def build_empty_tpex_snapshot() -> dict[str, object]:
+    return {
+        "api_contract_version": "prediction-snapshot.v1",
+        "as_of_date": None,
+        "decision_at": None,
+        "horizon": 5,
+        "market_scope": "TPEX",
+        "system_status": "RESEARCH_ONLY",
+        "stale": True,
+        "data_quality_hard_fail": False,
+        "reason_codes": ["NO_PREDICTION_SNAPSHOT"],
+        "market": None,
+        "predictions": [],
+        "watchlist": [],
+        "excluded": [],
+        "model_version": None,
+        "training_end_date": None,
+        "cost_profile_version": None,
+        "validation": {},
+    }
 
 
 def build_research_snapshot() -> dict[str, object]:
@@ -348,11 +372,19 @@ class FixtureHandler(SimpleHTTPRequestHandler):
             self._send(409, body, "application/json; charset=utf-8")
             return
         if parsed.path == "/api/prediction-snapshot":
-            if parse_qs(parsed.query).get("horizon") != ["5"]:
+            query = parse_qs(parsed.query)
+            if query.get("horizon") != ["5"]:
                 self._send(422, b'{"code":"INVALID_HORIZON"}', "application/json")
                 return
+            market = query.get("market", ["TWSE"])
+            if len(market) != 1 or market[0] not in {"TWSE", "TPEX"}:
+                self._send(422, b'{"code":"UNSUPPORTED_MARKET"}', "application/json")
+                return
+            payload = (
+                build_snapshot() if market[0] == "TWSE" else build_empty_tpex_snapshot()
+            )
             body = json.dumps(
-                build_snapshot(), ensure_ascii=False, allow_nan=False
+                payload, ensure_ascii=False, allow_nan=False
             ).encode()
             self._send(200, body, "application/json; charset=utf-8")
             return
@@ -361,8 +393,8 @@ class FixtureHandler(SimpleHTTPRequestHandler):
 <script type=\"module\">
 import { normalizePredictionSnapshot } from '/src/data/prediction-contract.js?v=contract-test-4';
 try {
-  const response = await fetch('/api/prediction-snapshot?horizon=5');
-  const snapshot = normalizePredictionSnapshot(await response.json(), 5);
+  const response = await fetch('/api/prediction-snapshot?horizon=5&market=TWSE');
+  const snapshot = normalizePredictionSnapshot(await response.json(), 5, 'TWSE');
   document.body.textContent = JSON.stringify({ok: true, status: snapshot.systemStatus});
 } catch (error) {
   document.body.textContent = JSON.stringify({ok: false, name: error.name, message: error.message});

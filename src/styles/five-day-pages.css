@@ -24,6 +24,11 @@
 
 .candidate-filters { padding: 0; overflow: hidden; }
 .candidate-filter-stack { display: grid; gap: 10px; }
+.market-scope-switch {
+  margin: 0 0 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.market-scope-switch button { min-height: 44px; }
 .candidate-search {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;

@@ -1,4 +1,9 @@
 import { CURRENT_HORIZON, SYSTEM_STATUS, normalizeHorizon } from "../core/five-day-contract.js";
+import {
+  DEFAULT_MARKET_SCOPE,
+  createStockKey,
+  normalizeMarketScope,
+} from "../core/market-scope.js";
 import { validateFormalSnapshot } from "./prediction-validator.js?v=api-5";
 
 const DECISIONS = new Set(["CANDIDATE", "WATCH", "NO_TRADE"]);
@@ -148,13 +153,24 @@ function normalizeValidation(raw = {}) {
   });
 }
 
-export function normalizePredictionSnapshot(payload, expectedHorizon = CURRENT_HORIZON) {
+export function normalizePredictionSnapshot(
+  payload,
+  expectedHorizon = CURRENT_HORIZON,
+  expectedMarketScope = DEFAULT_MARKET_SCOPE,
+) {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     throw new TypeError("預測 API 回傳格式不正確。");
   }
   const horizon = normalizeHorizon(firstValue(payload, ["horizon"], expectedHorizon));
   if (horizon !== expectedHorizon || horizon !== CURRENT_HORIZON) {
     throw new RangeError("預測 API 回傳的 horizon 與請求不一致。");
+  }
+  const requestedMarketScope = normalizeMarketScope(expectedMarketScope);
+  const marketScope = normalizeMarketScope(
+    firstValue(payload, ["market_scope", "marketScope"], DEFAULT_MARKET_SCOPE),
+  );
+  if (marketScope !== requestedMarketScope) {
+    throw new RangeError("預測 API 回傳的市場與請求不一致。");
   }
 
   const rawPredictions = firstValue(payload, ["predictions", "candidates", "stock_predictions"], []);
@@ -166,7 +182,13 @@ export function normalizePredictionSnapshot(payload, expectedHorizon = CURRENT_H
     ...(Array.isArray(explicitExcluded) ? explicitExcluded.map((record) => normalizePrediction(record, horizon)) : []),
     ...predictions.filter((record) => record.data_quality_hard_fail),
   ];
-  const uniqueExcluded = [...new Map(excluded.map((record) => [record.symbol, record])).values()];
+  const allRecords = [...predictions, ...watchlist, ...excluded];
+  if (allRecords.some((record) => record.market !== marketScope)) {
+    throw new RangeError("預測 API 回傳包含其他市場的股票資料。");
+  }
+  const uniqueExcluded = [
+    ...new Map(excluded.map((record) => [createStockKey(record), record])).values(),
+  ];
   const statusValue = String(firstValue(payload, ["system_status", "systemStatus"], SYSTEM_STATUS.RESEARCH_ONLY)).toUpperCase();
   const apiContractVersion = nullableString(firstValue(payload, ["api_contract_version", "apiContractVersion"]));
   if (apiContractVersion && apiContractVersion !== API_CONTRACT_VERSION) {
@@ -176,6 +198,7 @@ export function normalizePredictionSnapshot(payload, expectedHorizon = CURRENT_H
   const snapshot = Object.freeze({
     apiContractVersion,
     horizon,
+    marketScope,
     systemStatus: SYSTEM_STATUSES.has(statusValue) ? statusValue : SYSTEM_STATUS.FAIL,
     asOfDate: nullableString(firstValue(payload, ["as_of_date", "asOfDate"])),
     decisionAt: nullableString(firstValue(payload, ["decision_at", "decisionAt"])),
@@ -198,14 +221,17 @@ export function normalizePredictionSnapshot(payload, expectedHorizon = CURRENT_H
 
 export function createUnavailableSnapshot({
   horizon = CURRENT_HORIZON,
+  marketScope = DEFAULT_MARKET_SCOPE,
   status = SYSTEM_STATUS.RESEARCH_ONLY,
   reasonCode = "REAL_DATA_NOT_CONNECTED",
 } = {}) {
+  const normalizedMarketScope = normalizeMarketScope(marketScope);
   return normalizePredictionSnapshot({
     horizon,
+    market_scope: normalizedMarketScope,
     system_status: status,
     reason_codes: [reasonCode],
     predictions: [],
     watchlist: [],
-  }, horizon);
+  }, horizon, normalizedMarketScope);
 }

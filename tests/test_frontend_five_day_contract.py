@@ -69,7 +69,9 @@ def test_prediction_client_accepts_horizon_fetches_only_when_configured() -> Non
     assert 'new URL("./", globalThis.location.href)' in public_config
     assert "new URL(apiBaseUrl, globalThis.location?.href)" in transport
     assert "fetch(url" in transport
-    assert "query: predictionQuery(normalizedHorizon)" in client
+    assert "query: predictionQuery(normalizedHorizon, normalizedMarket)" in client
+    assert "market = DEFAULT_MARKET_SCOPE" in client
+    assert "normalizeMarketScope(market)" in client
     assert "RESEARCH_SETTING_KEYS" not in client
     assert "readSupabaseAccessToken" in client
     assert "accessToken," in client
@@ -178,9 +180,12 @@ def test_stock_route_and_saved_research_settings_are_guarded() -> None:
     settings = read("src/features/research-settings.js")
     form = read("src/components/research-settings-drawer.js")
 
-    assert 'canActivate: (route) => route !== "stock" || Boolean(selectedSymbol)' in app
+    assert "createStockKey(record) === stockKey" in app
+    assert 'router.show("stock", { stockKey })' in app
+    assert "stockKeyFromRoute" in router
+    assert "stockRoutePath" in router
     assert 'router.current() === "stock"' in app
-    assert "canActivate(requestedRoute)" in router
+    assert "canActivate(requested.route, requested)" in router
     assert "history.replaceState" in router
     assert "NUMERIC_RULES" in settings
     assert "COST_PROFILES" in settings

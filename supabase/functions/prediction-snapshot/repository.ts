@@ -123,8 +123,7 @@ export class SnapshotRepository implements SnapshotRepositoryContract {
           "security_id",
           securityIds,
           "security_id,effective_from,effective_to,industry_code,industry_name,source_version,available_at",
-          "effective_from.desc,available_at.desc",
-          { effective_to: "is.null" },
+          "effective_from.desc,available_at.desc,security_id.asc",
         ),
         this.#selectIn<DecisionGateRow>(
           "decision_gate_results",

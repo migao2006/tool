@@ -77,7 +77,7 @@ Function 以 server-side `SUPABASE_SERVICE_ROLE_KEY` 讀取私有 schema，該 k
 | `cost_profile_version` | 成本契約版本 |
 | `validation` | Walk-forward、holdout、排名、校準與成本敏感度摘要 |
 
-研究快照可附加下列目前證券主檔分類欄位：`current_industry`、
+研究快照可附加下列最新已發布證券主檔分類欄位：`current_industry`、
 `current_industry_code`、`industry_classification_effective_from`、
 `industry_classification_available_at` 及 `industry_classification_basis`。
 它們只供目前畫面顯示與篩選，不是模型在 `decision_at` 使用的 point-in-time

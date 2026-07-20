@@ -147,7 +147,7 @@ export function initializeCandidateFilters({ onChange } = {}) {
   return Object.freeze({
     getFilters: () => currentFilters(root),
     setRecords: (records) => {
-      replaceOptions(root.querySelector('[name="industry"]'), records.map(recordIndustry), "全部目前產業", "尚無產業分類");
+      replaceOptions(root.querySelector('[name="industry"]'), records.map(recordIndustry), "全部最新產業", "尚無產業分類");
       replaceOptions(root.querySelector('[name="decision"]'), records.map((record) => record.decision), "全部決策", "尚無決策分類");
       replaceOptions(root.querySelector('[name="data_quality"]'), records.map((record) => record.data_quality_status), "全部資料品質", "尚無資料品質分類");
       replaceOptions(root.querySelector('[name="liquidity_bucket"]'), records.map((record) => record.liquidity_bucket), "全部流動性", "尚無流動性分類");

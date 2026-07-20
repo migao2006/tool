@@ -1,11 +1,11 @@
 import { createEmptyState } from "../components/empty-state.js";
-import { createCandidateCard } from "../components/candidate-card.js?v=classification-1";
+import { createCandidateCard } from "../components/candidate-card.js?v=classification-2";
 import { createExcludedSecuritiesDrawer, renderExcludedSecurities } from "../components/excluded-securities-drawer.js";
 import { createStatusBanner } from "../components/status-banner.js";
 import { createMarketScopeSwitch } from "../components/market-scope-switch.js";
-import { createCandidateFilterDrawer } from "../components/candidate-filter-drawer.js?v=classification-1";
+import { createCandidateFilterDrawer } from "../components/candidate-filter-drawer.js?v=classification-2";
 import { marketScopeLabel } from "../core/market-scope.js";
-import { filterCandidateRecords } from "../features/candidate-filters.js?v=classification-1";
+import { filterCandidateRecords } from "../features/candidate-filters.js?v=classification-2";
 import {
   canDisplaySnapshotRecords,
   displayableStockRecords,

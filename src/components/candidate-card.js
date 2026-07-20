@@ -11,7 +11,7 @@ export function createCandidateCard(prediction, { horizon, compact = false } = {
   const market = escapeHtml(prediction.market ?? "");
   const stockKey = escapeHtml(createStockKey(prediction));
   const industry = prediction.current_industry ?? prediction.industry;
-  const industryLabel = prediction.current_industry ? "目前分類" : "產業";
+  const industryLabel = prediction.current_industry ? "最新分類" : "產業";
   const detailRows = compact ? "" : `
     <dl class="candidate-values">
       <div><dt>Rank Score（當日橫斷面排名百分位）</dt><dd>${formatRankScore(prediction.rank_score)}</dd></div>

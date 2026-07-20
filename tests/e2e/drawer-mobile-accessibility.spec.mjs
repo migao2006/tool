@@ -71,3 +71,50 @@ test("200% 大字與鍵盤縮短畫面後研究設定仍可完整操作", async 
 	await expect(drawer).not.toBeVisible();
 	await expect(opener).toBeFocused();
 });
+
+test("320px 與 200% 大字下驗證狀態說明不會被擠成直排", async ({
+	page,
+}, testInfo) => {
+	await page.setViewportSize({ width: 320, height: 568 });
+	await page.goto("/?api_mode=stale-oos-research", {
+		waitUntil: "domcontentloaded",
+	});
+	await page.evaluate(() => {
+		document.documentElement.style.fontSize = "32px";
+		document.documentElement.style.scrollBehavior = "auto";
+	});
+
+	const opener = page.getByRole("button", { name: "查看模型驗證報告" });
+	await opener.click();
+	const drawer = page.getByRole("dialog", { name: "驗證報告" });
+	const banner = drawer.locator(".system-banner.compact");
+	const badge = banner.locator(".system-badge");
+	const close = drawer.getByRole("button", { name: "關閉驗證報告" });
+	await expect(drawer).toBeVisible();
+	await expect(close).toBeFocused();
+
+	const bannerLayout = await banner.evaluate((element) => {
+		const badgeBox = element.querySelector(".system-badge")?.getBoundingClientRect();
+		const copyBox = element.querySelector("div")?.getBoundingClientRect();
+		return {
+			badgeBottom: badgeBox?.bottom ?? null,
+			copyTop: copyBox?.top ?? null,
+			copyWidth: copyBox?.width ?? null,
+		};
+	});
+	expect(bannerLayout.copyWidth).toBeGreaterThanOrEqual(200);
+	expect(bannerLayout.copyTop).toBeGreaterThanOrEqual(bannerLayout.badgeBottom);
+	await expect(badge).toBeInViewport();
+	await captureViewport(page, testInfo, "27-validation-report-large-text-200", {
+		includeNavigation: false,
+	});
+
+	const limitations = drawer.locator(".audit-note");
+	await limitations.scrollIntoViewIfNeeded();
+	await expect(limitations).toBeInViewport();
+	await expect(close).toBeInViewport();
+	await verifyTouchTarget(close);
+	await close.click();
+	await expect(drawer).not.toBeVisible();
+	await expect(opener).toBeFocused();
+});

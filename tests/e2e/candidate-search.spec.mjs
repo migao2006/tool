@@ -1,0 +1,140 @@
+import { expect, test } from "@playwright/test";
+import { routeHomeDataStatus } from "./support/home-data-status-fixture.mjs";
+import { verifyTouchTarget } from "./support/mobile-audit-helpers.mjs";
+
+test.beforeEach(async ({ page }) => {
+	await routeHomeDataStatus(page);
+});
+
+async function routeThreeStockSnapshot(page) {
+	await page.route("**/api/prediction-snapshot**", async (route) => {
+		const response = await route.fetch();
+		const payload = await response.json();
+		const template = payload.predictions[0];
+		payload.predictions = [
+			{
+				...template,
+				symbol: "6515",
+				name: "穎崴",
+				global_rank: 1,
+				industry_rank: 1,
+				rank_score: 99,
+			},
+			{
+				...template,
+				symbol: "2330",
+				name: "台積電",
+				global_rank: 2,
+				industry_rank: 2,
+				rank_score: 98,
+			},
+			{
+				...template,
+				symbol: "2454",
+				name: "聯發科",
+				global_rank: 3,
+				industry_rank: 3,
+				rank_score: 97,
+			},
+		];
+		await route.fulfill({ response, json: payload });
+	});
+}
+
+async function openCandidates(page) {
+	await page.goto("/", { waitUntil: "domcontentloaded" });
+	await page
+		.getByRole("navigation", { name: "主要導覽" })
+		.getByRole("button", { name: "5 日候選" })
+		.click();
+}
+
+test("可用股票代號或名稱搜尋且不改變 Rank Score 順序", async ({ page }) => {
+	await routeThreeStockSnapshot(page);
+	await openCandidates(page);
+
+	const search = page.getByRole("searchbox", { name: "搜尋股票" });
+	const cards = page.locator("[data-candidate-list] .candidate-card");
+	const symbols = () =>
+		cards.evaluateAll((items) => items.map((item) => item.dataset.symbol));
+	await expect(cards).toHaveCount(3);
+	expect(await symbols()).toEqual(["6515", "2330", "2454"]);
+
+	await search.fill("2330");
+	await expect(cards).toHaveCount(1);
+	expect(await symbols()).toEqual(["2330"]);
+
+	await search.fill("台積");
+	await expect(cards).toHaveCount(1);
+	await expect(cards.first()).toHaveAttribute("data-symbol", "2330");
+
+	await search.fill("２４５４");
+	await expect(cards).toHaveCount(1);
+	await expect(cards.first()).toHaveAttribute("data-symbol", "2454");
+
+	await search.fill("不存在");
+	await expect(cards).toHaveCount(0);
+	await expect(page.locator("[data-candidate-list]")).toContainText(
+		"沒有符合搜尋或篩選的股票",
+	);
+
+	const clear = page.getByRole("button", { name: "清除" });
+	await expect(clear).toBeVisible();
+	await clear.click();
+	await expect(search).toHaveValue("");
+	await expect(search).toBeFocused();
+	await expect(clear).toBeHidden();
+	await expect(cards).toHaveCount(3);
+	expect(await symbols()).toEqual(["6515", "2330", "2454"]);
+
+	await search.fill("FAIL1");
+	await expect(cards).toHaveCount(0);
+	await page.getByRole("button", { name: /資料排除/u }).click();
+	const excluded = page.getByRole("dialog", { name: "排除清單" });
+	await expect(excluded).toContainText("FAIL1");
+	await expect(excluded).toContainText("DATA_QUALITY_HARD_FAIL");
+});
+
+test("320px 與 200% 大字仍可操作搜尋且沒有水平溢位", async ({ page }) => {
+	await routeThreeStockSnapshot(page);
+	await page.setViewportSize({ width: 320, height: 568 });
+	await openCandidates(page);
+	await page.evaluate(() => {
+		document.documentElement.style.fontSize = "32px";
+		document.documentElement.style.scrollBehavior = "auto";
+	});
+
+	const search = page.getByRole("searchbox", { name: "搜尋股票" });
+	await search.fill("2330");
+	const clear = page.getByRole("button", { name: "清除" });
+	await expect(search).toBeVisible();
+	await expect(clear).toBeVisible();
+	await verifyTouchTarget(search);
+	await verifyTouchTarget(clear);
+
+	const layout = await page.evaluate(() => ({
+		clientWidth: document.documentElement.clientWidth,
+		scrollWidth: document.documentElement.scrollWidth,
+		searchRight:
+			document.querySelector(".candidate-search")?.getBoundingClientRect()
+				.right ?? 0,
+	}));
+	expect(layout.scrollWidth).toBeLessThanOrEqual(layout.clientWidth + 1);
+	expect(layout.searchRight).toBeLessThanOrEqual(layout.clientWidth + 1);
+});
+
+test("API 錯誤時搜尋功能會停用", async ({ page }) => {
+	await page.goto("/?api_mode=invalid-json", { waitUntil: "domcontentloaded" });
+	await page
+		.getByRole("navigation", { name: "主要導覽" })
+		.getByRole("button", { name: "5 日候選" })
+		.click();
+
+	await expect(page.locator("body")).toHaveAttribute(
+		"data-ui-state",
+		"api_error",
+	);
+	await expect(
+		page.getByRole("searchbox", { name: "搜尋股票" }),
+	).toBeDisabled();
+});

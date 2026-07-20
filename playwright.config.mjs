@@ -36,7 +36,7 @@ export default defineConfig({
     {
       name: "iphone-webkit",
       testMatch:
-        /(?:(?:auth|drawer)-mobile-accessibility|mobile-(?:large-text-|responsive-layout-|visual-)audit)\.spec\.mjs/,
+        /(?:candidate-search|(?:auth|drawer)-mobile-accessibility|mobile-(?:large-text-|responsive-layout-|visual-)audit)\.spec\.mjs/,
       use: {
         ...devices["iPhone 13"],
         browserName: "webkit",

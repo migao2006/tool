@@ -1,7 +1,7 @@
 import { createBottomNavigation } from "./src/components/bottom-navigation.js";
 import { initializeDrawers } from "./src/components/drawer-controller.js?v=debug-1";
 import { initializeResearchSettings } from "./src/features/research-settings.js?v=stored-snapshot-1";
-import { initializeCandidateFilters } from "./src/features/candidate-filters.js";
+import { initializeCandidateFilters } from "./src/features/candidate-filters.js?v=stock-search-1";
 import { initializeWatchlistFilters } from "./src/features/watchlist-filters.js";
 import { CURRENT_HORIZON } from "./src/core/five-day-contract.js";
 import { createRouter } from "./src/core/router.js?v=debug-2";
@@ -22,7 +22,7 @@ import {
   createCandidatesPage,
   initializeCandidatePagination,
   renderCandidatesPage,
-} from "./src/pages/candidates-page.js?v=mobile-ui-1";
+} from "./src/pages/candidates-page.js?v=stock-search-1";
 import { createOverviewPage, renderOverviewPage } from "./src/pages/overview-page.js?v=mobile-ui-1";
 import { createStockDetailPage, renderStockDetailPage } from "./src/pages/stock-detail-page.js?v=mobile-ui-2";
 import { createWatchlistPage, renderWatchlistPage } from "./src/pages/watchlist-page.js?v=research-ui-1";

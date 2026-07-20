@@ -9,8 +9,13 @@ function numberValue(root, name) {
   return Number.isFinite(value) ? value : null;
 }
 
+function normalizeSearchText(value) {
+  return String(value ?? "").normalize("NFKC").trim().toLocaleLowerCase("zh-Hant");
+}
+
 function currentFilters(root) {
   return Object.freeze({
+    searchQuery: root.querySelector('[name="stock_search"]')?.value ?? "",
     market: selectedSegment(root, "market"),
     industry: root.querySelector('[name="industry"]')?.value ?? "",
     decision: root.querySelector('[name="decision"]')?.value ?? "",
@@ -40,7 +45,12 @@ function replaceOptions(select, values, allLabel) {
 }
 
 export function filterCandidateRecords(records, filters) {
+  const searchQuery = normalizeSearchText(filters.searchQuery);
   return records.filter((record) => {
+    if (searchQuery) {
+      const searchableText = normalizeSearchText(`${record.symbol ?? ""} ${record.name ?? ""}`);
+      if (!searchableText.includes(searchQuery)) return false;
+    }
     if (filters.market && record.market !== filters.market) return false;
     if (filters.industry && record.industry !== filters.industry) return false;
     if (filters.decision && record.decision !== filters.decision) return false;
@@ -57,7 +67,20 @@ export function initializeCandidateFilters({ onChange } = {}) {
   const root = document.querySelector("[data-candidate-filters]");
   if (!root) return Object.freeze({ getFilters: () => Object.freeze({}), setRecords: () => {} });
 
+  const searchInput = root.querySelector('[name="stock_search"]');
+  const clearSearchButton = root.querySelector("[data-clear-candidate-search]");
+  const syncSearchClearButton = () => {
+    if (clearSearchButton) clearSearchButton.hidden = !normalizeSearchText(searchInput?.value);
+  };
+
   root.addEventListener("click", (event) => {
+    if (event.target.closest("[data-clear-candidate-search]")) {
+      if (searchInput) searchInput.value = "";
+      syncSearchClearButton();
+      searchInput?.focus();
+      onChange?.(currentFilters(root));
+      return;
+    }
     const button = event.target.closest('[data-filter="market"] button[data-value]');
     if (!button) return;
     button.closest("[data-filter]").querySelectorAll("button[data-value]").forEach((item) => {
@@ -67,8 +90,12 @@ export function initializeCandidateFilters({ onChange } = {}) {
     });
     onChange?.(currentFilters(root));
   });
-  root.addEventListener("input", () => onChange?.(currentFilters(root)));
+  root.addEventListener("input", () => {
+    syncSearchClearButton();
+    onChange?.(currentFilters(root));
+  });
   root.addEventListener("change", () => onChange?.(currentFilters(root)));
+  syncSearchClearButton();
 
   return Object.freeze({
     getFilters: () => currentFilters(root),

@@ -1,4 +1,4 @@
-"""Versioned contracts for a native-LightGBM TWSE research bundle."""
+"""Versioned contracts for venue-isolated native-LightGBM research bundles."""
 
 # pyright: reportUnknownArgumentType=false, reportUnknownVariableType=false
 
@@ -12,8 +12,13 @@ import json
 
 from src.core.horizon import require_production_horizon
 
+from .research_provenance_binding import (
+    validate_research_run_provenance_binding,
+)
+
 
 TWSE_RESEARCH_BUNDLE_CONTRACT_VERSION = "twse-research-model-bundle-v1"
+TPEX_RESEARCH_BUNDLE_CONTRACT_VERSION = "tpex-research-model-bundle-v1"
 MECHANICAL_LAST_FOLD_POLICY = "MECHANICAL_LAST_WALK_FORWARD_FOLD"
 BUNDLE_FILE_NAMES = {
     "rank_booster": "rank.txt",
@@ -27,8 +32,19 @@ BUNDLE_FILE_NAMES = {
 }
 
 
+def research_bundle_contract_version(market: str) -> str:
+    normalized = market.strip().upper()
+    if normalized == "TWSE":
+        return TWSE_RESEARCH_BUNDLE_CONTRACT_VERSION
+    if normalized == "TPEX":
+        return TPEX_RESEARCH_BUNDLE_CONTRACT_VERSION
+    raise ValueError("research model bundle market is unsupported")
+
+
 def _require_sha256(value: str, field_name: str) -> None:
-    if len(value) != 64 or any(character not in "0123456789abcdef" for character in value):
+    if len(value) != 64 or any(
+        character not in "0123456789abcdef" for character in value
+    ):
         raise ValueError(f"{field_name} must be a lowercase SHA-256 digest")
 
 
@@ -105,7 +121,9 @@ class TwseResearchModelBundleManifest:
     files: Mapping[str, BundleFileRecord]
     library_versions: Mapping[str, str]
     reason_codes: tuple[str, ...]
+    research_run_provenance: Mapping[str, object] | None = None
     git_commit: str | None = None
+    market: str = "TWSE"
     contract_version: str = TWSE_RESEARCH_BUNDLE_CONTRACT_VERSION
     system_status: str = "RESEARCH_ONLY"
     selection_policy: str = MECHANICAL_LAST_FOLD_POLICY
@@ -113,7 +131,9 @@ class TwseResearchModelBundleManifest:
 
     def __post_init__(self) -> None:
         _ = require_production_horizon(self.horizon)
-        if self.contract_version != TWSE_RESEARCH_BUNDLE_CONTRACT_VERSION:
+        if self.market not in {"TWSE", "TPEX"}:
+            raise ValueError("research model bundle market is unsupported")
+        if self.contract_version != research_bundle_contract_version(self.market):
             raise ValueError("unsupported model bundle contract version")
         if self.system_status != "RESEARCH_ONLY":
             raise ValueError("this bundle cannot be promoted beyond RESEARCH_ONLY")
@@ -136,16 +156,25 @@ class TwseResearchModelBundleManifest:
         _require_sha256(self.feature_schema_hash, "feature_schema_hash")
         _require_sha256(self.input_artifact_sha256, "input_artifact_sha256")
         _require_sha256(self.source_hash, "source_hash")
-        if not self.feature_names or len(set(self.feature_names)) != len(self.feature_names):
+        if not self.feature_names or len(set(self.feature_names)) != len(
+            self.feature_names
+        ):
             raise ValueError("feature_names must be non-empty and unique")
         if self.direction_classes != ("DOWN", "NEUTRAL", "UP"):
-            raise ValueError("direction_classes must preserve the fitted LightGBM order")
+            raise ValueError(
+                "direction_classes must preserve the fitted LightGBM order"
+            )
         if not (
-            self.training_start_date <= self.training_end_date
-            < self.calibration_start_date <= self.calibration_end_date
-            < self.evaluated_test_start_date <= self.evaluated_test_end_date
+            self.training_start_date
+            <= self.training_end_date
+            < self.calibration_start_date
+            <= self.calibration_end_date
+            < self.evaluated_test_start_date
+            <= self.evaluated_test_end_date
         ):
-            raise ValueError("bundle fold dates must preserve train/calibration/test order")
+            raise ValueError(
+                "bundle fold dates must preserve train/calibration/test order"
+            )
         if self.created_at.tzinfo is None or self.created_at.utcoffset() is None:
             raise ValueError("created_at must be timezone-aware")
         if set(self.files) != set(BUNDLE_FILE_NAMES):
@@ -157,6 +186,12 @@ class TwseResearchModelBundleManifest:
             raise ValueError("bundle artifact filenames are fixed by the contract")
         if not self.reason_codes or any(not value for value in self.reason_codes):
             raise ValueError("research bundle requires explicit reason_codes")
+        validate_research_run_provenance_binding(
+            self.research_run_provenance,
+            market=self.market,
+            input_artifact_sha256=self.input_artifact_sha256,
+            git_commit=self.git_commit,
+        )
 
     def _identity_content(self) -> dict[str, object]:
         """Return only fields that determine the fitted bundle's identity.
@@ -165,7 +200,7 @@ class TwseResearchModelBundleManifest:
         audit metadata, but it must not make a mechanically identical rerun look
         like a different fitted model.
         """
-        return {
+        content: dict[str, object] = {
             "contract_version": self.contract_version,
             "system_status": self.system_status,
             "selection_policy": self.selection_policy,
@@ -190,13 +225,17 @@ class TwseResearchModelBundleManifest:
             "calibration_end_date": self.calibration_end_date.isoformat(),
             "evaluated_test_start_date": self.evaluated_test_start_date.isoformat(),
             "evaluated_test_end_date": self.evaluated_test_end_date.isoformat(),
-            "files": {
-                name: self.files[name].to_dict() for name in sorted(self.files)
-            },
+            "files": {name: self.files[name].to_dict() for name in sorted(self.files)},
             "library_versions": dict(sorted(self.library_versions.items())),
             "reason_codes": list(self.reason_codes),
             "git_commit": self.git_commit,
         }
+        # Preserve the deployed TWSE v1 identity byte-for-byte.  TPEX must be
+        # explicit because it may never rely on the legacy TWSE default.
+        if self.market != "TWSE":
+            content["market"] = self.market
+            content["research_run_provenance"] = self.research_run_provenance
+        return content
 
     def _content(self) -> dict[str, object]:
         return {
@@ -230,40 +269,96 @@ class TwseResearchModelBundleManifest:
         locked_holdout_executed = value.get("locked_holdout_executed")
         if not isinstance(locked_holdout_executed, bool):
             raise ValueError("locked_holdout_executed must be a boolean")
+        market = str(value.get("market", "TWSE")).strip().upper()
+        raw_research_run_provenance = value.get("research_run_provenance")
+        if raw_research_run_provenance is not None and not isinstance(
+            raw_research_run_provenance, Mapping
+        ):
+            raise ValueError("research_run_provenance must be a mapping")
         manifest = cls(
-            contract_version=_non_empty(value.get("contract_version"), "contract_version"),
+            contract_version=_non_empty(
+                value.get("contract_version"), "contract_version"
+            ),
             system_status=_non_empty(value.get("system_status"), "system_status"),
-            selection_policy=_non_empty(value.get("selection_policy"), "selection_policy"),
+            selection_policy=_non_empty(
+                value.get("selection_policy"), "selection_policy"
+            ),
             locked_holdout_executed=locked_holdout_executed,
             model_version=_non_empty(value.get("model_version"), "model_version"),
             horizon=_integer(value.get("horizon", 0), "horizon"),
             fold_number=_integer(value.get("fold_number", -1), "fold_number"),
-            feature_schema_hash=_non_empty(value.get("feature_schema_hash"), "feature_schema_hash"),
-            input_artifact_sha256=_non_empty(value.get("input_artifact_sha256"), "input_artifact_sha256"),
+            feature_schema_hash=_non_empty(
+                value.get("feature_schema_hash"), "feature_schema_hash"
+            ),
+            input_artifact_sha256=_non_empty(
+                value.get("input_artifact_sha256"), "input_artifact_sha256"
+            ),
             source_hash=_non_empty(value.get("source_hash"), "source_hash"),
-            dataset_snapshot_id=_non_empty(value.get("dataset_snapshot_id"), "dataset_snapshot_id"),
+            dataset_snapshot_id=_non_empty(
+                value.get("dataset_snapshot_id"), "dataset_snapshot_id"
+            ),
             label_version=_non_empty(value.get("label_version"), "label_version"),
             benchmark_id=_non_empty(value.get("benchmark_id"), "benchmark_id"),
-            benchmark_version=_non_empty(value.get("benchmark_version"), "benchmark_version"),
-            cost_profile_version=_non_empty(value.get("cost_profile_version"), "cost_profile_version"),
+            benchmark_version=_non_empty(
+                value.get("benchmark_version"), "benchmark_version"
+            ),
+            cost_profile_version=_non_empty(
+                value.get("cost_profile_version"), "cost_profile_version"
+            ),
             random_seed=_integer(value.get("random_seed", 0), "random_seed"),
-            feature_names=tuple(str(item) for item in _sequence(value, "feature_names")),
-            direction_classes=tuple(str(item) for item in _sequence(value, "direction_classes")),
-            training_start_date=date.fromisoformat(_non_empty(value.get("training_start_date"), "training_start_date")),
-            training_end_date=date.fromisoformat(_non_empty(value.get("training_end_date"), "training_end_date")),
-            calibration_start_date=date.fromisoformat(_non_empty(value.get("calibration_start_date"), "calibration_start_date")),
-            calibration_end_date=date.fromisoformat(_non_empty(value.get("calibration_end_date"), "calibration_end_date")),
-            evaluated_test_start_date=date.fromisoformat(_non_empty(value.get("evaluated_test_start_date"), "evaluated_test_start_date")),
-            evaluated_test_end_date=date.fromisoformat(_non_empty(value.get("evaluated_test_end_date"), "evaluated_test_end_date")),
-            created_at=datetime.fromisoformat(_non_empty(value.get("created_at"), "created_at")),
+            feature_names=tuple(
+                str(item) for item in _sequence(value, "feature_names")
+            ),
+            direction_classes=tuple(
+                str(item) for item in _sequence(value, "direction_classes")
+            ),
+            training_start_date=date.fromisoformat(
+                _non_empty(value.get("training_start_date"), "training_start_date")
+            ),
+            training_end_date=date.fromisoformat(
+                _non_empty(value.get("training_end_date"), "training_end_date")
+            ),
+            calibration_start_date=date.fromisoformat(
+                _non_empty(
+                    value.get("calibration_start_date"), "calibration_start_date"
+                )
+            ),
+            calibration_end_date=date.fromisoformat(
+                _non_empty(value.get("calibration_end_date"), "calibration_end_date")
+            ),
+            evaluated_test_start_date=date.fromisoformat(
+                _non_empty(
+                    value.get("evaluated_test_start_date"), "evaluated_test_start_date"
+                )
+            ),
+            evaluated_test_end_date=date.fromisoformat(
+                _non_empty(
+                    value.get("evaluated_test_end_date"), "evaluated_test_end_date"
+                )
+            ),
+            created_at=datetime.fromisoformat(
+                _non_empty(value.get("created_at"), "created_at")
+            ),
             files={
                 str(name): BundleFileRecord.from_mapping(record)
                 for name, record in files_value.items()
                 if isinstance(record, Mapping)
             },
-            library_versions={str(name): str(version) for name, version in libraries.items()},
+            library_versions={
+                str(name): str(version) for name, version in libraries.items()
+            },
             reason_codes=tuple(str(item) for item in _sequence(value, "reason_codes")),
-            git_commit=(str(value["git_commit"]) if value.get("git_commit") is not None else None),
+            research_run_provenance=(
+                dict(raw_research_run_provenance)
+                if isinstance(raw_research_run_provenance, Mapping)
+                else None
+            ),
+            git_commit=(
+                str(value["git_commit"])
+                if value.get("git_commit") is not None
+                else None
+            ),
+            market=market,
         )
         supplied_hash = _non_empty(value.get("manifest_sha256"), "manifest_sha256")
         if supplied_hash != manifest.manifest_sha256:
@@ -282,6 +377,8 @@ __all__ = [
     "BUNDLE_FILE_NAMES",
     "BundleFileRecord",
     "MECHANICAL_LAST_FOLD_POLICY",
+    "TPEX_RESEARCH_BUNDLE_CONTRACT_VERSION",
     "TWSE_RESEARCH_BUNDLE_CONTRACT_VERSION",
     "TwseResearchModelBundleManifest",
+    "research_bundle_contract_version",
 ]

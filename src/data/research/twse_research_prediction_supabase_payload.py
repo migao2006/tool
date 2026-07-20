@@ -14,7 +14,7 @@ import re
 from typing import cast
 
 from src.core.research_prediction_contract import (
-    RESEARCH_PREDICTION_CONTRACT_VERSION,
+    research_prediction_contract_version,
 )
 from src.data.research.twse_research_prediction_value_validation import (
     validate_prediction_numbers,
@@ -126,6 +126,7 @@ class ParsedResearchSnapshot:
     evaluation_scope: str
     model_bundle_version: str
     feature_snapshot: str
+    market: str
 
 
 @dataclass(frozen=True)
@@ -139,7 +140,15 @@ def parse_research_snapshot(
     payload: Mapping[str, object],
 ) -> ParsedResearchSnapshot:
     snapshot_hash = _verify_snapshot_hash(payload)
-    if payload.get("artifact_contract_version") != RESEARCH_PREDICTION_CONTRACT_VERSION:
+    supplied_market = payload.get("market")
+    market = "TWSE" if supplied_market is None else str(supplied_market).strip().upper()
+    if market not in {"TWSE", "TPEX"}:
+        raise ValueError("research prediction market is unsupported")
+    if market == "TPEX" and supplied_market != "TPEX":
+        raise ValueError("TPEX research snapshots require an explicit market")
+    if payload.get("artifact_contract_version") != research_prediction_contract_version(
+        market
+    ):
         raise ValueError("unsupported research prediction artifact version")
     if payload.get("system_status") != "RESEARCH_ONLY":
         raise ValueError("only RESEARCH_ONLY snapshots can use this publisher")
@@ -191,7 +200,7 @@ def parse_research_snapshot(
         ranks.add(global_rank)
         if (
             prediction.get("horizon") != 5
-            or prediction.get("market") != "TWSE"
+            or prediction.get("market") != market
             or prediction.get("decision_date") != snapshot_date.isoformat()
             or prediction.get("decision_at") != str(_required(payload, "decision_at"))
             or prediction.get("data_quality_status") not in {"PASS", "WARN"}
@@ -225,6 +234,7 @@ def parse_research_snapshot(
         evaluation_scope=scope,
         model_bundle_version=_model_bundle_version(payload, scope),
         feature_snapshot=_feature_snapshot(payload),
+        market=market,
     )
 
 
@@ -238,7 +248,8 @@ def resolve_research_snapshot(
         for value in parsed.predictions
     ).isoformat()
     rows = tuple(
-        _stock_row(prediction, security_ids) for prediction in parsed.predictions
+        _stock_row(prediction, security_ids, market=parsed.market)
+        for prediction in parsed.predictions
     )
     gates = resolve_gate_rows(
         parsed.predictions,
@@ -250,9 +261,10 @@ def resolve_research_snapshot(
         "as_of_date": _required(payload, "as_of_date"),
         "decision_at": _required(payload, "decision_at"),
         "horizon": 5,
+        "market_scope": parsed.market,
         "model_bundle_version": parsed.model_bundle_version,
         "feature_schema_hash": _required(payload, "feature_schema_hash"),
-        "benchmark_versions": {"TWSE": _required(payload, "benchmark_version")},
+        "benchmark_versions": {parsed.market: _required(payload, "benchmark_version")},
         "cost_profile_version": _required(payload, "cost_profile_version"),
         "training_end_date": _required(payload, "training_end_date"),
         "system_validation_status": "RESEARCH_ONLY",
@@ -277,7 +289,10 @@ def resolve_research_snapshot(
 
 
 def _stock_row(
-    prediction: Mapping[str, object], security_ids: Mapping[str, int]
+    prediction: Mapping[str, object],
+    security_ids: Mapping[str, int],
+    *,
+    market: str,
 ) -> Mapping[str, object]:
     symbol = str(_required(prediction, "symbol"))
     original_quality = str(_required(prediction, "data_quality_status"))
@@ -288,7 +303,7 @@ def _stock_row(
         reason_codes.append("RESEARCH_DATA_QUALITY_WARN")
     return {
         "security_id": security_ids[symbol],
-        "market": "TWSE",
+        "market": market,
         "industry": prediction.get("industry"),
         "model_raw_score": _required(prediction, "model_raw_score"),
         "rank_score": _required(prediction, "rank_score"),

@@ -15,7 +15,10 @@ import pytest
 from src.calibration.interval_calibrator import IntervalCalibrator
 from src.calibration.probability_calibrator import ProbabilityCalibrator
 from src.data.preprocessing import CrossSectionalMedianImputer, FoldFitScope
-from src.pipeline.twse_research_model_bundle_contracts import BUNDLE_FILE_NAMES
+from src.pipeline.twse_research_model_bundle_contracts import (
+    BUNDLE_FILE_NAMES,
+    TPEX_RESEARCH_BUNDLE_CONTRACT_VERSION,
+)
 from src.pipeline.twse_research_model_bundle_io import (
     FittedBundleComponents,
     TwseResearchBundleReader,
@@ -24,6 +27,36 @@ from src.pipeline.twse_research_model_bundle_io import (
 
 
 UTC = timezone.utc
+
+
+def _tpex_research_run_provenance() -> dict[str, object]:
+    return {
+        "execution_environment": "LOCAL",
+        "git_commit": "c" * 40,
+        "git_commit_source": "LOCAL_GIT_HEAD",
+        "source_prepared_run_id": None,
+        "source_prepared_run_sha": None,
+        "source_feature_run_id": "29716316791",
+        "source_feature_run_sha": "8" * 40,
+        "source_feature_artifact_id": "8450000001",
+        "source_feature_artifact_digest": "sha256:" + "9" * 64,
+        "prepared_artifact_manifest": {
+            "market": "TPEX",
+            "parquet_sha256": "a" * 64,
+            "prepared_dataset_snapshot_sha256": "1" * 64,
+            "daily_archive_snapshot_sha256": "2" * 64,
+            "current_identity_snapshot_sha256": "3" * 64,
+            "feature_artifact_sha256": "4" * 64,
+            "calendar_snapshot_sha256": "5" * 64,
+            "source_hash": "6" * 64,
+            "benchmark_snapshot_sha256": "7" * 64,
+            "feature_schema_hash": "e" * 64,
+            "feature_source_run_id": "29716316791",
+            "feature_source_run_sha": "8" * 40,
+            "feature_source_artifact_id": "8450000001",
+            "feature_source_artifact_digest": "sha256:" + "9" * 64,
+        },
+    }
 
 
 def _fitted_components():
@@ -41,9 +74,7 @@ def _fitted_components():
         scope=FoldFitScope("twse-research-fold-4", fit_at),
         row_available_ats=[fit_at] * len(raw),
     )
-    matrix = imputer.transform_frame(
-        raw, decision_dates=[date(2024, 1, 31)] * len(raw)
-    )
+    matrix = imputer.transform_frame(raw, decision_dates=[date(2024, 1, 31)] * len(raw))
     common = {"n_estimators": 4, "num_leaves": 4, "verbosity": -1, "random_state": 7}
     rank = lightgbm.LGBMRegressor(**common).fit(
         matrix, np.linspace(-0.1, 0.1, len(matrix))
@@ -53,9 +84,9 @@ def _fitted_components():
         objective="multiclass", num_class=3, **common
     ).fit(matrix, labels)
     quantiles = {
-        alpha: lightgbm.LGBMRegressor(
-            objective="quantile", alpha=alpha, **common
-        ).fit(matrix, np.linspace(-0.08, 0.12, len(matrix)))
+        alpha: lightgbm.LGBMRegressor(objective="quantile", alpha=alpha, **common).fit(
+            matrix, np.linspace(-0.08, 0.12, len(matrix))
+        )
         for alpha in (0.10, 0.50, 0.90)
     }
     raw_calibration = [
@@ -109,7 +140,9 @@ def _write_bundle(tmp_path: Path):
         },
         random_seed=7,
         feature_names=("momentum", "liquidity"),
-        direction_classes=tuple(str(value) for value in components.direction_model.model.classes_),
+        direction_classes=tuple(
+            str(value) for value in components.direction_model.model.classes_
+        ),
         training_dates=(date(2024, 1, 1), date(2024, 1, 31)),
         calibration_dates=(date(2024, 2, 15), date(2024, 2, 29)),
         evaluated_test_dates=(date(2024, 3, 15), date(2024, 3, 29)),
@@ -127,9 +160,7 @@ def test_native_bundle_round_trip_preserves_predictions(tmp_path: Path) -> None:
     written, components, raw, matrix = _write_bundle(tmp_path)
 
     loaded = TwseResearchBundleReader.read(written.bundle_dir)
-    transformed = loaded.transform(
-        raw, decision_dates=[date(2026, 7, 17)] * len(raw)
-    )
+    transformed = loaded.transform(raw, decision_dates=[date(2026, 7, 17)] * len(raw))
 
     np.testing.assert_allclose(transformed.to_numpy(), matrix.to_numpy())
     np.testing.assert_allclose(
@@ -137,8 +168,7 @@ def test_native_bundle_round_trip_preserves_predictions(tmp_path: Path) -> None:
         components.rank_model.model.predict(matrix),
     )
     expected_direction = components.probability_calibrator.transform_rows(
-        components.direction_model.model.predict_proba(matrix)
-        [:, [2, 1, 0]]
+        components.direction_model.model.predict_proba(matrix)[:, [2, 1, 0]]
     )
     actual_direction = loaded.predict_direction(matrix)
     np.testing.assert_allclose(
@@ -154,7 +184,10 @@ def test_native_bundle_round_trip_preserves_predictions(tmp_path: Path) -> None:
         *BUNDLE_FILE_NAMES.values(),
         "manifest.json",
     }
-    assert not any(path.suffix in {".pkl", ".pickle", ".joblib"} for path in written.bundle_dir.iterdir())
+    assert not any(
+        path.suffix in {".pkl", ".pickle", ".joblib"}
+        for path in written.bundle_dir.iterdir()
+    )
 
 
 def test_manifest_identity_ignores_non_identity_creation_time(
@@ -167,7 +200,9 @@ def test_manifest_identity_ignores_non_identity_creation_time(
     )
 
     assert later_copy.created_at != written.manifest.created_at
-    assert later_copy.to_dict()["created_at"] != written.manifest.to_dict()["created_at"]
+    assert (
+        later_copy.to_dict()["created_at"] != written.manifest.to_dict()["created_at"]
+    )
     assert later_copy.manifest_sha256 == written.manifest.manifest_sha256
 
 
@@ -227,3 +262,61 @@ def test_bundle_directory_is_immutable(tmp_path: Path) -> None:
             library_versions={"lightgbm": "test"},
             reason_codes=("RESEARCH_ONLY",),
         )
+
+
+def test_tpex_bundle_has_explicit_market_identity_and_cannot_load_as_twse(
+    tmp_path: Path,
+) -> None:
+    components, raw, _ = _fitted_components()
+    fit_at = datetime(2024, 1, 31, 6, 30, tzinfo=UTC)
+    components.imputer = CrossSectionalMedianImputer().fit_frame(
+        raw,
+        feature_names=("momentum", "liquidity"),
+        scope=FoldFitScope("tpex-research-fold-4", fit_at),
+        row_available_ats=[fit_at] * len(raw),
+    )
+    written = TwseResearchBundleWriter().write(
+        tmp_path / "tpex-bundle",
+        components=cast(FittedBundleComponents, cast(object, components)),
+        model_version="tpex-price-research-h5-v1",
+        horizon=5,
+        fold_number=4,
+        feature_schema_hash="e" * 64,
+        input_artifact_sha256="a" * 64,
+        provenance={
+            "dataset_snapshot_id": "snapshot-tpex-v1",
+            "source_hash": "b" * 64,
+            "label_version": "tpex-label-v1",
+            "benchmark_id": "TPEX_PRICE_INDEX",
+            "benchmark_version": "benchmark-v1",
+            "cost_profile_version": "cost-v1",
+        },
+        random_seed=7,
+        feature_names=("momentum", "liquidity"),
+        direction_classes=tuple(
+            str(value) for value in components.direction_model.model.classes_
+        ),
+        training_dates=(date(2024, 1, 1), date(2024, 1, 31)),
+        calibration_dates=(date(2024, 2, 15), date(2024, 2, 29)),
+        evaluated_test_dates=(date(2024, 3, 15), date(2024, 3, 29)),
+        library_versions={"lightgbm": "test", "scikit-learn": "test"},
+        reason_codes=("TPEX_PRICE_ONLY_RESEARCH",),
+        research_run_provenance=_tpex_research_run_provenance(),
+        git_commit="c" * 40,
+        market="TPEX",
+    )
+
+    loaded = TwseResearchBundleReader.read(written.bundle_dir, expected_market="TPEX")
+    assert loaded.manifest.market == "TPEX"
+    assert loaded.manifest.contract_version == TPEX_RESEARCH_BUNDLE_CONTRACT_VERSION
+    assert loaded.manifest.to_dict()["market"] == "TPEX"
+    assert loaded.manifest.research_run_provenance == (_tpex_research_run_provenance())
+    mismatched_provenance = _tpex_research_run_provenance()
+    mismatched_provenance["source_feature_artifact_id"] = "8450000002"
+    with pytest.raises(ValueError, match="feature source provenance"):
+        _ = replace(
+            loaded.manifest,
+            research_run_provenance=mismatched_provenance,
+        )
+    with pytest.raises(ValueError, match="requested venue"):
+        _ = TwseResearchBundleReader.read(written.bundle_dir)

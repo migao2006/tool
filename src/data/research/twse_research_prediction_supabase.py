@@ -1,4 +1,4 @@
-"""Explicitly gated Staging publisher for verified TWSE research JSON artifacts."""
+"""Explicitly gated publisher for venue-isolated research JSON artifacts."""
 
 from __future__ import annotations
 
@@ -94,9 +94,8 @@ def _cost_profile_mismatches(
     return tuple(mismatches)
 
 
-@final
 class TwseResearchPredictionSupabasePublisher:
-    """Write research rows only after two explicit non-Production gates."""
+    """Write one expected venue only after explicit environment gates."""
 
     def __init__(
         self,
@@ -105,6 +104,7 @@ class TwseResearchPredictionSupabasePublisher:
         target_environment: str,
         publish_enabled: bool,
         production_publish_enabled: bool = False,
+        expected_market: str = "TWSE",
     ) -> None:
         environment = target_environment.strip().lower()
         if not publish_enabled:
@@ -115,15 +115,21 @@ class TwseResearchPredictionSupabasePublisher:
             )
         if environment == "production" and not production_publish_enabled:
             raise ValueError("RESEARCH_PREDICTION_PRODUCTION_PUBLISH_ENABLED is false")
+        market = expected_market.strip().upper()
+        if market not in {"TWSE", "TPEX"}:
+            raise ValueError("research prediction publisher market is unsupported")
         self.writer = writer
         self.target_environment = environment
+        self.expected_market = market
 
     def publish(
         self,
         payload: Mapping[str, object],
     ) -> ResearchSupabasePublishResult:
         parsed = parse_research_snapshot(payload)
-        security_ids = self._security_ids(parsed.predictions)
+        if parsed.market != self.expected_market:
+            raise ValueError("research snapshot market does not match its publisher")
+        security_ids = self._security_ids(parsed.predictions, parsed.market)
         resolved = resolve_research_snapshot(parsed, security_ids)
         self._ensure_cost_profile(payload)
         response = self.writer.rpc(
@@ -152,6 +158,7 @@ class TwseResearchPredictionSupabasePublisher:
     def _security_ids(
         self,
         predictions: Sequence[Mapping[str, object]],
+        market: str,
     ) -> dict[str, int]:
         symbols = tuple(str(_required(value, "symbol")) for value in predictions)
         if len(set(symbols)) != len(symbols):
@@ -167,7 +174,7 @@ class TwseResearchPredictionSupabasePublisher:
                     "securities",
                     select="security_id,symbol,market,asset_type",
                     filters={
-                        "market": "eq.TWSE",
+                        "market": f"eq.{market}",
                         "asset_type": "eq.COMMON_STOCK",
                         "symbol": f"in.({','.join(batch)})",
                     },
@@ -177,7 +184,7 @@ class TwseResearchPredictionSupabasePublisher:
         mapping = {
             str(row["symbol"]): int(cast(int | str, row["security_id"]))
             for row in records
-            if row.get("market") == "TWSE" and row.get("asset_type") == "COMMON_STOCK"
+            if row.get("market") == market and row.get("asset_type") == "COMMON_STOCK"
         }
         missing = sorted(set(symbols).difference(mapping))
         if missing:
@@ -252,10 +259,36 @@ class TwseResearchPredictionSupabasePublisher:
             raise ValueError(
                 "Supabase atomic publisher returned an unexpected row count"
             )
+        if response.get("market_scope") != parsed.market:
+            raise ValueError(
+                "Supabase atomic publisher returned an unexpected market scope"
+            )
         return run_id, prediction_count
+
+
+@final
+class TpexResearchPredictionSupabasePublisher(TwseResearchPredictionSupabasePublisher):
+    """TPEX adapter retaining the same explicit two-gate Production policy."""
+
+    def __init__(
+        self,
+        writer: SupabaseResearchWriter,
+        *,
+        target_environment: str,
+        publish_enabled: bool,
+        production_publish_enabled: bool = False,
+    ) -> None:
+        super().__init__(
+            writer,
+            target_environment=target_environment,
+            publish_enabled=publish_enabled,
+            production_publish_enabled=production_publish_enabled,
+            expected_market="TPEX",
+        )
 
 
 __all__ = [
     "ResearchSupabasePublishResult",
+    "TpexResearchPredictionSupabasePublisher",
     "TwseResearchPredictionSupabasePublisher",
 ]

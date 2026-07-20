@@ -11,6 +11,7 @@ from .venue_price_research_runner import (
     VenuePriceResearchRunner,
 )
 from .venue_research_profile import VenuePriceResearchProfile
+from .twse_research_bundle_publisher import publish_tpex_last_fold_bundle
 
 
 TPEX_PRICE_RESEARCH_PROFILE = VenuePriceResearchProfile(
@@ -24,16 +25,18 @@ TPEX_PRICE_RESEARCH_PROFILE = VenuePriceResearchProfile(
     primary_reason_code="TPEX_PRICE_ONLY_RESEARCH",
     dataset_invalid_reason_code="TPEX_RESEARCH_DATASET_INVALID",
     artifact_stem="tpex",
-    bundle_unavailable_reason_code="TPEX_RESEARCH_MODEL_BUNDLE_NOT_IMPLEMENTED",
     require_prepared_run_provenance=True,
 )
 
 
 class TpexPriceResearchRunner(VenuePriceResearchRunner):
-    """Run isolated TPEX evaluation without emitting a TWSE-shaped bundle."""
+    """Run isolated TPEX evaluation and emit a TPEX-bound research bundle."""
 
     def __init__(self) -> None:
-        super().__init__(TPEX_PRICE_RESEARCH_PROFILE)
+        super().__init__(
+            TPEX_PRICE_RESEARCH_PROFILE,
+            bundle_publisher=publish_tpex_last_fold_bundle,
+        )
 
 
 tpex_price_research_runner = TpexPriceResearchRunner()

@@ -53,8 +53,7 @@ def imputer_payload(
         output_dtype=np.float64,
     )
     medians = {
-        name: float(fallback_matrix[0, index * 2])
-        for index, name in enumerate(names)
+        name: float(fallback_matrix[0, index * 2]) for index, name in enumerate(names)
     }
     return _canonical_json(
         {
@@ -149,9 +148,7 @@ def read_imputer(
         raise ValueError("imputer feature order does not match bundle manifest")
     fit_scope = FoldFitScope(
         fold_id=str(typed_scope.get("fold_id", "")),
-        train_end_at=datetime.fromisoformat(
-            str(typed_scope.get("train_end_at", ""))
-        ),
+        train_end_at=datetime.fromisoformat(str(typed_scope.get("train_end_at", ""))),
     )
     restored_medians = {
         name: _number(typed_medians.get(name), f"training_medians.{name}")
@@ -169,7 +166,8 @@ def read_imputer(
         row_available_ats=(fit_scope.train_end_at,),
     )
     if (
-        fit_scope.fold_id != f"twse-research-fold-{manifest.fold_number}"
+        fit_scope.fold_id
+        != f"{manifest.market.lower()}-research-fold-{manifest.fold_number}"
         or fit_scope.train_end_at.date() != manifest.training_end_date
     ):
         raise ValueError("imputer fit scope does not match bundle fold provenance")

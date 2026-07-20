@@ -51,6 +51,8 @@ def evaluate_research_fold(
     dataset: PreparedResearchDataset,
     fold: PurgedFold,
     context: PipelineContext,
+    *,
+    fold_scope_prefix: str = "twse-research",
 ) -> TwseFoldResearchResult:
     """Fit preprocessing and all models within a single purged fold."""
 
@@ -60,6 +62,7 @@ def evaluate_research_fold(
         calibration_indices=fold.calibration_indices,
         test_indices=fold.test_indices,
         fold_number=fold.fold_number,
+        fold_scope_prefix=fold_scope_prefix,
     )
     rank = evaluate_rank(
         frame=dataset.frame,

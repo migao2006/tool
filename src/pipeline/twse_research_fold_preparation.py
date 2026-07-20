@@ -77,6 +77,7 @@ def prepare_fold(
     calibration_indices: Sequence[int],
     test_indices: Sequence[int],
     fold_number: int,
+    fold_scope_prefix: str = "twse-research",
 ) -> FoldMatrices:
     """Fit preprocessing only on training rows and transform all fold slices."""
 
@@ -95,7 +96,7 @@ def prepare_fold(
         train_features,
         feature_names=dataset.feature_names,
         scope=FoldFitScope(
-            fold_id=f"twse-research-fold-{fold_number}",
+            fold_id=f"{fold_scope_prefix}-fold-{fold_number}",
             train_end_at=train_decision_ats.max().to_pydatetime(),
         ),
         row_available_ats=train_available_ats,

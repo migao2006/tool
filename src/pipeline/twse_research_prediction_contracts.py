@@ -1,4 +1,4 @@
-"""Versioned, fail-closed contracts for TWSE research model outputs."""
+"""Versioned, fail-closed contracts for venue-scoped research model outputs."""
 
 # pyright: reportAny=false, reportExplicitAny=false, reportUnknownArgumentType=false
 # pyright: reportUnknownVariableType=false, reportUnusedCallResult=false
@@ -17,6 +17,7 @@ from src.core.horizon import require_production_horizon
 from src.core.json_value import require_aware_datetime, to_json_safe
 from src.core.research_prediction_contract import (
     RESEARCH_PREDICTION_CONTRACT_VERSION,
+    research_prediction_contract_version,
 )
 from src.decision.decision_policy import DECISION_GATE_ORDER
 
@@ -89,8 +90,8 @@ class TwseOosResearchPrediction:
         _require_text(self.symbol, "symbol")
         require_aware_datetime(self.decision_at, "decision_at")
         require_aware_datetime(self.latest_available_at, "latest_available_at")
-        if self.market != "TWSE":
-            raise ValueError("the first research publisher accepts TWSE rows only")
+        if self.market not in {"TWSE", "TPEX"}:
+            raise ValueError("research predictions support only TWSE or TPEX")
         if self.evaluation_scope not in RESEARCH_EVALUATION_SCOPES:
             raise ValueError("research prediction evaluation_scope is unsupported")
         if self.decision_at.date() != self.decision_date:
@@ -219,13 +220,18 @@ class TwseResearchPredictionSnapshot:
     cost_metadata: Mapping[str, Any]
     validation: Mapping[str, Any]
     reason_codes: tuple[str, ...]
+    market: str = "TWSE"
     system_status: str = "RESEARCH_ONLY"
     artifact_contract_version: str = RESEARCH_PREDICTION_CONTRACT_VERSION
 
     def __post_init__(self) -> None:
         _ = require_production_horizon(self.horizon)
         require_aware_datetime(self.decision_at, "decision_at")
-        if self.artifact_contract_version != RESEARCH_PREDICTION_CONTRACT_VERSION:
+        if self.market not in {"TWSE", "TPEX"}:
+            raise ValueError("research snapshot market is unsupported")
+        if self.artifact_contract_version != research_prediction_contract_version(
+            self.market
+        ):
             raise ValueError("unsupported research prediction contract version")
         if self.system_status != "RESEARCH_ONLY":
             raise ValueError("research prediction snapshots cannot be promoted")
@@ -259,6 +265,7 @@ class TwseResearchPredictionSnapshot:
         symbols: set[str] = set()
         ranks: set[int] = set()
         evaluation_scopes: set[str] = set()
+        markets: set[str] = set()
         for prediction in self.predictions:
             if prediction.horizon != self.horizon:
                 raise ValueError("prediction horizon does not match snapshot")
@@ -271,33 +278,41 @@ class TwseResearchPredictionSnapshot:
             symbols.add(prediction.symbol)
             ranks.add(prediction.global_rank)
             evaluation_scopes.add(prediction.evaluation_scope)
+            markets.add(prediction.market)
         if len(evaluation_scopes) != 1:
             raise ValueError("one snapshot cannot mix research evaluation scopes")
+        if len(markets) != 1:
+            raise ValueError("one snapshot cannot mix research markets")
+        if markets != {self.market}:
+            raise ValueError("prediction market does not match snapshot")
 
     def _content(self) -> dict[str, Any]:
+        content: dict[str, Any] = {
+            "artifact_contract_version": self.artifact_contract_version,
+            "system_status": self.system_status,
+            "as_of_date": self.as_of_date,
+            "decision_at": self.decision_at,
+            "horizon": self.horizon,
+            "predictions": [value.to_dict() for value in self.predictions],
+            "model_version": self.model_version,
+            "feature_schema_hash": self.feature_schema_hash,
+            "dataset_snapshot_id": self.dataset_snapshot_id,
+            "source_hash": self.source_hash,
+            "input_artifact_sha256": self.input_artifact_sha256,
+            "label_version": self.label_version,
+            "benchmark_id": self.benchmark_id,
+            "benchmark_version": self.benchmark_version,
+            "cost_profile_version": self.cost_profile_version,
+            "training_end_date": self.training_end_date,
+            "model_metadata": self.model_metadata,
+            "cost_metadata": self.cost_metadata,
+            "validation": self.validation,
+            "reason_codes": self.reason_codes,
+        }
+        if self.market != "TWSE":
+            content["market"] = self.market
         return to_json_safe(
-            {
-                "artifact_contract_version": self.artifact_contract_version,
-                "system_status": self.system_status,
-                "as_of_date": self.as_of_date,
-                "decision_at": self.decision_at,
-                "horizon": self.horizon,
-                "predictions": [value.to_dict() for value in self.predictions],
-                "model_version": self.model_version,
-                "feature_schema_hash": self.feature_schema_hash,
-                "dataset_snapshot_id": self.dataset_snapshot_id,
-                "source_hash": self.source_hash,
-                "input_artifact_sha256": self.input_artifact_sha256,
-                "label_version": self.label_version,
-                "benchmark_id": self.benchmark_id,
-                "benchmark_version": self.benchmark_version,
-                "cost_profile_version": self.cost_profile_version,
-                "training_end_date": self.training_end_date,
-                "model_metadata": self.model_metadata,
-                "cost_metadata": self.cost_metadata,
-                "validation": self.validation,
-                "reason_codes": self.reason_codes,
-            },
+            content,
             "snapshot",
         )
 

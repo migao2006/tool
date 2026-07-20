@@ -1,0 +1,127 @@
+name: Run TPEX OOS research model
+
+on:
+  workflow_dispatch:
+    inputs:
+      prepared_run_id:
+        description: Successful TPEX prepared research dataset workflow run ID
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: tpex-oos-research-model
+  cancel-in-progress: false
+
+jobs:
+  train:
+    if: ${{ vars.TPEX_RESEARCH_MODEL_ENABLED == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install uv with dependency caching
+        uses: astral-sh/setup-uv@v8.3.2
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Synchronize locked environment
+        run: uv sync --frozen
+
+      - name: Verify trusted prepared dataset run
+        id: prepared-source
+        uses: actions/github-script@v8
+        env:
+          PREPARED_RUN_ID: ${{ inputs.prepared_run_id }}
+        with:
+          script: |
+            const value = process.env.PREPARED_RUN_ID || "";
+            if (!/^[1-9][0-9]*$/.test(value)) {
+              core.setFailed("prepared_run_id must be a positive integer");
+              return;
+            }
+            const runId = Number(value);
+            const { owner, repo } = context.repo;
+            const response = await github.rest.actions.getWorkflowRun({
+              owner,
+              repo,
+              run_id: runId,
+            });
+            const run = response.data;
+            const expectedPath = ".github/workflows/build-tpex-prepared-research-dataset.yml";
+            if (
+              run.repository.full_name !== `${owner}/${repo}` ||
+              run.head_repository?.full_name !== `${owner}/${repo}` ||
+              run.path !== expectedPath ||
+              run.event !== "workflow_dispatch" ||
+              run.head_branch !== "main" ||
+              run.status !== "completed" ||
+              run.conclusion !== "success" ||
+              !/^[0-9a-f]{40}$/.test(run.head_sha)
+            ) {
+              core.setFailed("prepared dataset run is not a trusted successful main run");
+              return;
+            }
+            const comparison = await github.rest.repos.compareCommitsWithBasehead({
+              owner,
+              repo,
+              basehead: `${run.head_sha}...${context.sha}`,
+            });
+            if (!["ahead", "identical"].includes(comparison.data.status)) {
+              core.setFailed("prepared dataset commit is not an ancestor of this model run");
+              return;
+            }
+            const artifacts = await github.paginate(
+              github.rest.actions.listWorkflowRunArtifacts,
+              { owner, repo, run_id: runId, per_page: 100 },
+            );
+            const expectedArtifact = `tpex-prepared-research-${runId}`;
+            const matches = artifacts.filter(
+              (artifact) => artifact.name === expectedArtifact && !artifact.expired,
+            );
+            if (matches.length !== 1) {
+              core.setFailed("prepared dataset run must contain one unexpired expected artifact");
+              return;
+            }
+            core.setOutput("head_sha", run.head_sha);
+            core.setOutput("artifact_id", String(matches[0].id));
+
+      - name: Download verified TPEX prepared artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: tpex-prepared-research-${{ inputs.prepared_run_id }}
+          path: inputs/prepared
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.prepared_run_id }}
+
+      - name: Run isolated purged walk-forward research
+        env:
+          TPEX_PREPARED_SOURCE_RUN_ID: ${{ inputs.prepared_run_id }}
+          TPEX_PREPARED_SOURCE_RUN_SHA: ${{ steps.prepared-source.outputs.head_sha }}
+        run: >-
+          uv run python -m scripts.run_tpex_research_model
+          --input inputs/prepared/tpex-prepared-research.parquet
+          --input-audit inputs/prepared/tpex-prepared-research-audit.json
+          --artifact-root artifacts
+          --report tpex-research-model-report.json
+          --horizon 5
+
+      - name: Preserve TPEX research outputs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: tpex-oos-research-${{ github.run_id }}
+          path: |
+            artifacts/**/*
+            tpex-research-model-report.json
+          if-no-files-found: error
+          retention-days: 90

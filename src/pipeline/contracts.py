@@ -26,6 +26,10 @@ class PipelineStatus(str, Enum):
     FAIL = "FAIL"
 
 
+def _empty_source_metadata() -> Mapping[str, object]:
+    return {}
+
+
 @dataclass(frozen=True)
 class PipelineBatch:
     """Actual records plus immutable provenance from a file or repository."""
@@ -33,6 +37,9 @@ class PipelineBatch:
     records: Any
     source_uri: str
     source_hash: str | None = None
+    source_metadata: Mapping[str, object] = field(
+        default_factory=_empty_source_metadata
+    )
     loaded_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     def __post_init__(self) -> None:

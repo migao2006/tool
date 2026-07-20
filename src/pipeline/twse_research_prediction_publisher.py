@@ -1,4 +1,4 @@
-"""Assemble and atomically persist the latest TWSE OOS research cross-section."""
+"""Assemble and atomically persist one venue's latest OOS cross-section."""
 
 # pyright: reportAny=false, reportExplicitAny=false, reportUnknownArgumentType=false
 # pyright: reportUnknownVariableType=false, reportUnusedCallResult=false
@@ -12,6 +12,9 @@ from pathlib import Path
 from typing import Any
 
 from src.models.stock.rank_model import rank_cross_section
+from src.core.research_prediction_contract import (
+    research_prediction_contract_version,
+)
 
 from .twse_research_evaluation_contracts import (
     DirectionEvaluation,
@@ -33,7 +36,9 @@ class FoldResearchPredictionBatch:
 
     def __post_init__(self) -> None:
         if self.fold_number < 0 or not self.predictions:
-            raise ValueError("a fold batch requires a non-negative fold and predictions")
+            raise ValueError(
+                "a fold batch requires a non-negative fold and predictions"
+            )
         if any(value.fold_number != self.fold_number for value in self.predictions):
             raise ValueError("prediction fold_number does not match its fold batch")
 
@@ -82,6 +87,7 @@ def build_fold_research_predictions(
 
     source_columns = [
         "symbol",
+        "market",
         "decision_date",
         "decision_at",
         "available_at",
@@ -114,6 +120,7 @@ def build_fold_research_predictions(
         predictions.append(
             TwseOosResearchPrediction(
                 symbol=str(source["symbol"]),
+                market=str(source["market"]).strip().upper(),
                 decision_date=source["decision_date"],
                 decision_at=_aware_datetime(source["decision_at"], "decision_at"),
                 horizon=int(source["horizon"]),
@@ -197,6 +204,10 @@ class TwseResearchPredictionPublisher:
         decision_ats = {value.decision_at for value in selected}
         if len(decision_ats) != 1:
             raise ValueError("one OOS cross-section must share a decision_at")
+        markets = {value.market for value in selected}
+        if len(markets) != 1:
+            raise ValueError("one OOS cross-section must share a market")
+        market = next(iter(markets))
         required_provenance = (
             "dataset_snapshot_id",
             "source_hash",
@@ -229,6 +240,8 @@ class TwseResearchPredictionPublisher:
             cost_metadata=dict(cost_metadata),
             validation=dict(validation),
             reason_codes=reason_codes,
+            market=market,
+            artifact_contract_version=research_prediction_contract_version(market),
         )
         persisted = persist_research_snapshot(path, snapshot)
         return PublishedResearchSnapshot(

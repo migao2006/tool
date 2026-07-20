@@ -70,6 +70,7 @@ FINMIND_HISTORICAL_EVIDENCE_ENABLED
 TWSE_RESEARCH_FEATURE_DATASET_ENABLED
 TPEX_RESEARCH_FEATURE_DATASET_ENABLED
 TPEX_PRICE_INDEX_OHLC_BACKFILL_ENABLED
+TPEX_PREPARED_RESEARCH_DATASET_ENABLED
 FUGLE_ADJUSTED_BACKFILL_ENABLED
 FUGLE_ADJUSTED_MIGRATION_READY
 ```
@@ -158,13 +159,21 @@ R2 object；workflow 只輸出 GitHub artifact，不會把衍生特徵寫回 raw
 - 本次分支已建立官方 TPEX 月 OHLC 的專用 Parquet schema、immutable R2 read-back、Supabase
   queue／RPC、CLI 與 GitHub Actions workflow。Object scope 固定為
   `TPEX / tpex_price_index_ohlc / TPEX_INDEX / BENCHMARK`，不得與普通股或 TAIEX 交叉配對。
-- Local 已通過 migration、validation、rollback 再套用及 schema lint；Production feature gate
-  仍關閉且尚無 TPEX benchmark object。首輪只能先執行單一完成月份 smoke test。
+- Local 已通過 migration、validation、rollback 再套用及 schema lint。截至 2026-07-20，
+  Production 同契約已有 2018-04～2026-06 共 99 個 manifests／objects、2,006 列 benchmark
+  OHLC；這只代表 raw archive 完整性，不代表 PIT 或模型驗收。
 - TPEX OHLC 固定維持 `POINT_IN_TIME_UNVERIFIED / RAW_LANDING_ONLY / RESEARCH_ONLY /
-  PRICE_INDEX_NOT_TOTAL_RETURN`；5 日標籤、獨立模型與 UI 不屬於本次已完成範圍。
+  PRICE_INDEX_NOT_TOTAL_RETURN`。
+- 本次新增獨立 TPEX prepared dataset reader／builder／CLI／workflow；只接受 `horizon=5`，讀取
+  Production 同契約的 manifests 與 immutable R2 bytes，驗證完整 snapshot、object、Parquet、
+  SHA-256、feature row lineage 與月份連續性後，按 `t+1 open → 第 5 個交易日 close` 建立研究列。
+- `TPEX_PREPARED_RESEARCH_DATASET_ENABLED` 未明確設為 `true` 時不得執行。輸出只保存為
+  read-back verified GitHub artifact，不會寫入 Production、建立模型或更新 UI。
+- 交易 session snapshot 目前由 benchmark rows 派生；這項限制與價格指數非總報酬語意會寫入
+  audit／artifact provenance，資料集仍不得標為正式 `PASS`。
 
-因此 TPEX 目前已有 raw archive 與驗證過的研究 feature artifact，但尚無標籤或模型，狀態維持
-`RESEARCH_ONLY / FEATURE_RESEARCH_ONLY / LABELS_NOT_ASSEMBLED`。
+因此 TPEX 已具備可執行的 prepared research dataset 契約，但尚未產生或驗收正式模型，狀態維持
+`RESEARCH_ONLY / MODEL_RESEARCH_ONLY`。
 
 目前 campaign 固定結束於 2026-07-17。既定 queue 已全部完成，但這不會讓 R2 自動向後累積。
 建立可稽核、冪等的 daily delta archive workflow 前，新交易日仍不會自動加入多年 R2 封存。

@@ -1,0 +1,85 @@
+name: Build TPEX prepared research dataset
+
+on:
+  workflow_dispatch:
+    inputs:
+      feature_run_id:
+        description: Successful TPEX feature workflow run ID
+        required: true
+        type: string
+      cost_profile:
+        description: Versioned transaction-cost scenario
+        required: true
+        default: base_cost
+        type: choice
+        options:
+          - low_cost
+          - base_cost
+          - stressed_cost
+          - extreme_cost
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: tpex-prepared-research-dataset
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: ${{ vars.TPEX_PREPARED_RESEARCH_DATASET_ENABLED == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install uv with dependency caching
+        uses: astral-sh/setup-uv@v8.3.2
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Synchronize locked environment
+        run: uv sync --frozen
+
+      - name: Download verified TPEX feature artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: tpex-research-features-${{ inputs.feature_run_id }}
+          path: inputs/feature
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.feature_run_id }}
+
+      - name: Assemble read-back verified TPEX five-day research rows
+        env:
+          INPUT_COST_PROFILE: ${{ inputs.cost_profile }}
+          R2_ACCOUNT_ID: ${{ vars.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET_NAME: ${{ vars.R2_BUCKET_NAME }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: >-
+          uv run python -m scripts.build_tpex_prepared_research_dataset
+          --feature inputs/feature/tpex-research-features.parquet
+          --feature-manifest inputs/feature/tpex-research-features-audit.json
+          --output tpex-prepared-research.parquet
+          --audit tpex-prepared-research-audit.json
+          --horizon 5
+          --cost-profile "$INPUT_COST_PROFILE"
+
+      - name: Preserve TPEX prepared research dataset
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: tpex-prepared-research-${{ github.run_id }}
+          path: |
+            tpex-prepared-research.parquet
+            tpex-prepared-research-audit.json
+          if-no-files-found: error
+          retention-days: 30

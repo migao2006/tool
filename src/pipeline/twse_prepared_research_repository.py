@@ -50,12 +50,17 @@ def _read_audit(path: Path) -> Mapping[str, object]:
     return cast(Mapping[str, object], value)
 
 
-def _manifest(audit: Mapping[str, object]) -> PreparedResearchArtifactManifest:
+def _manifest(
+    audit: Mapping[str, object],
+    *,
+    expected_market: str,
+) -> PreparedResearchArtifactManifest:
     expected_audit = {
         "build_status": "COMPLETED_RESEARCH_ONLY",
         "system_status": "RESEARCH_ONLY",
         "usage_scope": "MODEL_RESEARCH_ONLY",
         "horizon": 5,
+        "market": expected_market,
         "prepared_artifact_read_back_verified": True,
     }
     if any(audit.get(name) != expected for name, expected in expected_audit.items()):
@@ -103,9 +108,19 @@ def _manifest(audit: Mapping[str, object]) -> PreparedResearchArtifactManifest:
 class PreparedResearchArtifactRepository:
     """Load only a Parquet artifact verified against its typed audit sidecar."""
 
-    def __init__(self, parquet_path: str | Path, audit_path: str | Path) -> None:
+    def __init__(
+        self,
+        parquet_path: str | Path,
+        audit_path: str | Path,
+        *,
+        expected_market: str = "TWSE",
+    ) -> None:
+        normalized_market = expected_market.strip().upper()
+        if normalized_market not in {"TWSE", "TPEX"}:
+            raise ValueError("prepared artifact market is unsupported")
         self.parquet_path = Path(parquet_path)
         self.audit_path = Path(audit_path)
+        self.expected_market: str = normalized_market
 
     def load(
         self,
@@ -131,7 +146,7 @@ class PreparedResearchArtifactRepository:
             )
 
         audit = _read_audit(self.audit_path)
-        manifest = _manifest(audit)
+        manifest = _manifest(audit, expected_market=self.expected_market)
         if audit.get("output_file") != self.parquet_path.name:
             raise PreparedResearchArtifactSourceError(
                 "PREPARED_RESEARCH_ARTIFACT_AUDIT_INVALID",

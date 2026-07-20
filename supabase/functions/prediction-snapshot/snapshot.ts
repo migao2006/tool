@@ -10,6 +10,7 @@ import type {
   DecisionGateRow,
   JsonRecord,
   MarketScope,
+  SecurityHistoryRow,
   SnapshotRows,
 } from "./types.ts";
 
@@ -209,6 +210,20 @@ export function buildSnapshot(
   const securities = new Map(
     rows.securities.map((row) => [row.security_id, row]),
   );
+  const currentSecurityHistory = new Map<number, SecurityHistoryRow>();
+  const taipeiDate = new Date(now.getTime() + 8 * 3_600_000)
+    .toISOString().slice(0, 10);
+  for (const row of rows.currentSecurityHistory) {
+    const availableAt = Date.parse(row.available_at);
+    if (
+      row.effective_from <= taipeiDate &&
+      Number.isFinite(availableAt) &&
+      availableAt <= now.getTime() &&
+      !currentSecurityHistory.has(row.security_id)
+    ) {
+      currentSecurityHistory.set(row.security_id, row);
+    }
+  }
   const audits = new Map(rows.audits.map((row) => [row.security_id, row]));
   const gates = new Map<number, DecisionGateRow[]>();
   for (const gate of rows.gates) {
@@ -232,6 +247,7 @@ export function buildSnapshot(
       rows.run,
       prediction,
       security,
+      currentSecurityHistory.get(prediction.security_id),
       audits.get(prediction.security_id),
       gates.get(prediction.stock_prediction_id) ?? [],
     );

@@ -7,6 +7,7 @@ import type {
   MarketPredictionRow,
   MarketScope,
   PredictionRunRow,
+  SecurityHistoryRow,
   SecurityRow,
   SnapshotRepositoryContract,
   SnapshotRows,
@@ -103,13 +104,27 @@ export class SnapshotRepository implements SnapshotRepositoryContract {
     const validationRun = validationLinkStatus === "LINKED"
       ? validationRuns[0]
       : null;
-    const [securities, gates, validationMetrics, backtests] = await Promise.all(
+    const [
+      securities,
+      currentSecurityHistory,
+      gates,
+      validationMetrics,
+      backtests,
+    ] = await Promise.all(
       [
         this.#selectIn<SecurityRow>(
           "securities",
           "security_id",
           securityIds,
           "security_id,symbol,display_name,market,asset_type",
+        ),
+        this.#selectIn<SecurityHistoryRow>(
+          "security_history",
+          "security_id",
+          securityIds,
+          "security_id,effective_from,effective_to,industry_code,industry_name,source_version,available_at",
+          "effective_from.desc,available_at.desc",
+          { effective_to: "is.null" },
         ),
         this.#selectIn<DecisionGateRow>(
           "decision_gate_results",
@@ -140,6 +155,7 @@ export class SnapshotRepository implements SnapshotRepositoryContract {
       run,
       predictions,
       securities,
+      currentSecurityHistory,
       audits,
       gates,
       markets,
@@ -156,6 +172,7 @@ export class SnapshotRepository implements SnapshotRepositoryContract {
     ids: number[],
     select: string,
     order?: string,
+    filters: Record<string, string> = {},
   ): Promise<T[]> {
     const rows: T[] = [];
     for (let start = 0; start < ids.length; start += 100) {
@@ -164,6 +181,7 @@ export class SnapshotRepository implements SnapshotRepositoryContract {
         ...await this.#select<T>(table, {
           select,
           [column]: `in.(${values.join(",")})`,
+          ...filters,
           ...(order ? { order } : {}),
         }),
       );

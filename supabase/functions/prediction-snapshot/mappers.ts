@@ -6,14 +6,25 @@ import type {
   MarketPredictionRow,
   MarketScope,
   PredictionRunRow,
+  SecurityHistoryRow,
   SecurityRow,
   SnapshotRows,
   StockPredictionRow,
 } from "./types.ts";
+import {
+  CURRENT_INDUSTRY_CLASSIFICATION_BASIS,
+  resolveCurrentIndustryName,
+} from "./industry-classifications.ts";
 
 const RESEARCH_DATA_QUALITY_WARNING = "RESEARCH_DATA_QUALITY_WARN";
 const LEGACY_NO_POLICY_REASON = "RESEARCH_ONLY_NO_FORMAL_DECISION_POLICY";
 const RESEARCH_GATE_ENVELOPE_VERSION = "research-decision-gate.v1";
+const COST_PROFILES = new Set([
+  "low_cost",
+  "base_cost",
+  "stressed_cost",
+  "extreme_cost",
+]);
 
 export interface PublicDataQuality {
   status: "PASS" | "WARN" | "HARD_FAIL";
@@ -45,6 +56,11 @@ function numberValue(value: JsonValue): number | null {
   if (value === null || value === "") return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function costProfileName(version: string): string | null {
+  const profile = version.split(":").at(-1) ?? "";
+  return COST_PROFILES.has(profile) ? profile : null;
 }
 
 export function marketName(value: "TWSE" | "TPEX"): "LISTED" | "OTC" {
@@ -111,6 +127,7 @@ export function mapPrediction(
   run: PredictionRunRow,
   prediction: StockPredictionRow,
   security: SecurityRow,
+  currentHistory: SecurityHistoryRow | undefined,
   audit: DataQualityAuditRow | undefined,
   gates: DecisionGateRow[],
 ): JsonRecord {
@@ -128,6 +145,20 @@ export function mapPrediction(
     name: security.display_name,
     market: marketName(prediction.market),
     industry: prediction.industry,
+    current_industry: currentHistory
+      ? resolveCurrentIndustryName(
+        security.market,
+        currentHistory.industry_code,
+        currentHistory.industry_name,
+      )
+      : null,
+    current_industry_code: currentHistory?.industry_code ?? null,
+    industry_classification_effective_from: currentHistory?.effective_from ??
+      null,
+    industry_classification_available_at: currentHistory?.available_at ?? null,
+    industry_classification_basis: currentHistory
+      ? CURRENT_INDUSTRY_CLASSIFICATION_BASIS
+      : null,
     asset_type: "STOCK",
     horizon: run.horizon,
     rank_score: numberValue(prediction.rank_score),
@@ -174,7 +205,7 @@ export function mapPrediction(
     max_order_notional_ntd: numberValue(prediction.maximum_order_notional_ntd),
     max_single_position: null,
     max_industry_position: null,
-    cost_profile: null,
+    cost_profile: costProfileName(run.cost_profile_version),
     previous_global_rank: null,
     previous_decision: null,
     gates: mappedGates,

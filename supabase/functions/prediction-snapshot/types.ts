@@ -72,6 +72,16 @@ export interface SecurityRow extends JsonRecord {
   asset_type: "COMMON_STOCK" | "ETF";
 }
 
+export interface SecurityHistoryRow extends JsonRecord {
+  security_id: number;
+  effective_from: string;
+  effective_to: string | null;
+  industry_code: string | null;
+  industry_name: string | null;
+  source_version: string;
+  available_at: string;
+}
+
 export interface DataQualityAuditRow extends JsonRecord {
   security_id: number;
   quality_status: "PASS" | "FAIL";
@@ -132,6 +142,7 @@ export interface SnapshotRows {
   run: PredictionRunRow;
   predictions: StockPredictionRow[];
   securities: SecurityRow[];
+  currentSecurityHistory: SecurityHistoryRow[];
   audits: DataQualityAuditRow[];
   gates: DecisionGateRow[];
   markets: MarketPredictionRow[];

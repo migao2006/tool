@@ -69,6 +69,7 @@ HISTORICAL_SUPPLEMENTAL_BACKFILL_ENABLED
 FINMIND_HISTORICAL_EVIDENCE_ENABLED
 TWSE_RESEARCH_FEATURE_DATASET_ENABLED
 TPEX_RESEARCH_FEATURE_DATASET_ENABLED
+TPEX_PRICE_INDEX_OHLC_BACKFILL_ENABLED
 FUGLE_ADJUSTED_BACKFILL_ENABLED
 FUGLE_ADJUSTED_MIGRATION_READY
 ```
@@ -154,8 +155,13 @@ R2 object；workflow 只輸出 GitHub artifact，不會把衍生特徵寫回 raw
 - Dataset snapshot 為 `aa7b43d08ae939a4bebea930d914865f1e68aba9d287cc40afd9b44445685370`；
   Parquet SHA-256 為 `7e12dac2707e7dea17559ffe6b69f74f08ae4790c712c52bd33de1564eb3da8b`。
 - 12 檔來源股票沒有 feature row；目前只有彙總排除原因，尚無逐檔排除清單。
-- 官方 TPEX OHLC provider／normalizer 已建立，但 TPEX benchmark 尚未封存至 R2；5 日標籤、
-  獨立模型與 UI 也不屬於本次已完成範圍。
+- 本次分支已建立官方 TPEX 月 OHLC 的專用 Parquet schema、immutable R2 read-back、Supabase
+  queue／RPC、CLI 與 GitHub Actions workflow。Object scope 固定為
+  `TPEX / tpex_price_index_ohlc / TPEX_INDEX / BENCHMARK`，不得與普通股或 TAIEX 交叉配對。
+- Local 已通過 migration、validation、rollback 再套用及 schema lint；Production feature gate
+  仍關閉且尚無 TPEX benchmark object。首輪只能先執行單一完成月份 smoke test。
+- TPEX OHLC 固定維持 `POINT_IN_TIME_UNVERIFIED / RAW_LANDING_ONLY / RESEARCH_ONLY /
+  PRICE_INDEX_NOT_TOTAL_RETURN`；5 日標籤、獨立模型與 UI 不屬於本次已完成範圍。
 
 因此 TPEX 目前已有 raw archive 與驗證過的研究 feature artifact，但尚無標籤或模型，狀態維持
 `RESEARCH_ONLY / FEATURE_RESEARCH_ONLY / LABELS_NOT_ASSEMBLED`。

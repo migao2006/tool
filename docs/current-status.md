@@ -33,8 +33,10 @@
 ### 本機隔離環境
 
 - Docker Engine `29.6.1`、Docker Compose `5.3.0` 與 Docker Desktop 已驗證可用。
-- Supabase Local 已用 Docker 完整重建 31 個 migrations。
-- 新 security snapshot 約束、rollback 及 `supabase db lint` 已實際通過。
+- Supabase Local 已用 Docker 完整重建 32 個 migrations；新增的 TPEX benchmark migration 尚未
+  套用至 Staging 或 Production。
+- 新 security snapshot 與 TPEX benchmark 約束、validation、rollback 及 `supabase db lint` 已
+  實際通過。
 
 ## 二、已封存及已產生的真實資料
 
@@ -144,7 +146,12 @@ v2 新增並驗證 `decision_close_price`，供每日推論依真實收盤價重
 - Parquet SHA-256 為 `7e12dac2707e7dea17559ffe6b69f74f08ae4790c712c52bd33de1564eb3da8b`，
   schema SHA-256 為 `a53d4976fb779f89054786e2f960d355f4f4426a90eb4a46eadce251c1c22dad`；
   feature schema 為 `b9fbc304b7cd22310b62b291953440d231a44d554c93021aaae62d154f9acf96`。
-- 尚未建立 TPEX benchmark R2 archive、5 日標籤、模型或 UI 輸出。
+- 本次分支已建立櫃買價格指數月 OHLC 的獨立 Parquet／R2 immutable archive、Supabase
+  queue／RPC、CLI 與 GitHub Actions workflow。Local 已通過完整 migration、validation、
+  rollback 再套用及 schema lint；正式環境 gate 仍關閉，Production 尚無 TPEX benchmark
+  object 或 manifest。
+- 這份基準固定標示為 `PRICE_INDEX_NOT_TOTAL_RETURN`，目前仍未建立 TPEX 5 日標籤、模型或
+  UI 輸出。
 
 上述完成的是可執行且 fail-closed 的研究管線，不是正式上櫃模型；系統狀態維持
 `RESEARCH_ONLY`。

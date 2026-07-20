@@ -127,8 +127,24 @@ v2 新增並驗證 `decision_close_price`，供每日推論依真實收盤價重
   [櫃買中心指數歷史資料](https://www.tpex.org.tw/en-us/indices/stock-index/industrial/inxh.html)。
 - Repository variable 名稱為 `TPEX_RESEARCH_FEATURE_DATASET_ENABLED`；必須明確開啟後，
   workflow 才可執行。
-- 尚未執行 Production workflow，因此目前沒有可引用的 TPEX feature run、artifact 數量或
-  hash；也尚未建立 TPEX benchmark R2 archive、5 日標籤、模型或 UI 輸出。
+- [GitHub Actions run `29716316791`](https://github.com/migao2006/tool/actions/runs/29716316791)
+  已成功完成第一次真實建置及 typed read-back：
+
+  | 項目 | 已驗證結果 |
+  | --- | ---: |
+  | Archive manifests／來源股票 | 1,642／891 |
+  | Source／parsed rows | 1,597,277／1,564,233 |
+  | Feature rows／實際股票 | 1,511,065／879 |
+  | 排除列 | 86,212 |
+  | 日期範圍 | 2018-04-09～2026-07-17 |
+  | Parquet bytes | 219,459,812 |
+
+- 12 檔來源股票沒有產生 feature row；現行 audit 只保存彙總原因，包括 33,044 筆隔離列與
+  各視窗的不足歷史，沒有逐檔排除清單，因此不得捏造這 12 檔的個別原因。
+- Parquet SHA-256 為 `7e12dac2707e7dea17559ffe6b69f74f08ae4790c712c52bd33de1564eb3da8b`，
+  schema SHA-256 為 `a53d4976fb779f89054786e2f960d355f4f4426a90eb4a46eadce251c1c22dad`；
+  feature schema 為 `b9fbc304b7cd22310b62b291953440d231a44d554c93021aaae62d154f9acf96`。
+- 尚未建立 TPEX benchmark R2 archive、5 日標籤、模型或 UI 輸出。
 
 上述完成的是可執行且 fail-closed 的研究管線，不是正式上櫃模型；系統狀態維持
 `RESEARCH_ONLY`。

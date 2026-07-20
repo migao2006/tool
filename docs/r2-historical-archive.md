@@ -138,9 +138,8 @@ R2 client 或呼叫 provider。
 - `benchmark_total_return`
 
 每一類資料都必須以自己的 schema version、metadata 與 row validator 驗證；不得把 benchmark
-或籌碼資料套用日線 schema。本次分支新增的 feature artifact typed manifest 與 provenance
-驗證不會修改原始 R2 object；目前 feature workflow 仍只規劃輸出 GitHub artifact，尚未產生正式
-Production feature dataset。
+或籌碼資料套用日線 schema。Feature artifact typed manifest 與 provenance 驗證不會修改原始
+R2 object；workflow 只輸出 GitHub artifact，不會把衍生特徵寫回 raw archive。
 
 ## TPEX 研究 artifact 邊界
 
@@ -149,11 +148,17 @@ Production feature dataset。
 - 2026-07-20 新增的 TPEX 17 個價量特徵 workflow 只讀取並驗證既有 immutable raw objects，輸出
   GitHub Parquet artifact 與 audit；typed read-back 驗證失敗時不得釋出 artifact。
 - `TPEX_RESEARCH_FEATURE_DATASET_ENABLED` 未明確設為 `true` 時，workflow 不得執行。
-- Production workflow 尚未執行，不能宣稱已有 TPEX feature artifact、run、列數或 hash。
+- [run `29716316791`](https://github.com/migao2006/tool/actions/runs/29716316791) 已成功驗證
+  1,642 個 manifests／891 檔來源股票，產生 1,511,065 筆／879 檔 feature rows；Parquet 為
+  219,459,812 bytes，日期範圍 2018-04-09～2026-07-17。
+- Dataset snapshot 為 `aa7b43d08ae939a4bebea930d914865f1e68aba9d287cc40afd9b44445685370`；
+  Parquet SHA-256 為 `7e12dac2707e7dea17559ffe6b69f74f08ae4790c712c52bd33de1564eb3da8b`。
+- 12 檔來源股票沒有 feature row；目前只有彙總排除原因，尚無逐檔排除清單。
 - 官方 TPEX OHLC provider／normalizer 已建立，但 TPEX benchmark 尚未封存至 R2；5 日標籤、
   獨立模型與 UI 也不屬於本次已完成範圍。
 
-因此 TPEX 目前只有 raw archive 與研究建置契約，狀態維持 `RESEARCH_ONLY`。
+因此 TPEX 目前已有 raw archive 與驗證過的研究 feature artifact，但尚無標籤或模型，狀態維持
+`RESEARCH_ONLY / FEATURE_RESEARCH_ONLY / LABELS_NOT_ASSEMBLED`。
 
 目前 campaign 固定結束於 2026-07-17。既定 queue 已全部完成，但這不會讓 R2 自動向後累積。
 建立可稽核、冪等的 daily delta archive workflow 前，新交易日仍不會自動加入多年 R2 封存。

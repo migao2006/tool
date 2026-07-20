@@ -83,14 +83,18 @@ gate 仍應保持關閉。
   [櫃買中心指數歷史資料](https://www.tpex.org.tw/en-us/indices/stock-index/industrial/inxh.html)
   的獨立契約，不以 TAIEX 代替上櫃基準。
 - Repository variable `TPEX_RESEARCH_FEATURE_DATASET_ENABLED` 是手動啟用 gate。
-- Production workflow 尚未執行，因此尚無 TPEX feature artifact 的實際 run、列數或 hash；
-  TPEX benchmark 尚未封存至 R2，5 日標籤、模型與 UI 也尚未建立。
+- [run `29716316791`](https://github.com/migao2006/tool/actions/runs/29716316791) 已成功讀取並驗證
+  1,642 個 archive manifests、891 檔來源股票及 1,597,277 筆原始列，輸出 1,511,065 筆
+  feature rows、879 檔股票，範圍為 2018-04-09～2026-07-17。
+- 12 檔來源股票沒有產生完整 feature row；現行 audit 只有隔離列與不足歷史的彙總，沒有逐檔
+  排除原因，不能把 891 檔誤稱為全部完成。
+- Artifact typed read-back、Parquet SHA-256 與 schema SHA-256 已驗證通過；TPEX benchmark 尚未
+  封存至 R2，5 日標籤、模型與 UI 也尚未建立。
 
 以上資料與程式均維持 `RESEARCH_ONLY`；完成 feature artifact 不等於完成 point-in-time、
 基準交易路徑、標籤或正式模型驗證。
 
-上述程式與測試尚未等於 Production artifact 或正式訓練資料。歷史基準與 feature artifact
-的產生程式已具備相容契約，但目前沒有 Production artifact。真實標籤組裝仍必須同時提供原始可執行 OHLC、公司行動／停牌區間與
+上述程式、測試與 GitHub feature artifact 仍不等於正式訓練資料。真實標籤組裝仍必須同時提供原始可執行 OHLC、公司行動／停牌區間與
 交易成本設定；缺任一項時 fail closed，不發布模型績效。
 
 不受 FinMind token 額度控制的官方 current OpenAPI 匯入使用有界平行下載：全域最多 4 個、

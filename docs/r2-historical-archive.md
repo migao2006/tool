@@ -175,5 +175,10 @@ R2 object；workflow 只輸出 GitHub artifact，不會把衍生特徵寫回 raw
 因此 TPEX 已具備可執行的 prepared research dataset 契約，但尚未產生或驗收正式模型，狀態維持
 `RESEARCH_ONLY / MODEL_RESEARCH_ONLY`。
 
+每日 feature delta 與 raw R2 delta 是兩件事：前者會以 R2 歷史尾端加上 Supabase canonical
+daily rows 產生可讀回驗證的 exact-date 研究特徵；它不會修改或假裝擴充 immutable raw archive。
+在完整官方 payload publication snapshot 尚未封存前，daily feature delta 必須保留
+`CANONICAL_DAILY_BAR_ROWS_NOT_RAW_PAYLOAD_VERIFIED`。
+
 目前 campaign 固定結束於 2026-07-17。既定 queue 已全部完成，但這不會讓 R2 自動向後累積。
 建立可稽核、冪等的 daily delta archive workflow 前，新交易日仍不會自動加入多年 R2 封存。

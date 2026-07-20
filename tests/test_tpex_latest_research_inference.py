@@ -17,6 +17,15 @@ from src.data.research.tpex_archive_feature_parquet import (
     TpexArchiveFeatureParquetWriter,
 )
 from src.data.research.tpex_feature_artifact_reader import TpexFeatureArtifactReader
+from src.data.research.tpex_daily_feature_delta_artifact import (
+    TpexDailyFeatureDeltaWriter,
+)
+from src.data.research.tpex_daily_feature_delta_contracts import (
+    daily_feature_delta_snapshot_hash,
+)
+from src.data.research.tpex_daily_feature_delta_reader import (
+    TpexDailyFeatureDeltaReader,
+)
 from src.features.tpex_price_volume_schema import (
     TPEX_PRICE_VOLUME_FEATURE_NAMES,
     TPEX_PRICE_VOLUME_FEATURE_SCHEMA_HASH,
@@ -24,6 +33,7 @@ from src.features.tpex_price_volume_schema import (
     TPEX_PRICE_VOLUME_PRICE_BASIS,
 )
 from src.pipeline.tpex_latest_feature_repository import (
+    LatestTpexDailyFeatureRepository,
     LatestTpexFeatureRepository,
     LatestTpexFeatureSourceError,
 )
@@ -158,6 +168,49 @@ def _artifact(tmp_path: Path, rows: list[dict[str, object]]) -> tuple[Path, Path
     return output, audit
 
 
+def _delta_artifact(tmp_path: Path) -> tuple[Path, Path, str]:
+    daily_snapshot = "d" * 64
+    dataset_snapshot = daily_feature_delta_snapshot_hash(
+        source_archive_snapshot_sha256=SOURCE_SNAPSHOT,
+        current_identity_snapshot_sha256=IDENTITY_SNAPSHOT,
+        daily_bar_snapshot_sha256=daily_snapshot,
+        as_of_date=ROW_DATE,
+    )
+    row = _row("6488")
+    row.update(
+        dataset_snapshot_sha256=dataset_snapshot,
+        daily_bar_snapshot_sha256=daily_snapshot,
+        source_daily_bar_id=7_001,
+        source_daily_source_id=2,
+        source_daily_version="official-20260717-abcdef01",
+        source_daily_available_at=datetime(2026, 7, 19, 4, tzinfo=timezone.utc),
+    )
+    output = tmp_path / "tpex-daily-feature-delta.parquet"
+    writer = TpexDailyFeatureDeltaWriter(
+        output,
+        dataset_snapshot_sha256=dataset_snapshot,
+        source_archive_snapshot_sha256=SOURCE_SNAPSHOT,
+        current_identity_snapshot_sha256=IDENTITY_SNAPSHOT,
+        daily_bar_snapshot_sha256=daily_snapshot,
+        as_of_date=ROW_DATE,
+    )
+    writer.write_rows([row])
+    writer.finish()
+    manifest = TpexDailyFeatureDeltaReader().manifest_from_parquet(output)
+    audit = tmp_path / "tpex-daily-feature-delta-audit.json"
+    _ = audit.write_text(
+        json.dumps(
+            {
+                "output_file": output.name,
+                "feature_delta_artifact_manifest": manifest.to_dict(),
+                "feature_delta_artifact_read_back_verified": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    return output, audit, dataset_snapshot
+
+
 def _manifest() -> TwseResearchModelBundleManifest:
     return TwseResearchModelBundleManifest(
         model_version="tpex-price-research-h5-v1",
@@ -261,6 +314,49 @@ def test_tpex_latest_feature_rejects_values_available_after_decision(
         _ = LatestTpexFeatureRepository().load(parquet, audit)
 
     assert captured.value.reason_code == "TPEX_FEATURE_POINT_IN_TIME_VIOLATION"
+
+
+def test_tpex_daily_delta_is_the_composite_inference_source(tmp_path: Path) -> None:
+    parquet, audit, dataset_snapshot = _delta_artifact(tmp_path)
+    feature_source = {
+        "artifact_kind": "TPEX_DAILY_FEATURE_DELTA",
+        "producer_workflow": (".github/workflows/build-tpex-daily-feature-delta.yml"),
+        "run_id": "29740000000",
+        "run_sha": "f" * 40,
+        "artifact_id": "8459000000",
+        "artifact_digest": "sha256:" + "e" * 64,
+    }
+
+    cross_section = LatestTpexDailyFeatureRepository().load(
+        parquet,
+        audit,
+        as_of_date=ROW_DATE,
+    )
+    snapshot = TpexDailyResearchInference().run(
+        cross_section,
+        _FakeTpexBundle(),  # pyright: ignore[reportArgumentType]
+        load_mvp_config(),
+        feature_source_provenance=feature_source,
+    )
+
+    assert cross_section.as_of_date == ROW_DATE
+    assert cross_section.manifest.dataset_snapshot_sha256 == dataset_snapshot
+    assert snapshot.dataset_snapshot_id == dataset_snapshot
+    assert snapshot.source_hash == dataset_snapshot
+    assert snapshot.input_artifact_sha256 == cross_section.manifest.parquet_sha256
+    assert snapshot.model_metadata["inference_feature_source"] == feature_source
+
+
+def test_tpex_daily_delta_requires_recorded_read_back(tmp_path: Path) -> None:
+    parquet, audit, _ = _delta_artifact(tmp_path)
+    values = json.loads(audit.read_text(encoding="utf-8"))
+    values["feature_delta_artifact_read_back_verified"] = False
+    _ = audit.write_text(json.dumps(values), encoding="utf-8")
+
+    with pytest.raises(LatestTpexFeatureSourceError) as captured:
+        _ = LatestTpexDailyFeatureRepository().load(parquet, audit)
+
+    assert captured.value.reason_code == "TPEX_FEATURE_ARTIFACT_AUDIT_INVALID"
 
 
 def test_tpex_daily_inference_rejects_a_twse_bound_bundle(tmp_path: Path) -> None:

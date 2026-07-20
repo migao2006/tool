@@ -6,6 +6,7 @@ from __future__ import annotations
 # pyright: reportUnknownVariableType=false, reportUnknownMemberType=false
 # pyright: reportUnknownArgumentType=false
 
+from collections.abc import Mapping
 from dataclasses import replace
 from datetime import datetime
 import json
@@ -97,6 +98,8 @@ class TwseDailyResearchInference:
         cross_section: LatestTwseFeatureCrossSection,
         bundle: LoadedTwseResearchBundle,
         config: MvpConfig,
+        *,
+        feature_source_provenance: Mapping[str, object] | None = None,
     ) -> TwseResearchPredictionSnapshot:
         manifest = bundle.manifest
         frame = cross_section.frame.reset_index(drop=True)
@@ -117,6 +120,8 @@ class TwseDailyResearchInference:
         if len(decision_ats) != 1:
             raise ValueError("one inference cross-section must share decision_at")
         decision_at = next(iter(decision_ats))
+        if feature_source_provenance is not None and not feature_source_provenance:
+            raise ValueError("feature source provenance cannot be empty")
         evaluation_scope = (
             "RETROSPECTIVE_RESEARCH_INFERENCE"
             if manifest.created_at > decision_at
@@ -258,7 +263,7 @@ class TwseDailyResearchInference:
             model_version=manifest.model_version,
             feature_schema_hash=manifest.feature_schema_hash,
             dataset_snapshot_id=cross_section.manifest.dataset_snapshot_sha256,
-            source_hash=cross_section.manifest.source_archive_snapshot_sha256,
+            source_hash=cross_section.manifest.dataset_snapshot_sha256,
             input_artifact_sha256=cross_section.manifest.parquet_sha256,
             label_version=manifest.label_version,
             benchmark_id=manifest.benchmark_id,
@@ -287,6 +292,11 @@ class TwseDailyResearchInference:
                     else None
                 ),
                 "feature_artifact_manifest": (cross_section.manifest.to_dict()),
+                **(
+                    {"inference_feature_source": dict(feature_source_provenance)}
+                    if feature_source_provenance is not None
+                    else {}
+                ),
             },
             cost_metadata=_cost_metadata(config),
             validation={

@@ -11,7 +11,7 @@ on:
         required: false
         type: string
       feature_run_id:
-        description: Optional successful TPEX feature dataset run ID
+        description: Optional successful TPEX daily feature delta run ID
         required: false
         type: string
       as_of_date:
@@ -117,10 +117,19 @@ jobs:
             if [[
               "$status" != "completed" ||
               "$conclusion" != "success" ||
-              "$event" != "workflow_dispatch" ||
               "$head_branch" != "main"
             ]]; then
               echo "Untrusted ${label} workflow result or branch" >&2
+              return 1
+            fi
+            if [[
+              "$event" != "workflow_dispatch" &&
+              (
+                "$label" != "daily feature delta" ||
+                "$event" != "workflow_run"
+              )
+            ]]; then
+              echo "Untrusted ${label} workflow event" >&2
               return 1
             fi
             if [[ ! "$head_sha" =~ ^[0-9a-f]{40}$ ]]; then
@@ -157,7 +166,7 @@ jobs:
             "build-tpex-prepared-research-dataset.yml")"
           feature_run_id="$(resolve_run \
             "$REQUESTED_FEATURE_RUN_ID" \
-            "build-tpex-research-feature-dataset.yml")"
+            "build-tpex-daily-feature-delta.yml")"
 
           prepared_artifact_identity="$(verify_run \
             "prepared dataset" \
@@ -168,10 +177,10 @@ jobs:
             prepared_run_sha prepared_artifact_id prepared_artifact_digest \
             <<< "$prepared_artifact_identity"
           feature_artifact_identity="$(verify_run \
-            "feature dataset" \
+            "daily feature delta" \
             "$feature_run_id" \
-            ".github/workflows/build-tpex-research-feature-dataset.yml" \
-            "tpex-research-features-${feature_run_id}")"
+            ".github/workflows/build-tpex-daily-feature-delta.yml" \
+            "tpex-daily-feature-delta-${feature_run_id}")"
           IFS=$'\t' read -r \
             feature_run_sha feature_artifact_id feature_artifact_digest \
             <<< "$feature_artifact_identity"
@@ -186,10 +195,10 @@ jobs:
           echo "TPEX_PREPARED_SOURCE_RUN_SHA=$prepared_run_sha" >> "$GITHUB_ENV"
           echo "TPEX_PREPARED_SOURCE_ARTIFACT_ID=$prepared_artifact_id" >> "$GITHUB_ENV"
           echo "TPEX_PREPARED_SOURCE_ARTIFACT_DIGEST=$prepared_artifact_digest" >> "$GITHUB_ENV"
-          echo "TPEX_FEATURE_SOURCE_RUN_ID=$feature_run_id" >> "$GITHUB_ENV"
-          echo "TPEX_FEATURE_SOURCE_RUN_SHA=$feature_run_sha" >> "$GITHUB_ENV"
-          echo "TPEX_FEATURE_SOURCE_ARTIFACT_ID=$feature_artifact_id" >> "$GITHUB_ENV"
-          echo "TPEX_FEATURE_SOURCE_ARTIFACT_DIGEST=$feature_artifact_digest" >> "$GITHUB_ENV"
+          echo "TPEX_INFERENCE_FEATURE_SOURCE_RUN_ID=$feature_run_id" >> "$GITHUB_ENV"
+          echo "TPEX_INFERENCE_FEATURE_SOURCE_RUN_SHA=$feature_run_sha" >> "$GITHUB_ENV"
+          echo "TPEX_INFERENCE_FEATURE_SOURCE_ARTIFACT_ID=$feature_artifact_id" >> "$GITHUB_ENV"
+          echo "TPEX_INFERENCE_FEATURE_SOURCE_ARTIFACT_DIGEST=$feature_artifact_digest" >> "$GITHUB_ENV"
           if [[ "$GITHUB_EVENT_NAME" == "schedule" ]]; then
             required_as_of_date="$(TZ=Asia/Taipei date +%F)"
           elif [[ -z "$REQUESTED_AS_OF_DATE" ]]; then
@@ -267,7 +276,7 @@ jobs:
           github-token: ${{ github.token }}
           run-id: ${{ env.PREPARED_RUN_ID }}
 
-      - name: Download verified TPEX feature-only dataset
+      - name: Download verified TPEX daily feature delta
         uses: actions/download-artifact@v8
         with:
           artifact-ids: ${{ env.FEATURE_ARTIFACT_ID }}
@@ -282,8 +291,8 @@ jobs:
           uv run python -m scripts.publish_tpex_daily_research_snapshot
           --prepared-input inputs/prepared/tpex-prepared-research.parquet
           --prepared-audit inputs/prepared/tpex-prepared-research-audit.json
-          --feature-input inputs/features/tpex-research-features.parquet
-          --feature-audit inputs/features/tpex-research-features-audit.json
+          --feature-input inputs/features/tpex-daily-feature-delta.parquet
+          --feature-audit inputs/features/tpex-daily-feature-delta-audit.json
           --artifact-root artifacts
           --report tpex-latest-research-publish-report.json
           --required-as-of-date "$REQUIRED_AS_OF_DATE"

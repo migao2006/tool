@@ -12,16 +12,32 @@ from dataclasses import dataclass
 from datetime import date
 import json
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, ClassVar, Protocol, cast
 
-from src.data.research.feature_artifact_contracts import FeatureArtifactManifest
+
+class LatestFeatureManifest(Protocol):
+    MARKET: ClassVar[str]
+
+    @property
+    def parquet_sha256(self) -> str: ...
+
+    @property
+    def dataset_snapshot_sha256(self) -> str: ...
+
+    @property
+    def source_archive_snapshot_sha256(self) -> str: ...
+
+    @property
+    def feature_schema_hash(self) -> str: ...
+
+    def to_dict(self) -> dict[str, object]: ...
 
 
 @dataclass(frozen=True)
 class LatestFeatureCrossSection:
     frame: Any
     as_of_date: date
-    manifest: FeatureArtifactManifest
+    manifest: LatestFeatureManifest
     market: str
 
 
@@ -67,8 +83,10 @@ class LatestFeatureRepository:
         *,
         market: str,
         feature_names: Sequence[str],
-        manifest_parser: Callable[[object], FeatureArtifactManifest],
+        manifest_parser: Callable[[object], LatestFeatureManifest],
         reader: Any,
+        manifest_field: str = "feature_artifact_manifest",
+        read_back_flag_field: str | None = None,
     ) -> None:
         normalized = market.strip().upper()
         if normalized not in {"TWSE", "TPEX"}:
@@ -77,6 +95,8 @@ class LatestFeatureRepository:
         self.feature_names = tuple(feature_names)
         self.manifest_parser = manifest_parser
         self.reader = reader
+        self.manifest_field = manifest_field
+        self.read_back_flag_field = read_back_flag_field
 
     @property
     def columns(self) -> tuple[str, ...]:
@@ -112,8 +132,16 @@ class LatestFeatureRepository:
                 "FEATURE_ARTIFACT_AUDIT_INVALID",
                 "Feature filename does not match its audit",
             )
+        if (
+            self.read_back_flag_field is not None
+            and audit.get(self.read_back_flag_field) is not True
+        ):
+            raise self._error(
+                "FEATURE_ARTIFACT_AUDIT_INVALID",
+                "Feature read-back verification is not recorded",
+            )
         try:
-            manifest = self.manifest_parser(audit.get("feature_artifact_manifest"))
+            manifest = self.manifest_parser(audit.get(self.manifest_field))
             verified = self.reader.verify(parquet, manifest)
         except Exception as error:
             reason = getattr(
@@ -159,7 +187,7 @@ class LatestFeatureRepository:
         )
 
     def _validate(
-        self, frame: Any, as_of_date: date, manifest: FeatureArtifactManifest
+        self, frame: Any, as_of_date: date, manifest: LatestFeatureManifest
     ) -> None:
         import pandas as pd
 
@@ -214,6 +242,7 @@ class LatestFeatureRepository:
 
 __all__ = [
     "LatestFeatureCrossSection",
+    "LatestFeatureManifest",
     "LatestFeatureRepository",
     "LatestFeatureSourceError",
 ]

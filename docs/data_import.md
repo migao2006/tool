@@ -89,6 +89,14 @@ gate 仍應保持關閉。
 - 12 檔來源股票沒有產生完整 feature row；現行 audit 只有隔離列與不足歷史的彙總，沒有逐檔
   排除原因，不能把 891 檔誤稱為全部完成。
 - Artifact typed read-back、Parquet SHA-256 與 schema SHA-256 已驗證通過。
+- 新增獨立 `build-tpex-daily-feature-delta.yml`：成功的每日市場匯入後，以 exact date 讀取
+  Supabase TPEX canonical `daily_bars` 最新完整 revision，並串接已驗證 R2 歷史視窗。輸出只保存
+  為 `RESEARCH_ONLY` GitHub artifact，不寫回 Production，也不放寬完整歷史 feature artifact 契約。
+- Daily delta 的 dataset snapshot 同時綁定歷史 archive snapshot、current identity snapshot、
+  canonical daily-bar series snapshot、feature schema 與 `as_of_date`；任何日期缺失、revision 不完整、
+  SHA／schema／row read-back 不一致都會 fail closed。
+- 目前尚無完整官方 daily payload archive，因此 canonical daily-row snapshot 不等於官方 raw payload
+  驗證；這項限制會以固定 reason code 保留，不能回填或冒充 point-in-time 證據。
 - 已新增 TPEX 官方月 OHLC 的獨立 queue／RPC、Parquet、immutable R2 read-back、CLI 與 GitHub
   Actions workflow；Local migration、validation、rollback 與 schema lint 已通過。截至
   2026-07-20，Production 同契約已有 2018-04～2026-06 共 99 個 manifests／objects、2,006 列。

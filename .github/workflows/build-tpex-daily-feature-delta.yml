@@ -1,0 +1,175 @@
+name: Build TPEX daily feature delta
+
+on:
+  workflow_dispatch:
+    inputs:
+      as_of_date:
+        description: Exact TPEX trading date (YYYY-MM-DD)
+        required: true
+        type: string
+  workflow_run:
+    workflows:
+      - Import market data
+    types:
+      - completed
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tpex-daily-feature-delta
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: >-
+      ${{
+        vars.TPEX_DAILY_FEATURE_DELTA_ENABLED == 'true' &&
+        (
+          github.event_name == 'workflow_dispatch' ||
+          (
+            github.event.workflow_run.conclusion == 'success' &&
+            github.event.workflow_run.head_branch == 'main' &&
+            (
+              github.event.workflow_run.event == 'schedule' ||
+              github.event.workflow_run.event == 'workflow_dispatch'
+            )
+          )
+        )
+      }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: >-
+            ${{
+              github.event_name == 'workflow_run' &&
+              github.event.workflow_run.head_sha || github.sha
+            }}
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install uv with dependency caching
+        uses: astral-sh/setup-uv@v8.3.2
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Synchronize locked environment
+        run: uv sync --frozen
+
+      - name: Resolve exact source date
+        id: date
+        env:
+          REQUESTED_DATE: ${{ inputs.as_of_date }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            as_of_date="$REQUESTED_DATE"
+          else
+            as_of_date="$(TZ=Asia/Taipei date +%F)"
+          fi
+          if [[ ! "$as_of_date" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+            echo "as_of_date must use YYYY-MM-DD"
+            exit 1
+          fi
+          python - "$as_of_date" <<'PY'
+          from datetime import date
+          import sys
+
+          date.fromisoformat(sys.argv[1])
+          PY
+          echo "as_of_date=$as_of_date" >> "$GITHUB_OUTPUT"
+
+      - name: Require read-only research inputs
+        env:
+          R2_ACCOUNT_ID: ${{ vars.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET_NAME: ${{ vars.R2_BUCKET_NAME }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          required=(
+            R2_ACCOUNT_ID
+            R2_ACCESS_KEY_ID
+            R2_SECRET_ACCESS_KEY
+            R2_BUCKET_NAME
+            SUPABASE_URL
+            SUPABASE_SERVICE_ROLE_KEY
+          )
+          for name in "${required[@]}"; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "Required TPEX feature-delta configuration is not set: $name"
+              exit 1
+            fi
+          done
+
+      - name: Build and read back exact-date feature delta
+        env:
+          R2_ACCOUNT_ID: ${{ vars.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET_NAME: ${{ vars.R2_BUCKET_NAME }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: >-
+          uv run python -m scripts.build_tpex_daily_feature_delta
+          --as-of-date "${{ steps.date.outputs.as_of_date }}"
+          --output tpex-daily-feature-delta.parquet
+          --audit tpex-daily-feature-delta-audit.json
+
+      - name: Record non-secret producer provenance
+        env:
+          AS_OF_DATE: ${{ steps.date.outputs.as_of_date }}
+          SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
+          SOURCE_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+          SOURCE_SHA: >-
+            ${{
+              github.event_name == 'workflow_run' &&
+              github.event.workflow_run.head_sha || github.sha
+            }}
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          payload = {
+              "artifact_kind": "TPEX_DAILY_FEATURE_DELTA",
+              "as_of_date": os.environ["AS_OF_DATE"],
+              "producer_event": "${{ github.event_name }}",
+              "producer_repository": "${{ github.repository }}",
+              "producer_run_id": "${{ github.run_id }}",
+              "producer_run_attempt": "${{ github.run_attempt }}",
+              "producer_sha": os.environ["SOURCE_SHA"],
+              "source_import_run_id": os.environ.get("SOURCE_RUN_ID") or None,
+              "source_import_run_attempt": (
+                  os.environ.get("SOURCE_RUN_ATTEMPT") or None
+              ),
+              "system_status": "RESEARCH_ONLY",
+          }
+          Path("tpex-daily-feature-delta-provenance.json").write_text(
+              json.dumps(payload, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Preserve verified RESEARCH_ONLY feature delta
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: tpex-daily-feature-delta-${{ github.run_id }}
+          path: |
+            tpex-daily-feature-delta.parquet
+            tpex-daily-feature-delta-audit.json
+            tpex-daily-feature-delta-provenance.json
+          if-no-files-found: error
+          retention-days: 90

@@ -41,6 +41,7 @@ class ResearchBundlePublisher(Protocol):
         model_version: str,
         feature_schema_hash: str,
         library_versions: Mapping[str, str],
+        research_run_provenance: Mapping[str, object] | None,
     ) -> WrittenResearchBundle: ...
 
 

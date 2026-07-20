@@ -68,26 +68,40 @@ jobs:
             local label="$1"
             local run_id="$2"
             local expected_workflow="$3"
+            local expected_artifact="$4"
             local conclusion
+            local event
             local head_branch
             local head_sha
+            local head_repository
+            local repository
             local workflow_path
+            local artifact_count
 
             if [[ ! "$run_id" =~ ^[1-9][0-9]*$ ]]; then
               echo "No trusted ${label} workflow run is available"
               return 1
             fi
-            IFS=$'\t' read -r conclusion head_branch head_sha workflow_path < <(
+            IFS=$'\t' read -r \
+              conclusion event head_branch head_sha workflow_path repository head_repository < <(
               gh api \
                 "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" \
-                --jq '[.conclusion // "", .head_branch // "", .head_sha // "", .path // ""] | @tsv'
+                --jq '[.conclusion // "", .event // "", .head_branch // "", .head_sha // "", .path // "", .repository.full_name // "", .head_repository.full_name // ""] | @tsv'
             )
             workflow_path="${workflow_path%%@*}"
-            if [[ "$workflow_path" != "$expected_workflow" ]]; then
+            if [[
+              "$workflow_path" != "$expected_workflow" ||
+              "$repository" != "$GITHUB_REPOSITORY" ||
+              "$head_repository" != "$GITHUB_REPOSITORY"
+            ]]; then
               echo "Untrusted ${label} workflow path"
               return 1
             fi
-            if [[ "$conclusion" != "success" || "$head_branch" != "main" ]]; then
+            if [[
+              "$conclusion" != "success" ||
+              "$event" != "workflow_dispatch" ||
+              "$head_branch" != "main"
+            ]]; then
               echo "Untrusted ${label} workflow result or branch"
               return 1
             fi
@@ -95,10 +109,21 @@ jobs:
               echo "Invalid ${label} workflow head SHA"
               return 1
             fi
-            if ! git merge-base --is-ancestor "$head_sha" origin/main; then
-              echo "Untrusted ${label} workflow head is not an origin/main ancestor"
+            if ! git merge-base --is-ancestor "$head_sha" "$GITHUB_SHA"; then
+              echo "Untrusted ${label} workflow head is not an ancestor of this run"
               return 1
             fi
+            artifact_count="$(
+              gh api \
+                "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts?per_page=100" |
+                jq --arg name "$expected_artifact" \
+                  '[.artifacts[] | select(.name == $name and .expired == false)] | length'
+            )"
+            if [[ "$artifact_count" != "1" ]]; then
+              echo "Trusted ${label} workflow must expose one expected artifact"
+              return 1
+            fi
+            printf '%s' "$head_sha"
           }
 
           prepared_run_id="$(resolve_run \
@@ -108,17 +133,23 @@ jobs:
             "$REQUESTED_FEATURE_RUN_ID" \
             "build-tpex-research-feature-dataset.yml")"
 
-          verify_run \
+          prepared_run_sha="$(verify_run \
             "prepared dataset" \
             "$prepared_run_id" \
-            ".github/workflows/build-tpex-prepared-research-dataset.yml"
-          verify_run \
+            ".github/workflows/build-tpex-prepared-research-dataset.yml" \
+            "tpex-prepared-research-${prepared_run_id}")"
+          feature_run_sha="$(verify_run \
             "feature dataset" \
             "$feature_run_id" \
-            ".github/workflows/build-tpex-research-feature-dataset.yml"
+            ".github/workflows/build-tpex-research-feature-dataset.yml" \
+            "tpex-research-features-${feature_run_id}")"
 
           echo "PREPARED_RUN_ID=$prepared_run_id" >> "$GITHUB_ENV"
           echo "FEATURE_RUN_ID=$feature_run_id" >> "$GITHUB_ENV"
+          echo "TPEX_PREPARED_SOURCE_RUN_ID=$prepared_run_id" >> "$GITHUB_ENV"
+          echo "TPEX_PREPARED_SOURCE_RUN_SHA=$prepared_run_sha" >> "$GITHUB_ENV"
+          echo "TPEX_FEATURE_SOURCE_RUN_ID=$feature_run_id" >> "$GITHUB_ENV"
+          echo "TPEX_FEATURE_SOURCE_RUN_SHA=$feature_run_sha" >> "$GITHUB_ENV"
           echo "REQUIRED_AS_OF_DATE=$(TZ=Asia/Taipei date +%F)" >> "$GITHUB_ENV"
 
       - uses: actions/setup-python@v6

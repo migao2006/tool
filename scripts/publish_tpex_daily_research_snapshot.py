@@ -145,9 +145,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if training.status is not PipelineStatus.RESEARCH_ONLY or not bundle_uri:
             raise ValueError("TPEX_RESEARCH_MODEL_BUNDLE_NOT_CREATED")
         bundle_dir = _local_path(bundle_uri, directory=True)
-        bundle = TwseResearchBundleReader.read(
-            bundle_dir, expected_market="TPEX"
-        )
+        bundle = TwseResearchBundleReader.read(bundle_dir, expected_market="TPEX")
         features = LatestTpexFeatureRepository().load(
             cast(Path, arguments.feature_input),
             cast(Path, arguments.feature_audit),

@@ -49,6 +49,28 @@ DATASET_SNAPSHOT = dataset_snapshot_hash(
 ROW_DATE = date(2026, 7, 17)
 
 
+def _training_provenance() -> dict[str, object]:
+    return {
+        "execution_environment": "LOCAL",
+        "git_commit": "7" * 40,
+        "git_commit_source": "LOCAL_GIT_HEAD",
+        "source_prepared_run_id": None,
+        "source_prepared_run_sha": None,
+        "prepared_artifact_manifest": {
+            "market": "TPEX",
+            "parquet_sha256": "e" * 64,
+            "prepared_dataset_snapshot_sha256": "1" * 64,
+            "daily_archive_snapshot_sha256": "2" * 64,
+            "current_identity_snapshot_sha256": "3" * 64,
+            "feature_artifact_sha256": "4" * 64,
+            "calendar_snapshot_sha256": "5" * 64,
+            "source_hash": "6" * 64,
+            "benchmark_snapshot_sha256": "8" * 64,
+            "feature_schema_hash": TPEX_PRICE_VOLUME_FEATURE_SCHEMA_HASH,
+        },
+    }
+
+
 def _row(symbol: str, *, available_hour_utc: int = 8) -> dict[str, object]:
     values: dict[str, object] = {
         "dataset_snapshot_sha256": DATASET_SNAPSHOT,
@@ -118,7 +140,10 @@ def _artifact(tmp_path: Path, rows: list[dict[str, object]]) -> tuple[Path, Path
     audit = tmp_path / "tpex-research-features-audit.json"
     _ = audit.write_text(
         json.dumps(
-            {"output_file": output.name, "feature_artifact_manifest": manifest.to_dict()}
+            {
+                "output_file": output.name,
+                "feature_artifact_manifest": manifest.to_dict(),
+            }
         ),
         encoding="utf-8",
     )
@@ -156,6 +181,8 @@ def _manifest() -> TwseResearchModelBundleManifest:
         },
         library_versions={"lightgbm": "4.6.0"},
         reason_codes=("MODEL_NOT_FORMALLY_PROMOTED",),
+        research_run_provenance=_training_provenance(),
+        git_commit="7" * 40,
     )
 
 
@@ -209,6 +236,12 @@ def test_tpex_latest_feature_scores_only_tpex_and_emits_tpex_contract(
     assert all(row.to_dict()["decision"] == "NO_TRADE" for row in snapshot.predictions)
     assert "TPEX_PRICE_ONLY_RESEARCH" in snapshot.reason_codes
     assert snapshot.validation["locked_holdout_executed"] is False
+    assert snapshot.model_metadata["research_run_provenance"] == (
+        _training_provenance()
+    )
+    assert snapshot.model_metadata["feature_artifact_manifest"] == (
+        cross_section.manifest.to_dict()
+    )
 
 
 def test_tpex_latest_feature_rejects_values_available_after_decision(

@@ -240,9 +240,7 @@ def _payload(
 def _tpex_payload() -> dict[str, object]:
     payload = _payload()
     payload["market"] = "TPEX"
-    payload["artifact_contract_version"] = (
-        TPEX_RESEARCH_PREDICTION_CONTRACT_VERSION
-    )
+    payload["artifact_contract_version"] = TPEX_RESEARCH_PREDICTION_CONTRACT_VERSION
     predictions = cast(list[dict[str, object]], payload["predictions"])
     predictions[0]["market"] = "TPEX"
     predictions[0]["reason_codes"] = ["TPEX_PRICE_ONLY_RESEARCH"]
@@ -341,9 +339,7 @@ def test_gated_research_snapshot_persists_all_eight_verified_gate_rows() -> None
     run = cast(dict[str, object], parameters["p_run"])
     source_dates = cast(dict[str, object], run["source_dates"])
     assert source_dates["decision_gate_count"] == 8
-    assert source_dates["snapshot_sha256"] == first_actual[
-        "attachment_snapshot_sha256"
-    ]
+    assert source_dates["snapshot_sha256"] == first_actual["attachment_snapshot_sha256"]
     stock = cast(list[dict[str, object]], parameters["p_stock_predictions"])[0]
     assert "RESEARCH_ONLY_NO_FORMAL_DECISION_POLICY" in cast(
         list[object], stock["reason_codes"]

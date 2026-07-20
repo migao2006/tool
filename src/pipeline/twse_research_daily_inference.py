@@ -281,6 +281,12 @@ class TwseDailyResearchInference:
                 ),
                 "library_versions": dict(manifest.library_versions),
                 "git_commit": manifest.git_commit,
+                "research_run_provenance": (
+                    dict(manifest.research_run_provenance)
+                    if manifest.research_run_provenance is not None
+                    else None
+                ),
+                "feature_artifact_manifest": (cross_section.manifest.to_dict()),
             },
             cost_metadata=_cost_metadata(config),
             validation={
@@ -305,9 +311,7 @@ class TwseDailyResearchInference:
                 "FORMAL_POSITION_LIMIT_INPUT_MISSING",
             ),
             market=self.market,
-            artifact_contract_version=research_prediction_contract_version(
-                self.market
-            ),
+            artifact_contract_version=research_prediction_contract_version(self.market),
         )
 
 

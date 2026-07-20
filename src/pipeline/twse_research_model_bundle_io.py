@@ -117,6 +117,7 @@ class TwseResearchBundleWriter:
         evaluated_test_dates: Sequence[date],
         library_versions: Mapping[str, str],
         reason_codes: Sequence[str],
+        research_run_provenance: Mapping[str, object] | None = None,
         git_commit: str | None = None,
         market: str = "TWSE",
     ) -> WrittenTwseResearchBundle:
@@ -133,7 +134,9 @@ class TwseResearchBundleWriter:
         )
         missing = [name for name in required_provenance if not provenance.get(name)]
         if missing:
-            raise ValueError("model bundle provenance is missing: " + ", ".join(missing))
+            raise ValueError(
+                "model bundle provenance is missing: " + ", ".join(missing)
+            )
         if not training_dates or not calibration_dates or not evaluated_test_dates:
             raise ValueError("all mechanical last-fold date blocks are required")
 
@@ -183,6 +186,11 @@ class TwseResearchBundleWriter:
             files=records,
             library_versions=dict(library_versions),
             reason_codes=tuple(dict.fromkeys(reason_codes)),
+            research_run_provenance=(
+                dict(research_run_provenance)
+                if research_run_provenance is not None
+                else None
+            ),
             git_commit=git_commit,
             market=market,
             contract_version=research_bundle_contract_version(market),
@@ -200,9 +208,7 @@ class TwseResearchBundleWriter:
             _ = manifest_path.write_bytes(_canonical_json(manifest.to_dict()))
             _ = TwseResearchBundleReader.read(temporary, expected_market=market)
             os.replace(temporary, bundle_dir)
-            loaded = TwseResearchBundleReader.read(
-                bundle_dir, expected_market=market
-            )
+            loaded = TwseResearchBundleReader.read(bundle_dir, expected_market=market)
             if loaded.manifest.manifest_sha256 != manifest.manifest_sha256:
                 raise OSError("published model bundle manifest changed")
         finally:
@@ -244,7 +250,10 @@ class TwseResearchBundleReader:
             if path.parent != root or not path.is_file():
                 raise ValueError("model bundle artifact escaped its immutable root")
             payload = path.read_bytes()
-            if len(payload) != record.byte_size or sha256(payload).hexdigest() != record.sha256:
+            if (
+                len(payload) != record.byte_size
+                or sha256(payload).hexdigest() != record.sha256
+            ):
                 raise ValueError(f"model bundle artifact hash mismatch: {name}")
             paths[name] = path
 
@@ -260,8 +269,12 @@ class TwseResearchBundleReader:
             )
         }
         expected_features = len(manifest.feature_names) * 2
-        if any(booster.num_feature() != expected_features for booster in boosters.values()):
-            raise ValueError("native booster feature count does not match imputer contract")
+        if any(
+            booster.num_feature() != expected_features for booster in boosters.values()
+        ):
+            raise ValueError(
+                "native booster feature count does not match imputer contract"
+            )
         return LoadedTwseResearchBundle(
             manifest=manifest,
             imputer=read_imputer(paths["imputer_state"], manifest),
@@ -275,9 +288,7 @@ class TwseResearchBundleReader:
             probability_calibrator=read_probability(
                 paths["probability_calibrator_state"]
             ),
-            interval_calibrator=read_interval(
-                paths["interval_calibrator_state"]
-            ),
+            interval_calibrator=read_interval(paths["interval_calibrator_state"]),
         )
 
 

@@ -129,6 +129,9 @@ class VenuePriceResearchRunner:
                 model_version=self.profile.model_version,
                 feature_schema_hash=self.profile.feature_schema_hash,
                 library_versions=library_versions,
+                research_run_provenance=(
+                    run_provenance.to_dict() if run_provenance is not None else None
+                ),
             )
             metrics["research_model_bundle_manifest_sha256"] = (
                 bundle.manifest.manifest_sha256
@@ -167,9 +170,7 @@ class VenuePriceResearchRunner:
                 "random_seed": context.config.rank.seed,
                 "library_versions": library_versions,
                 "research_run_provenance": (
-                    run_provenance.to_dict()
-                    if run_provenance is not None
-                    else None
+                    run_provenance.to_dict() if run_provenance is not None else None
                 ),
             },
             cost_metadata=research_cost_metadata(context, cost_identity),

@@ -116,9 +116,12 @@ class LatestFeatureRepository:
             manifest = self.manifest_parser(audit.get("feature_artifact_manifest"))
             verified = self.reader.verify(parquet, manifest)
         except Exception as error:
-            reason = getattr(error, "reason_code", f"{self.market}_FEATURE_ARTIFACT_INVALID")
+            reason = getattr(
+                error, "reason_code", f"{self.market}_FEATURE_ARTIFACT_INVALID"
+            )
             raise LatestFeatureSourceError(
-                str(reason), f"{self.market} feature artifact failed read-back verification"
+                str(reason),
+                f"{self.market} feature artifact failed read-back verification",
             ) from error
 
         pc, pq = _pyarrow_modules()

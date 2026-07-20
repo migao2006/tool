@@ -29,6 +29,7 @@ def publish_last_fold_bundle(
     model_version: str,
     feature_schema_hash: str,
     library_versions: Mapping[str, str],
+    research_run_provenance: Mapping[str, object] | None,
 ) -> WrittenTwseResearchBundle:
     """Persist the final chronological fold without metric-based selection."""
 
@@ -41,6 +42,7 @@ def publish_last_fold_bundle(
         model_version=model_version,
         feature_schema_hash=feature_schema_hash,
         library_versions=library_versions,
+        research_run_provenance=research_run_provenance,
         market="TWSE",
         artifact_stem="twse",
         primary_reason_code="TWSE_PRICE_ONLY_RESEARCH",
@@ -57,6 +59,7 @@ def publish_tpex_last_fold_bundle(
     model_version: str,
     feature_schema_hash: str,
     library_versions: Mapping[str, str],
+    research_run_provenance: Mapping[str, object] | None,
 ) -> WrittenTwseResearchBundle:
     """Persist only a TPEX-trained fold under a TPEX-bound manifest."""
 
@@ -69,6 +72,7 @@ def publish_tpex_last_fold_bundle(
         model_version=model_version,
         feature_schema_hash=feature_schema_hash,
         library_versions=library_versions,
+        research_run_provenance=research_run_provenance,
         market="TPEX",
         artifact_stem="tpex",
         primary_reason_code="TPEX_PRICE_ONLY_RESEARCH",
@@ -85,6 +89,7 @@ def _publish_last_fold_bundle(
     model_version: str,
     feature_schema_hash: str,
     library_versions: Mapping[str, str],
+    research_run_provenance: Mapping[str, object] | None,
     market: str,
     artifact_stem: str,
     primary_reason_code: str,
@@ -113,13 +118,18 @@ def _publish_last_fold_bundle(
         calibration_dates=fold.calibration_dates,
         evaluated_test_dates=fold.test_dates,
         library_versions=library_versions,
+        research_run_provenance=research_run_provenance,
         reason_codes=(
             primary_reason_code,
             "MECHANICAL_LAST_WALK_FORWARD_FOLD",
             "LOCKED_HOLDOUT_NOT_EXECUTED",
             "MODEL_NOT_FORMALLY_PROMOTED",
         ),
-        git_commit=os.environ.get("GITHUB_SHA"),
+        git_commit=(
+            str(research_run_provenance["git_commit"])
+            if research_run_provenance is not None
+            else os.environ.get("GITHUB_SHA")
+        ),
         market=market,
     )
 

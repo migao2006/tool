@@ -184,8 +184,7 @@ class TwseResearchPredictionSupabasePublisher:
         mapping = {
             str(row["symbol"]): int(cast(int | str, row["security_id"]))
             for row in records
-            if row.get("market") == market
-            and row.get("asset_type") == "COMMON_STOCK"
+            if row.get("market") == market and row.get("asset_type") == "COMMON_STOCK"
         }
         missing = sorted(set(symbols).difference(mapping))
         if missing:
@@ -268,9 +267,7 @@ class TwseResearchPredictionSupabasePublisher:
 
 
 @final
-class TpexResearchPredictionSupabasePublisher(
-    TwseResearchPredictionSupabasePublisher
-):
+class TpexResearchPredictionSupabasePublisher(TwseResearchPredictionSupabasePublisher):
     """TPEX adapter retaining the same explicit two-gate Production policy."""
 
     def __init__(

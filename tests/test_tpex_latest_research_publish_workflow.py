@@ -20,16 +20,23 @@ def test_tpex_daily_publish_authenticates_exact_artifact_producers() -> None:
 
     assert ".github/workflows/build-tpex-prepared-research-dataset.yml" in workflow
     assert ".github/workflows/build-tpex-research-feature-dataset.yml" in workflow
-    assert '"$conclusion" != "success" || "$head_branch" != "main"' in workflow
-    assert 'git merge-base --is-ancestor "$head_sha" origin/main' in workflow
+    assert '"$conclusion" != "success"' in workflow
+    assert '"$head_branch" != "main"' in workflow
+    assert 'git merge-base --is-ancestor "$head_sha" "$GITHUB_SHA"' in workflow
+    assert '"$repository" != "$GITHUB_REPOSITORY"' in workflow
+    assert '"$head_repository" != "$GITHUB_REPOSITORY"' in workflow
+    assert '"$event" != "workflow_dispatch"' in workflow
+    assert 'artifact_count="$(' in workflow
     assert "tpex-prepared-research-${{ env.PREPARED_RUN_ID }}" in workflow
     assert "tpex-research-features-${{ env.FEATURE_RUN_ID }}" in workflow
+    assert "TPEX_PREPARED_SOURCE_RUN_ID=$prepared_run_id" in workflow
+    assert "TPEX_PREPARED_SOURCE_RUN_SHA=$prepared_run_sha" in workflow
 
 
 def test_tpex_daily_publish_fails_closed_on_stale_features() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
 
-    assert 'REQUIRED_AS_OF_DATE=$(TZ=Asia/Taipei date +%F)' in workflow
+    assert "REQUIRED_AS_OF_DATE=$(TZ=Asia/Taipei date +%F)" in workflow
     assert '--required-as-of-date "$REQUIRED_AS_OF_DATE"' in workflow
     assert "scripts.publish_tpex_daily_research_snapshot" in workflow
     assert "publish_twse_daily_research_snapshot" not in workflow

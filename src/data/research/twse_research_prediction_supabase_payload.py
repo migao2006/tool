@@ -141,11 +141,7 @@ def parse_research_snapshot(
 ) -> ParsedResearchSnapshot:
     snapshot_hash = _verify_snapshot_hash(payload)
     supplied_market = payload.get("market")
-    market = (
-        "TWSE"
-        if supplied_market is None
-        else str(supplied_market).strip().upper()
-    )
+    market = "TWSE" if supplied_market is None else str(supplied_market).strip().upper()
     if market not in {"TWSE", "TPEX"}:
         raise ValueError("research prediction market is unsupported")
     if market == "TPEX" and supplied_market != "TPEX":
@@ -268,9 +264,7 @@ def resolve_research_snapshot(
         "market_scope": parsed.market,
         "model_bundle_version": parsed.model_bundle_version,
         "feature_schema_hash": _required(payload, "feature_schema_hash"),
-        "benchmark_versions": {
-            parsed.market: _required(payload, "benchmark_version")
-        },
+        "benchmark_versions": {parsed.market: _required(payload, "benchmark_version")},
         "cost_profile_version": _required(payload, "cost_profile_version"),
         "training_end_date": _required(payload, "training_end_date"),
         "system_validation_status": "RESEARCH_ONLY",

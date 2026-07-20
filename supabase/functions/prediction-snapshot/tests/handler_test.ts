@@ -1,20 +1,34 @@
 import { parseAllowedOrigins } from "../cors.ts";
 import { createHandler } from "../handler.ts";
-import type { SnapshotRepositoryContract, SnapshotRows } from "../types.ts";
+import type {
+  MarketScope,
+  SnapshotRepositoryContract,
+  SnapshotRows,
+} from "../types.ts";
 import { assert, assertEquals } from "./assertions.ts";
 import { snapshotRows } from "./fixtures.ts";
 
 class FakeRepository implements SnapshotRepositoryContract {
-  constructor(readonly rows: SnapshotRows | null) {}
-  loadLatest(horizon: number): Promise<SnapshotRows | null> {
+  constructor(
+    readonly rows: SnapshotRows | null,
+    readonly expectedMarket: MarketScope = "TWSE",
+  ) {}
+  loadLatest(
+    horizon: number,
+    marketScope: MarketScope,
+  ): Promise<SnapshotRows | null> {
     assertEquals(horizon, 5);
+    assertEquals(marketScope, this.expectedMarket);
     return Promise.resolve(this.rows);
   }
 }
 
-function handler(rows: SnapshotRows | null) {
+function handler(
+  rows: SnapshotRows | null,
+  expectedMarket: MarketScope = "TWSE",
+) {
   return createHandler({
-    repository: new FakeRepository(rows),
+    repository: new FakeRepository(rows, expectedMarket),
     corsPolicy: parseAllowedOrigins(
       "https://alpha.example,http://127.0.0.1:3000",
     ),
@@ -73,8 +87,22 @@ Deno.test("anonymous GET returns an honest empty research snapshot", async () =>
   assertEquals(response.status, 200);
   assertEquals(response.headers.get("Cache-Control"), "no-store, max-age=0");
   assertEquals(payload.system_status, "RESEARCH_ONLY");
+  assertEquals(payload.market_scope, "TWSE");
   assertEquals(payload.as_of_date, null);
   assertEquals(payload.predictions, []);
+});
+
+Deno.test("TPEX empty snapshots do not fall back to TWSE", async () => {
+  const response = await handler(null, "TPEX")(
+    new Request(
+      "https://api.example/functions/v1/prediction-snapshot?horizon=5&market=TPEX",
+    ),
+  );
+  const payload = await response.json();
+  assertEquals(response.status, 200);
+  assertEquals(payload.market_scope, "TPEX");
+  assertEquals(payload.predictions, []);
+  assertEquals(payload.reason_codes, ["NO_PREDICTION_SNAPSHOT"]);
 });
 
 Deno.test("stored research rows expose only eligible predictions and real exclusions", async () => {
@@ -148,6 +176,41 @@ Deno.test("unsupported horizons and request-time recalculation fail closed", asy
   );
 });
 
+Deno.test("market defaults to TWSE and rejects ALL or unknown scopes", async () => {
+  const defaultMarket = await handler(null)(
+    new Request(
+      "https://api.example/functions/v1/prediction-snapshot?horizon=5",
+    ),
+  );
+  assertEquals(defaultMarket.status, 200);
+  assertEquals((await defaultMarket.json()).market_scope, "TWSE");
+
+  for (const market of ["ALL", "OTC", "unknown", ""]) {
+    const response = await handler(null)(
+      new Request(
+        `https://api.example/functions/v1/prediction-snapshot?horizon=5&market=${market}`,
+      ),
+    );
+    assertEquals(response.status, 422);
+    assertEquals((await response.json()).code, "UNSUPPORTED_MARKET");
+  }
+});
+
+Deno.test("cross-market rows fail with a conflict", async () => {
+  const rows = snapshotRows();
+  rows.predictions[0].market = "TPEX";
+  const response = await handler(rows)(
+    new Request(
+      "https://api.example/functions/v1/prediction-snapshot?horizon=5&market=TWSE",
+    ),
+  );
+  assertEquals(response.status, 409);
+  assertEquals(
+    (await response.json()).code,
+    "PREDICTION_MARKET_SCOPE_MISMATCH",
+  );
+});
+
 Deno.test("CORS allowlist and row-count manifest are enforced", async () => {
   const blocked = await handler(null)(
     new Request(
@@ -184,8 +247,6 @@ Deno.test("database PASS is downgraded until the public contract is complete", a
     rows.validationRun.validation_status = "PASS";
     rows.validationRun.locked_holdout = true;
   }
-  rows.markets.push({ ...rows.markets[0], market: "TPEX" });
-
   const response = await handler(rows)(
     new Request(
       "https://api.example/functions/v1/prediction-snapshot?horizon=5",

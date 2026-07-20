@@ -6,7 +6,12 @@ import {
   marketName,
   resolvePublicDataQuality,
 } from "./mappers.ts";
-import type { DecisionGateRow, JsonRecord, SnapshotRows } from "./types.ts";
+import type {
+  DecisionGateRow,
+  JsonRecord,
+  MarketScope,
+  SnapshotRows,
+} from "./types.ts";
 
 export const API_CONTRACT_VERSION = "prediction-snapshot.v1";
 const GATE_ORDER = [
@@ -30,12 +35,13 @@ function validGateSourceDate(value: unknown, asOfDate: string): boolean {
     value <= asOfDate;
 }
 
-function emptySnapshot(): JsonRecord {
+function emptySnapshot(marketScope: MarketScope): JsonRecord {
   return {
     api_contract_version: API_CONTRACT_VERSION,
     as_of_date: null,
     decision_at: null,
     horizon: 5,
+    market_scope: marketScope,
     system_status: "RESEARCH_ONLY",
     stale: true,
     data_quality_hard_fail: false,
@@ -121,14 +127,14 @@ function validateResearchGateAttachments(
 function formalContractReady(
   mapped: JsonRecord[],
   rows: SnapshotRows,
+  marketScope: MarketScope,
 ): boolean {
   if (
     !rows.validationRun ||
     rows.validationRun.validation_status !== "PASS" ||
     !rows.validationRun.locked_holdout ||
     rows.run.hard_fail_count > 0 ||
-    !rows.markets.some((market) => market.market === "TWSE") ||
-    !rows.markets.some((market) => market.market === "TPEX")
+    !rows.markets.some((market) => market.market === marketScope)
   ) return false;
   return mapped.every((prediction) => {
     const gates = prediction.gates as JsonRecord[];
@@ -146,12 +152,32 @@ function formalContractReady(
   });
 }
 
+function assertMarketIsolation(
+  rows: SnapshotRows,
+  marketScope: MarketScope,
+): void {
+  const runMarketScope = rows.run.market_scope ?? "TWSE";
+  const mixed = runMarketScope !== marketScope ||
+    rows.predictions.some((prediction) => prediction.market !== marketScope) ||
+    rows.securities.some((security) => security.market !== marketScope) ||
+    rows.markets.some((market) => market.market !== marketScope);
+  if (mixed) {
+    throw new ApiError(
+      409,
+      "PREDICTION_MARKET_SCOPE_MISMATCH",
+      "Prediction snapshot contains data from another market",
+    );
+  }
+}
+
 export function buildSnapshot(
   rows: SnapshotRows | null,
+  marketScope: MarketScope,
   now = new Date(),
   staleHours = 72,
 ): JsonRecord {
-  if (!rows) return emptySnapshot();
+  if (!rows) return emptySnapshot(marketScope);
+  assertMarketIsolation(rows, marketScope);
   const expected = rows.run.candidate_count + rows.run.watch_count +
     rows.run.no_trade_count;
   if (rows.predictions.length !== expected) {
@@ -271,7 +297,7 @@ export function buildSnapshot(
       "Excluded security count does not match the run manifest",
     );
   }
-  const formalReady = formalContractReady(mapped, rows);
+  const formalReady = formalContractReady(mapped, rows, marketScope);
   const sourceStatus = rows.run.system_validation_status;
   const systemStatus = sourceStatus === "PASS" && !formalReady
     ? "RESEARCH_ONLY"
@@ -295,11 +321,12 @@ export function buildSnapshot(
     as_of_date: rows.run.as_of_date,
     decision_at: rows.run.decision_at,
     horizon: rows.run.horizon,
+    market_scope: marketScope,
     system_status: systemStatus,
     stale,
     data_quality_hard_fail: false,
     reason_codes: [...reasonCodes],
-    market: mapMarket(rows.run, rows.markets),
+    market: mapMarket(rows.run, rows.markets, marketScope),
     predictions: included,
     watchlist: [],
     excluded,

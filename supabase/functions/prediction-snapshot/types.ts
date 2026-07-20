@@ -7,12 +7,14 @@ export type JsonValue =
   | { [key: string]: JsonValue };
 
 export type JsonRecord = Record<string, JsonValue>;
+export type MarketScope = "TWSE" | "TPEX";
 
 export interface PredictionRunRow extends JsonRecord {
   prediction_run_id: number;
   as_of_date: string;
   decision_at: string;
   horizon: number;
+  market_scope: MarketScope | null;
   model_bundle_version: string;
   feature_schema_hash: string;
   cost_profile_version: string;
@@ -140,5 +142,8 @@ export interface SnapshotRows {
 }
 
 export interface SnapshotRepositoryContract {
-  loadLatest(horizon: number): Promise<SnapshotRows | null>;
+  loadLatest(
+    horizon: number,
+    marketScope: MarketScope,
+  ): Promise<SnapshotRows | null>;
 }

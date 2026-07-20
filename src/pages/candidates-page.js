@@ -2,6 +2,8 @@ import { createEmptyState } from "../components/empty-state.js";
 import { createCandidateCard } from "../components/candidate-card.js";
 import { createExcludedSecuritiesDrawer, renderExcludedSecurities } from "../components/excluded-securities-drawer.js";
 import { createStatusBanner } from "../components/status-banner.js";
+import { createMarketScopeSwitch } from "../components/market-scope-switch.js";
+import { marketScopeLabel } from "../core/market-scope.js";
 import { filterCandidateRecords } from "../features/candidate-filters.js";
 import {
   canDisplaySnapshotRecords,
@@ -37,6 +39,7 @@ export function createCandidatesPage({ horizon }) {
         <div><span class="eyebrow">horizon=${horizon}</span><h1 id="candidates-title">5 日候選股</h1></div>
         <span class="date-badge"><small>資料日期 · as_of_date</small><span data-candidate-date>—</span></span>
       </div>
+      ${createMarketScopeSwitch("候選股市場資料集")}
       ${createStatusBanner({ title: "尚無正式候選", description: "只有 Rank Score 排序且通過決策門檻的股票，才會出現在正式清單。" })}
 
       <div class="candidate-filter-stack" data-candidate-filters>
@@ -48,13 +51,8 @@ export function createCandidatesPage({ horizon }) {
           <button class="text-button candidate-search-clear" type="button" data-clear-candidate-search hidden>清除</button>
         </div>
         <details class="filter-panel candidate-filters">
-          <summary><span>篩選候選股</span><small>市場、產業、風險與門檻</small></summary>
+          <summary><span>篩選候選股</span><small>產業、風險與門檻</small></summary>
           <div class="candidate-filter-content">
-            <div class="segmented three-up" data-filter="market" aria-label="市場">
-              <button type="button" class="is-active" data-value="" aria-pressed="true">全部</button>
-              <button type="button" data-value="TWSE" aria-pressed="false">上市</button>
-              <button type="button" data-value="TPEX" aria-pressed="false">上櫃</button>
-            </div>
             <div class="filter-grid wide-filter-grid">
               <label><span>產業</span><select name="industry"><option value="">全部產業</option></select></label>
               <label><span>決策</span><select name="decision"><option value="">全部</option><option>CANDIDATE</option><option>WATCH</option><option>NO_TRADE</option></select></label>
@@ -104,6 +102,7 @@ export function renderCandidatesPage(snapshot, uiState, filters = {}) {
   if (!root || !snapshot) return;
   const date = root.querySelector("[data-candidate-date]");
   if (date) date.textContent = snapshot.asOfDate ?? "—";
+  const marketLabel = marketScopeLabel(snapshot.marketScope);
   const hardFailCount = root.querySelector("[data-hard-fail-count]");
   if (hardFailCount) hardFailCount.textContent = String(snapshot.excluded?.length ?? 0);
   renderExcludedSecurities(snapshot.excluded);
@@ -116,8 +115,8 @@ export function renderCandidatesPage(snapshot, uiState, filters = {}) {
   const heading = root.querySelector("[data-candidate-list-title]");
   if (heading) {
     heading.textContent = isHistoricalResearchSnapshot(snapshot)
-      ? "5 日歷史研究結果"
-      : researchOnly ? "5 日研究結果" : "正式候選清單";
+      ? `${marketLabel} 5 日歷史研究結果`
+      : researchOnly ? `${marketLabel} 5 日研究結果` : `${marketLabel}正式候選清單`;
   }
   if (records.length) {
     const visibleRecords = records.slice(0, visibleLimit(root));
@@ -129,9 +128,22 @@ export function renderCandidatesPage(snapshot, uiState, filters = {}) {
   }
   renderPagination(root, 0, 0);
   const reasonCode = snapshot.reasonCodes?.[0] ?? (canShow ? "NO_MATCHING_ELIGIBLE_STOCKS" : "NO_DISPLAYABLE_RESULTS");
+  const hasSnapshotRecords = (snapshot.predictions ?? []).length > 0;
+  const emptyTitle = canShow && !hasSnapshotRecords
+    ? `${marketLabel}尚無研究結果`
+    : canShow
+    ? `${marketLabel}沒有符合搜尋或篩選的股票`
+    : uiState === "no_candidates"
+    ? `${marketLabel}今日無正式候選`
+    : `${marketLabel}無正式候選股`;
+  const emptyDescription = canShow && !hasSnapshotRecords
+    ? `目前${marketLabel}資料集尚無 5 日預測快照。`
+    : canShow
+    ? "請調整股票代號、名稱或進階篩選；排序仍只使用 Rank Score。"
+    : `目前${marketLabel}快照沒有可顯示的股票資料。`;
   list.innerHTML = createEmptyState({
-    title: canShow ? "沒有符合搜尋或篩選的股票" : uiState === "no_candidates" ? "今日無正式候選" : "無正式候選股",
-    description: canShow ? "請調整股票代號、名稱或進階篩選；排序仍只使用 Rank Score。" : "目前快照沒有可顯示的股票資料。",
+    title: emptyTitle,
+    description: emptyDescription,
     reasonCode,
   });
 }

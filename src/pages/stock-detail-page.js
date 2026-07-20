@@ -75,6 +75,7 @@ export function renderStockDetailPage(prediction, { isWatchlisted = false } = {}
   if (watchButton) {
     watchButton.disabled = false;
     watchButton.dataset.symbol = prediction.symbol;
+    watchButton.dataset.market = prediction.market;
     watchButton.setAttribute("aria-pressed", String(isWatchlisted));
     watchButton.setAttribute("aria-label", isWatchlisted ? "移出自選股" : "加入自選股");
     watchButton.textContent = isWatchlisted ? "★" : "☆";

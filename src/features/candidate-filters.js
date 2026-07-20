@@ -1,7 +1,3 @@
-function selectedSegment(root, name) {
-  return root.querySelector(`[data-filter="${name}"] button.is-active`)?.dataset.value ?? "";
-}
-
 function numberValue(root, name) {
   const rawValue = root.querySelector(`[name="${name}"]`)?.value ?? "";
   if (rawValue.trim() === "") return null;
@@ -16,7 +12,6 @@ function normalizeSearchText(value) {
 function currentFilters(root) {
   return Object.freeze({
     searchQuery: root.querySelector('[name="stock_search"]')?.value ?? "",
-    market: selectedSegment(root, "market"),
     industry: root.querySelector('[name="industry"]')?.value ?? "",
     decision: root.querySelector('[name="decision"]')?.value ?? "",
     dataQuality: root.querySelector('[name="data_quality"]')?.value ?? "",
@@ -51,7 +46,6 @@ export function filterCandidateRecords(records, filters) {
       const searchableText = normalizeSearchText(`${record.symbol ?? ""} ${record.name ?? ""}`);
       if (!searchableText.includes(searchQuery)) return false;
     }
-    if (filters.market && record.market !== filters.market) return false;
     if (filters.industry && record.industry !== filters.industry) return false;
     if (filters.decision && record.decision !== filters.decision) return false;
     if (filters.dataQuality && record.data_quality_status !== filters.dataQuality) return false;
@@ -81,14 +75,6 @@ export function initializeCandidateFilters({ onChange } = {}) {
       onChange?.(currentFilters(root));
       return;
     }
-    const button = event.target.closest('[data-filter="market"] button[data-value]');
-    if (!button) return;
-    button.closest("[data-filter]").querySelectorAll("button[data-value]").forEach((item) => {
-      const active = item === button;
-      item.classList.toggle("is-active", active);
-      item.setAttribute("aria-pressed", String(active));
-    });
-    onChange?.(currentFilters(root));
   });
   root.addEventListener("input", () => {
     syncSearchClearButton();

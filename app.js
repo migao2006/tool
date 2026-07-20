@@ -1,9 +1,14 @@
 import { createBottomNavigation } from "./src/components/bottom-navigation.js";
 import { initializeDrawers } from "./src/components/drawer-controller.js?v=debug-1";
+import { initializeMarketScopeSwitches } from "./src/components/market-scope-switch.js?v=market-scope-1";
 import { initializeResearchSettings } from "./src/features/research-settings.js?v=stored-snapshot-1";
 import { initializeCandidateFilters } from "./src/features/candidate-filters.js?v=stock-search-1";
 import { initializeWatchlistFilters } from "./src/features/watchlist-filters.js";
 import { CURRENT_HORIZON } from "./src/core/five-day-contract.js";
+import {
+  DEFAULT_MARKET_SCOPE,
+  createStockKey,
+} from "./src/core/market-scope.js";
 import { createRouter } from "./src/core/router.js?v=debug-2";
 import {
   HOME_DATA_STATE,
@@ -14,17 +19,17 @@ import {
 } from "./src/core/ui-state.js?v=research-ui-1";
 import { renderHomeDataStatus } from "./src/components/home-data-status.js?v=mobile-ui-1";
 import { loadHomeDataStatus } from "./src/data/home-data-status-api.js?v=home-data-2";
-import { loadPredictionSnapshot } from "./src/data/prediction-api.js?v=stored-snapshot-2";
-import { createUnavailableSnapshot } from "./src/data/prediction-contract.js?v=research-ui-1";
-import { setWatchlistMembership } from "./src/data/watchlist-api.js?v=api-5";
+import { loadPredictionSnapshot } from "./src/data/prediction-api.js?v=market-scope-1";
+import { createUnavailableSnapshot } from "./src/data/prediction-contract.js?v=market-scope-1";
+import { setWatchlistMembership } from "./src/data/watchlist-api.js?v=market-scope-1";
 import { isSupabaseSdkLoadError } from "./src/data/supabase-sdk-loader.js?v=auth-1";
 import {
   createCandidatesPage,
   initializeCandidatePagination,
   renderCandidatesPage,
-} from "./src/pages/candidates-page.js?v=stock-search-1";
-import { createOverviewPage, renderOverviewPage } from "./src/pages/overview-page.js?v=mobile-ui-1";
-import { createStockDetailPage, renderStockDetailPage } from "./src/pages/stock-detail-page.js?v=mobile-ui-2";
+} from "./src/pages/candidates-page.js?v=market-scope-1";
+import { createOverviewPage, renderOverviewPage } from "./src/pages/overview-page.js?v=market-scope-1";
+import { createStockDetailPage, renderStockDetailPage } from "./src/pages/stock-detail-page.js?v=market-scope-1";
 import { createWatchlistPage, renderWatchlistPage } from "./src/pages/watchlist-page.js?v=research-ui-1";
 
 const appRoot = document.querySelector("#app-content");
@@ -39,50 +44,84 @@ if (appRoot && navigationRoot) {
   ].join("");
   navigationRoot.innerHTML = createBottomNavigation();
 
-  let currentSnapshot = null;
-  let selectedSymbol = null;
-  let watchlistSymbols = new Set();
-  let requestController = null;
+  const snapshots = new Map();
+  const snapshotStates = new Map();
+  const requestControllers = new Map();
+  let selectedStockKey = null;
+  let watchlistKeys = new Set();
+  let marketSwitch = null;
+
+  function findStock(stockKey) {
+    const market = String(stockKey ?? "").split(":", 1)[0];
+    const snapshot = snapshots.get(market);
+    return [...(snapshot?.predictions ?? []), ...(snapshot?.watchlist ?? [])]
+      .find((record) => createStockKey(record) === stockKey) ?? null;
+  }
+
   const router = createRouter({
-    canActivate: (route) => route !== "stock" || Boolean(selectedSymbol),
+    canActivate: (route, routeState) => {
+      if (route !== "stock") return true;
+      const prediction = findStock(routeState.stockKey);
+      if (!prediction) return false;
+      selectedStockKey = routeState.stockKey;
+      marketSwitch?.setActive(prediction.market);
+      renderStockDetailPage(prediction, {
+        isWatchlisted: watchlistKeys.has(selectedStockKey),
+      });
+      return true;
+    },
   });
   const candidatePagination = initializeCandidatePagination({
     onChange: () => {
-      if (currentSnapshot) {
-        renderCandidatesPage(currentSnapshot, resolveSnapshotUiState(currentSnapshot), candidateFilters.getFilters());
+      const snapshot = snapshots.get(marketSwitch?.getActive());
+      if (snapshot) {
+        renderCandidatesPage(snapshot, snapshotStates.get(snapshot.marketScope), candidateFilters.getFilters());
       }
     },
   });
   const candidateFilters = initializeCandidateFilters({
     onChange: (filters) => {
       candidatePagination.reset();
-      if (currentSnapshot) renderCandidatesPage(currentSnapshot, resolveSnapshotUiState(currentSnapshot), filters);
+      const snapshot = snapshots.get(marketSwitch?.getActive());
+      if (snapshot) renderCandidatesPage(snapshot, snapshotStates.get(snapshot.marketScope), filters);
     },
   });
   const watchlistFilters = initializeWatchlistFilters({
     onChange: (decision) => {
-      if (currentSnapshot) renderWatchlistPage(currentSnapshot, decision);
+      const snapshot = snapshots.get(marketSwitch?.getActive());
+      if (snapshot) renderWatchlistPage(snapshot, decision);
     },
   });
 
   function renderSnapshot(snapshot, uiState) {
-    currentSnapshot = snapshot;
-    watchlistSymbols = new Set((snapshot.watchlist ?? []).map((record) => record.symbol));
+    watchlistKeys = new Set((snapshot.watchlist ?? []).map(createStockKey));
     candidateFilters.setRecords(snapshot.candidates ?? []);
     candidatePagination.reset();
     renderOverviewPage(snapshot, uiState);
     renderCandidatesPage(snapshot, uiState, candidateFilters.getFilters());
     renderWatchlistPage(snapshot, watchlistFilters.getDecision());
-    if (selectedSymbol) {
-      const selected = [...(snapshot.predictions ?? []), ...(snapshot.watchlist ?? [])]
-        .find((record) => record.symbol === selectedSymbol);
+    if (selectedStockKey && router.current() === "stock") {
+      const selected = findStock(selectedStockKey);
       if (selected) {
-        renderStockDetailPage(selected, { isWatchlisted: watchlistSymbols.has(selected.symbol) });
+        renderStockDetailPage(selected, {
+          isWatchlisted: watchlistKeys.has(selectedStockKey),
+        });
       } else {
-        selectedSymbol = null;
-        if (router.current() === "stock") router.show("opportunities");
+        selectedStockKey = null;
+        router.show("opportunities");
       }
     }
+  }
+
+  function renderActiveMarket() {
+    const market = marketSwitch?.getActive() ?? DEFAULT_MARKET_SCOPE;
+    const snapshot = snapshots.get(market) ?? createUnavailableSnapshot({
+      marketScope: market,
+      reasonCode: "PREDICTION_SNAPSHOT_LOADING",
+    });
+    const uiState = snapshotStates.get(market) ?? UI_STATE.LOADING;
+    applyUiState(uiState);
+    renderSnapshot(snapshot, uiState);
   }
 
   async function refreshHomeDataStatus() {
@@ -98,54 +137,75 @@ if (appRoot && navigationRoot) {
     }
   }
 
-  async function refreshSnapshot() {
-    requestController?.abort();
-    requestController = new AbortController();
-    applyUiState(UI_STATE.LOADING);
+  async function refreshSnapshot(market = marketSwitch?.getActive() ?? DEFAULT_MARKET_SCOPE) {
+    requestControllers.get(market)?.abort();
+    const requestController = new AbortController();
+    requestControllers.set(market, requestController);
+    snapshotStates.set(market, UI_STATE.LOADING);
+    if (marketSwitch?.getActive() === market) renderActiveMarket();
     try {
       const snapshot = await loadPredictionSnapshot({
         horizon: CURRENT_HORIZON,
+        market,
         signal: requestController.signal,
       });
       const uiState = resolveSnapshotUiState(snapshot);
-      applyUiState(uiState);
-      renderSnapshot(snapshot, uiState);
+      snapshots.set(market, snapshot);
+      snapshotStates.set(market, uiState);
+      if (marketSwitch?.getActive() === market) renderActiveMarket();
     } catch (error) {
       if (error?.name === "AbortError") return;
       const snapshot = createUnavailableSnapshot({
+        marketScope: market,
         status: "FAIL",
         reasonCode: error?.code ?? "PREDICTION_API_REQUEST_FAILED",
       });
-      applyUiState(UI_STATE.API_ERROR);
-      renderSnapshot(snapshot, UI_STATE.API_ERROR);
+      snapshots.set(market, snapshot);
+      snapshotStates.set(market, UI_STATE.API_ERROR);
+      if (marketSwitch?.getActive() === market) renderActiveMarket();
       globalThis.Sentry?.captureException?.(error);
+    } finally {
+      if (requestControllers.get(market) === requestController) {
+        requestControllers.delete(market);
+      }
     }
   }
 
   initializeDrawers();
-  initializeResearchSettings({ onChange: refreshSnapshot });
+  marketSwitch = initializeMarketScopeSwitches({
+    onChange: (market) => {
+      candidatePagination.reset();
+      if (snapshots.has(market)) renderActiveMarket();
+      else refreshSnapshot(market);
+    },
+  });
+  initializeResearchSettings({ onChange: () => refreshSnapshot() });
   router.start();
   applyUiState(UI_STATE.LOADING);
   document.addEventListener("click", (event) => {
-    const button = event.target.closest("[data-open-stock][data-symbol]");
-    if (!button || !currentSnapshot) return;
-    const prediction = [...(currentSnapshot.predictions ?? []), ...(currentSnapshot.watchlist ?? [])]
-      .find((record) => record.symbol === button.dataset.symbol);
+    const button = event.target.closest("[data-open-stock][data-market][data-symbol]");
+    if (!button) return;
+    const stockKey = createStockKey({
+      market: button.dataset.market,
+      symbol: button.dataset.symbol,
+    });
+    const prediction = findStock(stockKey);
     if (!prediction) return;
-    selectedSymbol = prediction.symbol;
-    renderStockDetailPage(prediction, { isWatchlisted: watchlistSymbols.has(prediction.symbol) });
-    router.show("stock");
+    selectedStockKey = stockKey;
+    renderStockDetailPage(prediction, { isWatchlisted: watchlistKeys.has(stockKey) });
+    router.show("stock", { stockKey });
   });
   document.addEventListener("click", async (event) => {
     const button = event.target.closest("[data-toggle-watchlist][data-symbol]");
     if (!button || button.disabled) return;
     const symbol = button.dataset.symbol;
+    const market = button.dataset.market;
     const selected = button.getAttribute("aria-pressed") !== "true";
     const feedback = document.querySelector("[data-watchlist-feedback]");
     button.disabled = true;
     if (feedback) feedback.textContent = selected ? "正在加入自選股…" : "正在移出自選股…";
     try {
-      await setWatchlistMembership({ symbol, selected });
+      await setWatchlistMembership({ market, symbol, selected });
       await refreshSnapshot();
       const refreshedFeedback = document.querySelector("[data-watchlist-feedback]");
       if (refreshedFeedback) refreshedFeedback.textContent = selected ? "已加入自選股。" : "已移出自選股。";
@@ -158,5 +218,5 @@ if (appRoot && navigationRoot) {
   });
   globalThis.addEventListener("alpha-lens:auth-change", () => refreshSnapshot());
   refreshHomeDataStatus();
-  refreshSnapshot();
+  refreshSnapshot(DEFAULT_MARKET_SCOPE);
 }

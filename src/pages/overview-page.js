@@ -3,9 +3,11 @@ import { createCandidateCard } from "../components/candidate-card.js";
 import { createResearchSettingsDrawer } from "../components/research-settings-drawer.js?v=debug-1";
 import { createStatusBanner } from "../components/status-banner.js";
 import { createHomeDataStatusPanel } from "../components/home-data-status.js?v=mobile-ui-1";
+import { createMarketScopeSwitch } from "../components/market-scope-switch.js";
 import { createValidationReportDrawer, renderValidationReport } from "../components/validation-report-drawer.js";
 import { formatDateTime, formatPercent } from "../core/formatters.js?v=mobile-ui-1";
 import { setText } from "../core/html.js";
+import { marketScopeLabel } from "../core/market-scope.js";
 import {
   canDisplaySnapshotRecords,
   isHistoricalResearchSnapshot,
@@ -19,6 +21,7 @@ export function createOverviewPage({ horizon }) {
         <div><span class="eyebrow">5 個交易日 MVP</span><h1 id="home-title">今日總覽</h1></div>
         <button class="icon-text-button" type="button" data-open-drawer="research-settings">研究設定</button>
       </div>
+      ${createMarketScopeSwitch("總覽市場資料集")}
       ${createStatusBanner()}
 
       <section class="contract-meta" aria-label="預測時間契約">
@@ -79,6 +82,8 @@ export function renderOverviewPage(snapshot, uiState) {
   const root = document.querySelector('[data-page="home"]');
   if (!root || !snapshot) return;
   setText(root, '[data-overview-field="as_of_date"]', snapshot.asOfDate);
+  const marketLabel = marketScopeLabel(snapshot.marketScope);
+  setText(root, "#market-heading", `${marketLabel}市場判斷`);
   setText(root, '[data-overview-field="decision_at"]', formatDateTime(snapshot.decisionAt));
   setText(root, '[data-overview-field="market_p_up"]', formatPercent(snapshot.market.p_up));
   setText(root, '[data-overview-field="market_p_neutral"]', formatPercent(snapshot.market.p_neutral));
@@ -110,15 +115,19 @@ export function renderOverviewPage(snapshot, uiState) {
   setText(
     root,
     "[data-overview-list-title]",
-    historicalResearch ? "5 日歷史研究排序" : researchOnly ? "5 日研究排序" : "通過門檻的前 3～5 檔",
+    historicalResearch
+      ? `${marketLabel} 5 日歷史研究排序`
+      : researchOnly
+      ? `${marketLabel} 5 日研究排序`
+      : `${marketLabel}通過門檻的前 3～5 檔`,
   );
   const candidates = overviewStockRecords(snapshot).slice(0, 5);
   if (list) {
     list.innerHTML = candidates.length
       ? candidates.map((record) => createCandidateCard(record, { horizon: snapshot.horizon, compact: true })).join("")
       : createEmptyState({
-        title: researchOnly ? "尚無研究結果" : uiState === "no_candidates" ? "今日無正式候選" : "無正式候選股",
-        description: researchOnly ? "目前快照沒有可顯示的股票資料。" : uiState === "no_candidates" ? "今日沒有股票通過全部決策門檻。" : "目前沒有可顯示的正式候選。",
+        title: researchOnly ? `${marketLabel}尚無研究結果` : uiState === "no_candidates" ? `${marketLabel}今日無正式候選` : `${marketLabel}無正式候選股`,
+        description: researchOnly ? `目前${marketLabel}快照沒有可顯示的股票資料。` : uiState === "no_candidates" ? `今日${marketLabel}沒有股票通過全部決策門檻。` : `目前${marketLabel}沒有可顯示的正式候選。`,
         reasonCode: snapshot.reasonCodes?.[0] ?? (researchOnly ? "NO_RESEARCH_RESULTS" : "NO_FORMAL_CANDIDATES"),
       });
   }

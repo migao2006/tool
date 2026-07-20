@@ -1,5 +1,6 @@
 import { escapeHtml } from "../core/html.js";
 import { formatPercent, formatRank, formatRankScore } from "../core/formatters.js";
+import { createStockKey } from "../core/market-scope.js";
 
 function rankChange(prediction) {
   if (!Number.isFinite(prediction.previous_global_rank) || !Number.isFinite(prediction.global_rank)) return "—";
@@ -10,12 +11,14 @@ function rankChange(prediction) {
 
 export function createWatchlistCard(prediction) {
   const symbol = escapeHtml(prediction.symbol ?? "");
+  const market = escapeHtml(prediction.market ?? "");
+  const stockKey = escapeHtml(createStockKey(prediction));
   const reasons = prediction.reason_codes?.map(escapeHtml).join(" · ") || "—";
   const decisionChange = prediction.previous_decision && prediction.previous_decision !== prediction.decision
     ? `${escapeHtml(prediction.previous_decision)} → ${escapeHtml(prediction.decision)}`
     : "無變化";
   return `
-    <article class="watchlist-card">
+    <article class="watchlist-card" data-stock-key="${stockKey}" data-market="${market}" data-symbol="${symbol}">
       <header><div><strong>${symbol}</strong><span>${escapeHtml(prediction.name ?? "—")}</span></div><span class="decision-badge">${escapeHtml(prediction.decision ?? "—")}</span></header>
       <dl class="watchlist-values">
         <div><dt>Rank Score／全市場排名</dt><dd>${formatRankScore(prediction.rank_score)}／${formatRank(prediction.global_rank)}</dd></div>
@@ -25,6 +28,6 @@ export function createWatchlistCard(prediction) {
         <div><dt>資料品質</dt><dd>${escapeHtml(prediction.data_quality_status ?? "—")}</dd></div>
       </dl>
       <p class="reason-list">${reasons}</p>
-      <button class="card-open-button" type="button" data-open-stock data-symbol="${symbol}">查看決策詳情</button>
+      <button class="card-open-button" type="button" data-open-stock data-market="${market}" data-symbol="${symbol}">查看決策詳情</button>
     </article>`;
 }

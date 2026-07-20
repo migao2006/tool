@@ -89,6 +89,29 @@ test("320px 放大至 200% 時四個頁面與登入仍可操作", async ({ page 
 
   await navigation.getByRole("button", { name: "5 日候選" }).click();
   await expect(page.getByRole("heading", { name: "5 日候選股" })).toBeVisible();
+  const candidateRankRow = page.locator(
+    '[data-candidate-list] .candidate-card[data-symbol="OOS1"] .candidate-values > div',
+  ).first();
+  const rankScoreLayout = await candidateRankRow.evaluate((row) => {
+    const label = row.querySelector("dt");
+    const value = row.querySelector("dd");
+    const range = document.createRange();
+    if (value) range.selectNodeContents(value);
+    const labelBox = label?.getBoundingClientRect();
+    const valueBox = value?.getBoundingClientRect();
+    return {
+      labelBottom: labelBox?.bottom ?? null,
+      lineCount: value ? range.getClientRects().length : null,
+      valueTop: valueBox?.top ?? null,
+      valueWidth: valueBox?.width ?? null,
+    };
+  });
+  expect(rankScoreLayout.valueWidth).toBeGreaterThanOrEqual(120);
+  expect(rankScoreLayout.valueTop).toBeGreaterThanOrEqual(
+    rankScoreLayout.labelBottom - 1,
+  );
+  expect(rankScoreLayout.lineCount).toBe(1);
+  await candidateRankRow.scrollIntoViewIfNeeded();
   await captureViewport(page, testInfo, "15-candidates-large-text-200");
 
   await page.locator('[data-candidate-list] .candidate-card[data-symbol="OOS1"]')

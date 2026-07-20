@@ -134,6 +134,8 @@
 .audit-note ul { margin: 8px 0 0; padding-left: 18px; color: var(--muted); font-size: 0.72rem; }
 
 @media (max-width: 480px) {
+  .candidate-card .candidate-values > div { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; }
+  .candidate-card .candidate-values dd { text-align: left; }
   .system-banner.compact { display: grid; grid-template-columns: minmax(0, 1fr); }
   .system-banner.compact .system-badge { justify-self: start; }
 }

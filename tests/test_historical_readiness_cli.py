@@ -22,6 +22,7 @@ def test_cli_reports_blocked_research_state_without_fake_readiness(
                 "integrity_status": "PASS",
                 "audit_scope": "FULL",
                 "manifest_snapshot_sha256": "a" * 64,
+                "snapshot_high_water_archive_id": 1,
                 "object_count": 1,
                 "row_count": 10,
             }
@@ -41,11 +42,13 @@ def test_cli_reports_blocked_research_state_without_fake_readiness(
         def __init__(self, source: object) -> None:
             del source
 
-        def fetch(self):
+        def fetch(self, *, through_archive_id=None):
+            assert through_archive_id == 1
             return HistoricalArchiveManifestSnapshot(
                 rows=({"source_symbol": "2330", "scheduled_market": "TWSE"},),
                 snapshot_sha256="a" * 64,
                 complete=True,
+                high_water_archive_id=1,
             )
 
     class FakeReadinessRepository:
@@ -120,12 +123,14 @@ def test_cli_fails_if_manifest_snapshot_changes_after_integrity_audit(
                 "integrity_status": "PASS",
                 "audit_scope": "FULL",
                 "manifest_snapshot_sha256": "a" * 64,
+                "snapshot_high_water_archive_id": 1,
                 "object_count": 1,
                 "row_count": 10,
             }
         ),
         encoding="utf-8",
     )
+
     def fake_writer(**_kwargs: object) -> object:
         return object()
 
@@ -139,11 +144,15 @@ def test_cli_fails_if_manifest_snapshot_changes_after_integrity_audit(
         def __init__(self, source: object) -> None:
             del source
 
-        def fetch(self) -> HistoricalArchiveManifestSnapshot:
+        def fetch(
+            self, *, through_archive_id=None
+        ) -> HistoricalArchiveManifestSnapshot:
+            assert through_archive_id == 1
             return HistoricalArchiveManifestSnapshot(
                 rows=({"source_symbol": "2330", "scheduled_market": "TWSE"},),
                 snapshot_sha256="b" * 64,
                 complete=True,
+                high_water_archive_id=1,
             )
 
     monkeypatch.setattr(

@@ -61,16 +61,18 @@ class FakeSource:
         limit: int = 1_000,
     ) -> list[dict[str, object]]:
         assert table == "historical_archive_objects"
-        assert "parquet_sha256" in select
+        assert select == "archive_id" or "parquet_sha256" in select
         normalized = dict(filters or {})
         self.calls.append((normalized, limit))
-        cursor = int(normalized["archive_id"].removeprefix("gt."))
+        cursor = int(normalized.get("archive_id", "gt.0").removeprefix("gt."))
         selected: list[dict[str, object]] = []
         for row in self.rows:
             archive_id = row.get("archive_id")
             assert isinstance(archive_id, int) and not isinstance(archive_id, bool)
             if archive_id > cursor:
                 selected.append(row)
+        if normalized.get("order") == "archive_id.desc":
+            selected.sort(key=lambda row: int(str(row["archive_id"])), reverse=True)
         return selected[:limit]
 
 
@@ -85,10 +87,45 @@ def test_repository_keyset_pages_and_builds_deterministic_snapshot() -> None:
     assert first.complete is True
     assert first.snapshot_sha256 == second.snapshot_sha256
     assert [row["archive_id"] for row in first.rows] == [1, 2, 3]
-    assert source.calls[:2] == [
+    assert first.high_water_archive_id == 3
+    assert source.calls[:3] == [
+        ({"order": "archive_id.desc"}, 1),
         ({"archive_id": "gt.0", "order": "archive_id.asc"}, 2),
         ({"archive_id": "gt.2", "order": "archive_id.asc"}, 2),
     ]
+
+
+def test_repository_freezes_high_water_before_keyset_scan() -> None:
+    class AppendingSource(FakeSource):
+        appended = False
+
+        def select_rows(self, *args, **kwargs):
+            page = super().select_rows(*args, **kwargs)
+            filters = dict(kwargs.get("filters") or {})
+            if filters.get("order") == "archive_id.asc" and not self.appended:
+                self.rows.append(_manifest(4))
+                self.appended = True
+            return page
+
+    source = AppendingSource([_manifest(1), _manifest(2), _manifest(3)])
+    snapshot = HistoricalArchiveManifestRepository(source, page_size=2).fetch()
+
+    assert snapshot.high_water_archive_id == 3
+    assert snapshot.complete is True
+    assert [row["archive_id"] for row in snapshot.rows] == [1, 2, 3]
+
+
+def test_repository_stops_at_explicit_high_water_gap_without_repeating_page() -> None:
+    source = FakeSource([_manifest(1), _manifest(3), _manifest(4)])
+
+    snapshot = HistoricalArchiveManifestRepository(source, page_size=2).fetch(
+        through_archive_id=2
+    )
+
+    assert snapshot.high_water_archive_id == 2
+    assert snapshot.complete is True
+    assert [row["archive_id"] for row in snapshot.rows] == [1]
+    assert source.calls == [({"archive_id": "gt.0", "order": "archive_id.asc"}, 2)]
 
 
 def test_snapshot_hash_covers_all_meaning_bearing_manifest_fields() -> None:

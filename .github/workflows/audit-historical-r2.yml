@@ -69,6 +69,8 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: >-
           uv run python -m scripts.audit_historical_r2_archive
+          --workers 8
+          --batch-size 64
           --output historical-r2-audit.json
 
       - name: Report point-in-time dataset readiness

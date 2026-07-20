@@ -86,11 +86,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             archive.get("manifest_snapshot_sha256"),
             "manifest_snapshot_sha256",
         )
+        audited_high_water = _integer(
+            archive.get("snapshot_high_water_archive_id"),
+            "snapshot_high_water_archive_id",
+        )
         writer = SupabaseWriter(
             url=os.environ.get("SUPABASE_URL"),
             server_key=os.environ.get("SUPABASE_SERVICE_ROLE_KEY"),
         )
-        snapshot = HistoricalArchiveManifestRepository(writer).fetch()
+        snapshot = HistoricalArchiveManifestRepository(writer).fetch(
+            through_archive_id=audited_high_water
+        )
         if not snapshot.complete:
             raise ValueError("current manifest snapshot is incomplete")
         if snapshot.snapshot_sha256 != audited_snapshot_sha256:
@@ -111,14 +117,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             "generated_at": generated_at,
             "canonicalization_status": result.canonicalization_status,
             "canonicalization_ready": result.canonicalization_ready,
-            "canonicalization_reason_codes": list(
-                result.canonicalization_reason_codes
-            ),
+            "canonicalization_reason_codes": list(result.canonicalization_reason_codes),
             "readiness_status": result.readiness_status,
             "dataset_build_ready": result.dataset_build_ready,
             "system_status": result.system_status,
             "reason_codes": list(result.reason_codes),
             "manifest_snapshot_sha256": snapshot.snapshot_sha256,
+            "snapshot_high_water_archive_id": audited_high_water,
             "metrics": {
                 field: getattr(metrics, field) for field in metrics.__dataclass_fields__
             },

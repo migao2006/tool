@@ -25,19 +25,30 @@ for (const viewport of MOBILE_VIEWPORTS) {
     await expect(page.getByRole("heading", { name: "5 日候選股" })).toBeVisible();
     await captureViewport(page, testInfo, `02-candidates-${viewport.name}`);
 
-    await page.locator("[data-candidate-filters] summary").click();
-    const filterControls = page.locator(
-      "[data-candidate-filters] button, [data-candidate-filters] input, [data-candidate-filters] select",
-    );
+    await page.locator('[data-open-drawer="candidate-filters"]').click();
+    const filterDrawer = page.getByRole("dialog", { name: "篩選候選股" });
+    const filterControls = filterDrawer.locator("button, input");
     await verifyTouchTarget(filterControls);
-    const filterFontSizes = await page.locator(
-      "[data-candidate-filters] input, [data-candidate-filters] select",
+    const filterFontSizes = await filterDrawer.locator(
+      ".candidate-choice-trigger, input",
     ).evaluateAll((controls) => controls.map((control) => Number.parseFloat(
       getComputedStyle(control).fontSize,
     )));
     filterFontSizes.forEach((fontSize) => {
       expect(fontSize).toBeGreaterThanOrEqual(16);
     });
+    await captureViewport(page, testInfo, `02b-candidate-filters-${viewport.name}`, {
+      includeNavigation: false,
+    });
+    await filterDrawer.locator('[data-choice-for="decision"]').click();
+    const choiceSheet = page.getByRole("dialog", { name: "選擇決策" });
+    await expect(choiceSheet).toBeVisible();
+    await verifyTouchTarget(choiceSheet.locator("button"));
+    await captureViewport(page, testInfo, `02c-candidate-choice-${viewport.name}`, {
+      includeNavigation: false,
+    });
+    await choiceSheet.getByRole("button", { name: "取消" }).click();
+    await filterDrawer.getByRole("button", { name: "完成", exact: true }).click();
 
     await page.locator('[data-candidate-list] .candidate-card[data-symbol="OOS1"]')
       .getByRole("button", { name: "查看決策詳情" })

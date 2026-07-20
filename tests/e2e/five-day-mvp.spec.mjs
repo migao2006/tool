@@ -93,7 +93,8 @@ test("大量候選結果在手機分批顯示", async ({ page }) => {
   await expect(cards).toHaveCount(50);
   await expect(page.locator("[data-candidate-pagination-summary]")).toHaveText("目前顯示 50／80 檔");
 
-  await page.locator("[data-candidate-filters] summary").click();
+  await page.locator('[data-open-drawer="candidate-filters"]').click();
+  const filterDrawer = page.getByRole("dialog", { name: "篩選候選股" });
   const rankScoreMinimum = page.locator('[data-candidate-filters] input[name="rank_score_min"]');
   await rankScoreMinimum.fill("99");
   await expect(cards).toHaveCount(11);
@@ -102,6 +103,7 @@ test("大量候選結果在手機分批顯示", async ({ page }) => {
   await rankScoreMinimum.fill("");
   await expect(cards).toHaveCount(25);
   await expect(page.locator("[data-candidate-pagination-summary]")).toHaveText("目前顯示 25／80 檔");
+  await filterDrawer.getByRole("button", { name: "完成", exact: true }).click();
   await page.getByRole("button", { name: "顯示更多" }).click();
   await page.getByRole("button", { name: "顯示更多" }).click();
   await page.getByRole("button", { name: "顯示更多" }).click();
@@ -210,7 +212,7 @@ test("歷史 OOS 研究快照的 NO_TRADE 排序與已完成輸出仍可檢視",
 
   const navigation = page.getByRole("navigation", { name: "主要導覽" });
   await navigation.getByRole("button", { name: "5 日候選" }).click();
-  await expect(page.locator('[data-candidate-filters] select[name="decision"]')).toBeEnabled();
+  await expect(page.locator('[data-choice-for="decision"]')).toBeEnabled();
   await expect(
     page.locator('[data-market-scope-switch][aria-label="候選股市場資料集"] button[data-market-scope="TWSE"]'),
   ).toBeEnabled();

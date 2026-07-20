@@ -9,9 +9,11 @@ import pytest
 
 from src.core.research_prediction_contract import (
     RESEARCH_PREDICTION_CONTRACT_VERSION,
+    TPEX_RESEARCH_PREDICTION_CONTRACT_VERSION,
 )
 from src.decision.decision_policy import DECISION_GATE_ORDER
 from src.data.research.twse_research_prediction_supabase import (
+    TpexResearchPredictionSupabasePublisher,
     TwseResearchPredictionSupabasePublisher,
 )
 
@@ -86,7 +88,12 @@ class _Writer:
             {"stock_prediction_id": index, **dict(value)}
             for index, value in enumerate(predictions, start=1)
         ]
-        return {"prediction_run_id": 7, "prediction_count": len(predictions)}
+        run = cast(dict[str, object], parameters["p_run"])
+        return {
+            "prediction_run_id": 7,
+            "prediction_count": len(predictions),
+            "market_scope": run["market_scope"],
+        }
 
 
 class _DatabaseRoundedWriter(_Writer):
@@ -228,6 +235,53 @@ def _payload(
         ).encode("utf-8")
     ).hexdigest()
     return payload
+
+
+def _tpex_payload() -> dict[str, object]:
+    payload = _payload()
+    payload["market"] = "TPEX"
+    payload["artifact_contract_version"] = (
+        TPEX_RESEARCH_PREDICTION_CONTRACT_VERSION
+    )
+    predictions = cast(list[dict[str, object]], payload["predictions"])
+    predictions[0]["market"] = "TPEX"
+    predictions[0]["reason_codes"] = ["TPEX_PRICE_ONLY_RESEARCH"]
+    payload["benchmark_id"] = "TPEX_PRICE_INDEX"
+    payload["snapshot_sha256"] = sha256(
+        json.dumps(
+            {key: value for key, value in payload.items() if key != "snapshot_sha256"},
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
+    return payload
+
+
+class _TpexWriter(_Writer):
+    @override
+    def select_rows(
+        self,
+        table: str,
+        *,
+        select: str,
+        filters: Mapping[str, str] | None = None,
+        limit: int = 1_000,
+    ) -> list[dict[str, object]]:
+        if table != "securities":
+            return super().select_rows(
+                table, select=select, filters=filters, limit=limit
+            )
+        assert filters is not None
+        assert filters["market"] == "eq.TPEX"
+        return [
+            {
+                "security_id": 92330,
+                "symbol": "2330",
+                "market": "TPEX",
+                "asset_type": "COMMON_STOCK",
+            }
+        ]
 
 
 def test_staging_publish_is_conservative_and_idempotent() -> None:
@@ -564,3 +618,102 @@ def test_publisher_rejects_an_unexpected_atomic_rpc_count() -> None:
             target_environment="staging",
             publish_enabled=True,
         ).publish(_payload())
+
+
+def test_tpex_publisher_writes_only_market_scoped_rows() -> None:
+    writer = _TpexWriter()
+
+    result = TpexResearchPredictionSupabasePublisher(
+        writer,
+        target_environment="staging",
+        publish_enabled=True,
+    ).publish(_tpex_payload())
+
+    assert result.prediction_count == 1
+    _, parameters = writer.rpc_calls[0]
+    run = cast(dict[str, object], parameters["p_run"])
+    predictions = cast(list[dict[str, object]], parameters["p_stock_predictions"])
+    assert run["market_scope"] == "TPEX"
+    assert run["benchmark_versions"] == {"TPEX": "benchmark-v1"}
+    assert predictions[0]["market"] == "TPEX"
+
+
+def test_tpex_publisher_rejects_twse_snapshot_before_database_access() -> None:
+    writer = _TpexWriter()
+
+    with pytest.raises(ValueError, match="does not match its publisher"):
+        _ = TpexResearchPredictionSupabasePublisher(
+            writer,
+            target_environment="staging",
+            publish_enabled=True,
+        ).publish(_payload())
+
+    assert writer.upserts == []
+    assert writer.rpc_calls == []
+
+
+def test_tpex_publisher_does_not_resolve_same_symbol_from_twse() -> None:
+    writer = _Writer()
+
+    with pytest.raises(ValueError, match="securities are unresolved"):
+        _ = TpexResearchPredictionSupabasePublisher(
+            writer,
+            target_environment="staging",
+            publish_enabled=True,
+        ).publish(_tpex_payload())
+
+    assert writer.upserts == []
+    assert writer.rpc_calls == []
+
+
+def test_tpex_snapshot_rejects_mixed_prediction_market_before_database_access() -> None:
+    writer = _TpexWriter()
+    payload = _tpex_payload()
+    cast(list[dict[str, object]], payload["predictions"])[0]["market"] = "TWSE"
+    payload["snapshot_sha256"] = sha256(
+        json.dumps(
+            {key: value for key, value in payload.items() if key != "snapshot_sha256"},
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
+
+    with pytest.raises(ValueError, match="does not match the snapshot"):
+        _ = TpexResearchPredictionSupabasePublisher(
+            writer,
+            target_environment="staging",
+            publish_enabled=True,
+        ).publish(payload)
+
+    assert writer.upserts == []
+    assert writer.rpc_calls == []
+
+
+def test_tpex_publisher_requires_the_second_production_gate() -> None:
+    with pytest.raises(ValueError, match="PRODUCTION_PUBLISH_ENABLED"):
+        _ = TpexResearchPredictionSupabasePublisher(
+            _TpexWriter(),
+            target_environment="production",
+            publish_enabled=True,
+        )
+
+
+def test_tpex_publisher_rejects_rpc_market_scope_mismatch() -> None:
+    class _WrongMarketWriter(_TpexWriter):
+        @override
+        def rpc(
+            self,
+            function_name: str,
+            parameters: Mapping[str, object],
+        ) -> object:
+            response = cast(dict[str, object], super().rpc(function_name, parameters))
+            response["market_scope"] = "TWSE"
+            return response
+
+    with pytest.raises(ValueError, match="unexpected market scope"):
+        _ = TpexResearchPredictionSupabasePublisher(
+            _WrongMarketWriter(),
+            target_environment="staging",
+            publish_enabled=True,
+        ).publish(_tpex_payload())

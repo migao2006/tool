@@ -32,6 +32,65 @@ def publish_last_fold_bundle(
 ) -> WrittenTwseResearchBundle:
     """Persist the final chronological fold without metric-based selection."""
 
+    return _publish_last_fold_bundle(
+        batch=batch,
+        context=context,
+        dataset=dataset,
+        fold=fold,
+        result=result,
+        model_version=model_version,
+        feature_schema_hash=feature_schema_hash,
+        library_versions=library_versions,
+        market="TWSE",
+        artifact_stem="twse",
+        primary_reason_code="TWSE_PRICE_ONLY_RESEARCH",
+    )
+
+
+def publish_tpex_last_fold_bundle(
+    *,
+    batch: PipelineBatch,
+    context: PipelineContext,
+    dataset: PreparedResearchDataset,
+    fold: PurgedFold,
+    result: TwseFoldResearchResult,
+    model_version: str,
+    feature_schema_hash: str,
+    library_versions: Mapping[str, str],
+) -> WrittenTwseResearchBundle:
+    """Persist only a TPEX-trained fold under a TPEX-bound manifest."""
+
+    return _publish_last_fold_bundle(
+        batch=batch,
+        context=context,
+        dataset=dataset,
+        fold=fold,
+        result=result,
+        model_version=model_version,
+        feature_schema_hash=feature_schema_hash,
+        library_versions=library_versions,
+        market="TPEX",
+        artifact_stem="tpex",
+        primary_reason_code="TPEX_PRICE_ONLY_RESEARCH",
+    )
+
+
+def _publish_last_fold_bundle(
+    *,
+    batch: PipelineBatch,
+    context: PipelineContext,
+    dataset: PreparedResearchDataset,
+    fold: PurgedFold,
+    result: TwseFoldResearchResult,
+    model_version: str,
+    feature_schema_hash: str,
+    library_versions: Mapping[str, str],
+    market: str,
+    artifact_stem: str,
+    primary_reason_code: str,
+) -> WrittenTwseResearchBundle:
+    """Shared implementation with exact market identity in every artifact."""
+
     if batch.source_hash is None:
         raise ValueError("bundle publication requires the verified input hash")
     direction_estimator = result.fitted_components.direction_model.model
@@ -39,7 +98,7 @@ def publish_last_fold_bundle(
         str(value) for value in getattr(direction_estimator, "classes_", ())
     )
     return TwseResearchBundleWriter().write(
-        _bundle_path(batch, context, fold.fold_number),
+        _bundle_path(batch, context, fold.fold_number, artifact_stem),
         components=result.fitted_components,
         model_version=model_version,
         horizon=context.horizon,
@@ -55,25 +114,29 @@ def publish_last_fold_bundle(
         evaluated_test_dates=fold.test_dates,
         library_versions=library_versions,
         reason_codes=(
-            "TWSE_PRICE_ONLY_RESEARCH",
+            primary_reason_code,
             "MECHANICAL_LAST_WALK_FORWARD_FOLD",
             "LOCKED_HOLDOUT_NOT_EXECUTED",
             "MODEL_NOT_FORMALLY_PROMOTED",
         ),
         git_commit=os.environ.get("GITHUB_SHA"),
+        market=market,
     )
 
 
 def _bundle_path(
-    batch: PipelineBatch, context: PipelineContext, fold_number: int
+    batch: PipelineBatch,
+    context: PipelineContext,
+    fold_number: int,
+    artifact_stem: str = "twse",
 ) -> Path:
     source_hash = batch.source_hash or "unhashed"
     return (
         context.artifact_root
         / f"horizon_{context.horizon}"
         / "research"
-        / f"twse-model-bundle-{source_hash[:12]}-fold-{fold_number}"
+        / f"{artifact_stem}-model-bundle-{source_hash[:12]}-fold-{fold_number}"
     )
 
 
-__all__ = ["publish_last_fold_bundle"]
+__all__ = ["publish_last_fold_bundle", "publish_tpex_last_fold_bundle"]

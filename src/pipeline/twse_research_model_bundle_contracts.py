@@ -1,4 +1,4 @@
-"""Versioned contracts for a native-LightGBM TWSE research bundle."""
+"""Versioned contracts for venue-isolated native-LightGBM research bundles."""
 
 # pyright: reportUnknownArgumentType=false, reportUnknownVariableType=false
 
@@ -14,6 +14,7 @@ from src.core.horizon import require_production_horizon
 
 
 TWSE_RESEARCH_BUNDLE_CONTRACT_VERSION = "twse-research-model-bundle-v1"
+TPEX_RESEARCH_BUNDLE_CONTRACT_VERSION = "tpex-research-model-bundle-v1"
 MECHANICAL_LAST_FOLD_POLICY = "MECHANICAL_LAST_WALK_FORWARD_FOLD"
 BUNDLE_FILE_NAMES = {
     "rank_booster": "rank.txt",
@@ -25,6 +26,15 @@ BUNDLE_FILE_NAMES = {
     "probability_calibrator_state": "probability-calibrator.json",
     "interval_calibrator_state": "interval-calibrator.json",
 }
+
+
+def research_bundle_contract_version(market: str) -> str:
+    normalized = market.strip().upper()
+    if normalized == "TWSE":
+        return TWSE_RESEARCH_BUNDLE_CONTRACT_VERSION
+    if normalized == "TPEX":
+        return TPEX_RESEARCH_BUNDLE_CONTRACT_VERSION
+    raise ValueError("research model bundle market is unsupported")
 
 
 def _require_sha256(value: str, field_name: str) -> None:
@@ -106,6 +116,7 @@ class TwseResearchModelBundleManifest:
     library_versions: Mapping[str, str]
     reason_codes: tuple[str, ...]
     git_commit: str | None = None
+    market: str = "TWSE"
     contract_version: str = TWSE_RESEARCH_BUNDLE_CONTRACT_VERSION
     system_status: str = "RESEARCH_ONLY"
     selection_policy: str = MECHANICAL_LAST_FOLD_POLICY
@@ -113,7 +124,9 @@ class TwseResearchModelBundleManifest:
 
     def __post_init__(self) -> None:
         _ = require_production_horizon(self.horizon)
-        if self.contract_version != TWSE_RESEARCH_BUNDLE_CONTRACT_VERSION:
+        if self.market not in {"TWSE", "TPEX"}:
+            raise ValueError("research model bundle market is unsupported")
+        if self.contract_version != research_bundle_contract_version(self.market):
             raise ValueError("unsupported model bundle contract version")
         if self.system_status != "RESEARCH_ONLY":
             raise ValueError("this bundle cannot be promoted beyond RESEARCH_ONLY")
@@ -165,7 +178,7 @@ class TwseResearchModelBundleManifest:
         audit metadata, but it must not make a mechanically identical rerun look
         like a different fitted model.
         """
-        return {
+        content: dict[str, object] = {
             "contract_version": self.contract_version,
             "system_status": self.system_status,
             "selection_policy": self.selection_policy,
@@ -197,6 +210,11 @@ class TwseResearchModelBundleManifest:
             "reason_codes": list(self.reason_codes),
             "git_commit": self.git_commit,
         }
+        # Preserve the deployed TWSE v1 identity byte-for-byte.  TPEX must be
+        # explicit because it may never rely on the legacy TWSE default.
+        if self.market != "TWSE":
+            content["market"] = self.market
+        return content
 
     def _content(self) -> dict[str, object]:
         return {
@@ -230,6 +248,7 @@ class TwseResearchModelBundleManifest:
         locked_holdout_executed = value.get("locked_holdout_executed")
         if not isinstance(locked_holdout_executed, bool):
             raise ValueError("locked_holdout_executed must be a boolean")
+        market = str(value.get("market", "TWSE")).strip().upper()
         manifest = cls(
             contract_version=_non_empty(value.get("contract_version"), "contract_version"),
             system_status=_non_empty(value.get("system_status"), "system_status"),
@@ -264,6 +283,7 @@ class TwseResearchModelBundleManifest:
             library_versions={str(name): str(version) for name, version in libraries.items()},
             reason_codes=tuple(str(item) for item in _sequence(value, "reason_codes")),
             git_commit=(str(value["git_commit"]) if value.get("git_commit") is not None else None),
+            market=market,
         )
         supplied_hash = _non_empty(value.get("manifest_sha256"), "manifest_sha256")
         if supplied_hash != manifest.manifest_sha256:
@@ -282,6 +302,8 @@ __all__ = [
     "BUNDLE_FILE_NAMES",
     "BundleFileRecord",
     "MECHANICAL_LAST_FOLD_POLICY",
+    "TPEX_RESEARCH_BUNDLE_CONTRACT_VERSION",
     "TWSE_RESEARCH_BUNDLE_CONTRACT_VERSION",
     "TwseResearchModelBundleManifest",
+    "research_bundle_contract_version",
 ]

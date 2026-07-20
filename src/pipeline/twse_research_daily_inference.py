@@ -1,4 +1,4 @@
-"""Bundle-backed inference for one verified TWSE research cross-section."""
+"""Bundle-backed inference for one exact venue research cross-section."""
 
 from __future__ import annotations
 
@@ -14,6 +14,9 @@ from typing import cast
 
 from src.config.types import MvpConfig
 from src.models.stock.rank_model import rank_cross_section
+from src.core.research_prediction_contract import (
+    research_prediction_contract_version,
+)
 from src.trading.cost_contracts import TransactionCostConfig
 from src.trading.transaction_cost import TransactionCostModel
 
@@ -73,7 +76,21 @@ def _cost_metadata(config: MvpConfig) -> dict[str, object]:
 
 
 class TwseDailyResearchInference:
-    """Score current features without reading current or holdout labels."""
+    """Score one exact venue without reading current or holdout labels."""
+
+    def __init__(
+        self,
+        *,
+        market: str = "TWSE",
+        primary_reason_code: str = "TWSE_PRICE_ONLY_RESEARCH",
+    ) -> None:
+        normalized = market.strip().upper()
+        if normalized not in {"TWSE", "TPEX"}:
+            raise ValueError("daily research inference market is unsupported")
+        if not primary_reason_code.strip():
+            raise ValueError("daily research inference reason code is required")
+        self.market = normalized
+        self.primary_reason_code = primary_reason_code
 
     def run(
         self,
@@ -85,6 +102,12 @@ class TwseDailyResearchInference:
         frame = cross_section.frame.reset_index(drop=True)
         if config.horizon != 5 or manifest.horizon != 5:
             raise ValueError("UNSUPPORTED_HORIZON")
+        if (
+            manifest.market != self.market
+            or cross_section.market != self.market
+            or not frame["market"].eq(self.market).all()
+        ):
+            raise ValueError("research inference market identity mismatch")
         if manifest.feature_schema_hash != cross_section.manifest.feature_schema_hash:
             raise ValueError("feature schema does not match the model bundle")
         if manifest.training_end_date >= cross_section.as_of_date:
@@ -171,6 +194,7 @@ class TwseDailyResearchInference:
             )
             prediction = TwseOosResearchPrediction(
                 symbol=str(source["symbol"]),
+                market=self.market,
                 decision_date=cross_section.as_of_date,
                 decision_at=decision_at,
                 horizon=5,
@@ -270,7 +294,7 @@ class TwseDailyResearchInference:
                 ),
             },
             reason_codes=(
-                "TWSE_PRICE_ONLY_RESEARCH",
+                self.primary_reason_code,
                 evaluation_scope,
                 "LATEST_VERIFIED_FEATURE_CROSS_SECTION",
                 "POINT_IN_TIME_UNVERIFIED",
@@ -279,6 +303,10 @@ class TwseDailyResearchInference:
                 "FORMAL_TRADABILITY_INPUT_MISSING",
                 "FORMAL_MARKET_EXPOSURE_INPUT_MISSING",
                 "FORMAL_POSITION_LIMIT_INPUT_MISSING",
+            ),
+            market=self.market,
+            artifact_contract_version=research_prediction_contract_version(
+                self.market
             ),
         )
 

@@ -15,7 +15,10 @@ import pytest
 from src.calibration.interval_calibrator import IntervalCalibrator
 from src.calibration.probability_calibrator import ProbabilityCalibrator
 from src.data.preprocessing import CrossSectionalMedianImputer, FoldFitScope
-from src.pipeline.twse_research_model_bundle_contracts import BUNDLE_FILE_NAMES
+from src.pipeline.twse_research_model_bundle_contracts import (
+    BUNDLE_FILE_NAMES,
+    TPEX_RESEARCH_BUNDLE_CONTRACT_VERSION,
+)
 from src.pipeline.twse_research_model_bundle_io import (
     FittedBundleComponents,
     TwseResearchBundleReader,
@@ -227,3 +230,53 @@ def test_bundle_directory_is_immutable(tmp_path: Path) -> None:
             library_versions={"lightgbm": "test"},
             reason_codes=("RESEARCH_ONLY",),
         )
+
+
+def test_tpex_bundle_has_explicit_market_identity_and_cannot_load_as_twse(
+    tmp_path: Path,
+) -> None:
+    components, raw, _ = _fitted_components()
+    fit_at = datetime(2024, 1, 31, 6, 30, tzinfo=UTC)
+    components.imputer = CrossSectionalMedianImputer().fit_frame(
+        raw,
+        feature_names=("momentum", "liquidity"),
+        scope=FoldFitScope("tpex-research-fold-4", fit_at),
+        row_available_ats=[fit_at] * len(raw),
+    )
+    written = TwseResearchBundleWriter().write(
+        tmp_path / "tpex-bundle",
+        components=cast(FittedBundleComponents, cast(object, components)),
+        model_version="tpex-price-research-h5-v1",
+        horizon=5,
+        fold_number=4,
+        feature_schema_hash="e" * 64,
+        input_artifact_sha256="a" * 64,
+        provenance={
+            "dataset_snapshot_id": "snapshot-tpex-v1",
+            "source_hash": "b" * 64,
+            "label_version": "tpex-label-v1",
+            "benchmark_id": "TPEX_PRICE_INDEX",
+            "benchmark_version": "benchmark-v1",
+            "cost_profile_version": "cost-v1",
+        },
+        random_seed=7,
+        feature_names=("momentum", "liquidity"),
+        direction_classes=tuple(
+            str(value) for value in components.direction_model.model.classes_
+        ),
+        training_dates=(date(2024, 1, 1), date(2024, 1, 31)),
+        calibration_dates=(date(2024, 2, 15), date(2024, 2, 29)),
+        evaluated_test_dates=(date(2024, 3, 15), date(2024, 3, 29)),
+        library_versions={"lightgbm": "test", "scikit-learn": "test"},
+        reason_codes=("TPEX_PRICE_ONLY_RESEARCH",),
+        market="TPEX",
+    )
+
+    loaded = TwseResearchBundleReader.read(
+        written.bundle_dir, expected_market="TPEX"
+    )
+    assert loaded.manifest.market == "TPEX"
+    assert loaded.manifest.contract_version == TPEX_RESEARCH_BUNDLE_CONTRACT_VERSION
+    assert loaded.manifest.to_dict()["market"] == "TPEX"
+    with pytest.raises(ValueError, match="requested venue"):
+        _ = TwseResearchBundleReader.read(written.bundle_dir)

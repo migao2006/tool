@@ -169,7 +169,8 @@ def read_imputer(
         row_available_ats=(fit_scope.train_end_at,),
     )
     if (
-        fit_scope.fold_id != f"twse-research-fold-{manifest.fold_number}"
+        fit_scope.fold_id
+        != f"{manifest.market.lower()}-research-fold-{manifest.fold_number}"
         or fit_scope.train_end_at.date() != manifest.training_end_date
     ):
         raise ValueError("imputer fit scope does not match bundle fold provenance")

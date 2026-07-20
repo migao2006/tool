@@ -1,0 +1,185 @@
+name: Publish TPEX latest research snapshot
+
+on:
+  schedule:
+    # 21:00 Asia/Taipei, after the 20:35 benchmark import window.
+    - cron: "0 13 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      prepared_run_id:
+        description: Optional successful TPEX prepared dataset run ID
+        required: false
+        type: string
+      feature_run_id:
+        description: Optional successful TPEX feature dataset run ID
+        required: false
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: tpex-latest-research-publish
+  cancel-in-progress: false
+
+jobs:
+  infer-and-publish:
+    if: ${{ vars.TPEX_DAILY_RESEARCH_PREDICTION_ENABLED == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    environment: staging
+    env:
+      REQUESTED_PREPARED_RUN_ID: ${{ inputs.prepared_run_id }}
+      REQUESTED_FEATURE_RUN_ID: ${{ inputs.feature_run_id }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      ALPHA_LENS_TARGET_ENVIRONMENT: staging
+      RESEARCH_PREDICTION_SUPABASE_PUBLISH_ENABLED: "true"
+      RESEARCH_PREDICTION_PRODUCTION_PUBLISH_ENABLED: "false"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Resolve and authenticate artifact-producing workflow runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git fetch --no-tags origin \
+            "+refs/heads/main:refs/remotes/origin/main"
+
+          resolve_run() {
+            local requested="$1"
+            local workflow="$2"
+            if [[ -n "$requested" ]]; then
+              printf '%s' "$requested"
+              return
+            fi
+            gh api \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/runs?branch=main&status=success&per_page=1" \
+              --jq '.workflow_runs[0].id // empty'
+          }
+
+          verify_run() {
+            local label="$1"
+            local run_id="$2"
+            local expected_workflow="$3"
+            local conclusion
+            local head_branch
+            local head_sha
+            local workflow_path
+
+            if [[ ! "$run_id" =~ ^[1-9][0-9]*$ ]]; then
+              echo "No trusted ${label} workflow run is available"
+              return 1
+            fi
+            IFS=$'\t' read -r conclusion head_branch head_sha workflow_path < <(
+              gh api \
+                "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" \
+                --jq '[.conclusion // "", .head_branch // "", .head_sha // "", .path // ""] | @tsv'
+            )
+            workflow_path="${workflow_path%%@*}"
+            if [[ "$workflow_path" != "$expected_workflow" ]]; then
+              echo "Untrusted ${label} workflow path"
+              return 1
+            fi
+            if [[ "$conclusion" != "success" || "$head_branch" != "main" ]]; then
+              echo "Untrusted ${label} workflow result or branch"
+              return 1
+            fi
+            if [[ ! "$head_sha" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "Invalid ${label} workflow head SHA"
+              return 1
+            fi
+            if ! git merge-base --is-ancestor "$head_sha" origin/main; then
+              echo "Untrusted ${label} workflow head is not an origin/main ancestor"
+              return 1
+            fi
+          }
+
+          prepared_run_id="$(resolve_run \
+            "$REQUESTED_PREPARED_RUN_ID" \
+            "build-tpex-prepared-research-dataset.yml")"
+          feature_run_id="$(resolve_run \
+            "$REQUESTED_FEATURE_RUN_ID" \
+            "build-tpex-research-feature-dataset.yml")"
+
+          verify_run \
+            "prepared dataset" \
+            "$prepared_run_id" \
+            ".github/workflows/build-tpex-prepared-research-dataset.yml"
+          verify_run \
+            "feature dataset" \
+            "$feature_run_id" \
+            ".github/workflows/build-tpex-research-feature-dataset.yml"
+
+          echo "PREPARED_RUN_ID=$prepared_run_id" >> "$GITHUB_ENV"
+          echo "FEATURE_RUN_ID=$feature_run_id" >> "$GITHUB_ENV"
+          echo "REQUIRED_AS_OF_DATE=$(TZ=Asia/Taipei date +%F)" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install uv with dependency caching
+        uses: astral-sh/setup-uv@v8.3.2
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Synchronize locked environment
+        run: uv sync --frozen
+
+      - name: Require Staging credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/main"
+          test -n "$SUPABASE_URL"
+          test -n "$SUPABASE_SERVICE_ROLE_KEY"
+          test "$ALPHA_LENS_TARGET_ENVIRONMENT" = "staging"
+          test "$RESEARCH_PREDICTION_PRODUCTION_PUBLISH_ENABLED" = "false"
+
+      - name: Download verified TPEX prepared research dataset
+        uses: actions/download-artifact@v7
+        with:
+          name: tpex-prepared-research-${{ env.PREPARED_RUN_ID }}
+          path: inputs/prepared
+          github-token: ${{ github.token }}
+          run-id: ${{ env.PREPARED_RUN_ID }}
+
+      - name: Download verified TPEX feature-only dataset
+        uses: actions/download-artifact@v7
+        with:
+          name: tpex-research-features-${{ env.FEATURE_RUN_ID }}
+          path: inputs/features
+          github-token: ${{ github.token }}
+          run-id: ${{ env.FEATURE_RUN_ID }}
+
+      - name: Fit TPEX bundle and publish only an exact-date research snapshot
+        run: >-
+          uv run python -m scripts.publish_tpex_daily_research_snapshot
+          --prepared-input inputs/prepared/tpex-prepared-research.parquet
+          --prepared-audit inputs/prepared/tpex-prepared-research-audit.json
+          --feature-input inputs/features/tpex-research-features.parquet
+          --feature-audit inputs/features/tpex-research-features-audit.json
+          --artifact-root artifacts
+          --report tpex-latest-research-publish-report.json
+          --required-as-of-date "$REQUIRED_AS_OF_DATE"
+          --horizon 5
+          --publish-supabase
+
+      - name: Preserve TPEX bundle, snapshot, and audit
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: tpex-latest-research-${{ github.run_id }}
+          path: |
+            artifacts/**/*
+            tpex-latest-research-publish-report.json
+          if-no-files-found: error
+          retention-days: 90

@@ -8,9 +8,11 @@ from hashlib import sha256
 import re
 
 from src.data.providers.validation import require_path_segment
+from src.data.providers.tpex import TPEX_MONTHLY_OHLC_DATASET
 from src.data.providers.twse import TAIEX_MONTHLY_OHLC_DATASET
 
 from .taiex_ohlc_contracts import TAIEX_OHLC_SCHEMA_VERSION
+from .tpex_ohlc_contracts import TPEX_OHLC_SCHEMA_VERSION
 
 
 HISTORICAL_ARCHIVE_SCHEMA_VERSION = "historical_daily_bars.v1"
@@ -24,6 +26,7 @@ HISTORICAL_ARCHIVE_SCHEMA_VERSIONS = {
     "margin_short": "historical_margin_short.v1",
     "benchmark_total_return": "historical_benchmark_total_return.v1",
     TAIEX_MONTHLY_OHLC_DATASET: TAIEX_OHLC_SCHEMA_VERSION,
+    TPEX_MONTHLY_OHLC_DATASET: TPEX_OHLC_SCHEMA_VERSION,
 }
 
 HISTORICAL_ARCHIVE_PROVIDER_DATASETS = {
@@ -37,6 +40,7 @@ HISTORICAL_ARCHIVE_PROVIDER_DATASETS = {
         }
     ),
     "TWSE": frozenset({TAIEX_MONTHLY_OHLC_DATASET}),
+    "TPEX": frozenset({TPEX_MONTHLY_OHLC_DATASET}),
     "FUGLE": frozenset({"adjusted_bars"}),
 }
 
@@ -96,6 +100,14 @@ class HistoricalArchiveRequest:
             raise ValueError(
                 "FUGLE adjusted archives are limited to TWSE common stocks"
             )
+        if provider_code == "TWSE" and (
+            scheduled_market != "TWSE" or asset_type != "BENCHMARK"
+        ):
+            raise ValueError("TWSE index archives require the TWSE benchmark scope")
+        if provider_code == "TPEX" and (
+            scheduled_market != "TPEX" or asset_type != "BENCHMARK"
+        ):
+            raise ValueError("TPEX index archives require the TPEX benchmark scope")
         if (
             type(self.requested_start_date) is not date
             or type(self.requested_end_date) is not date

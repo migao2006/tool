@@ -88,8 +88,13 @@ gate 仍應保持關閉。
   feature rows、879 檔股票，範圍為 2018-04-09～2026-07-17。
 - 12 檔來源股票沒有產生完整 feature row；現行 audit 只有隔離列與不足歷史的彙總，沒有逐檔
   排除原因，不能把 891 檔誤稱為全部完成。
-- Artifact typed read-back、Parquet SHA-256 與 schema SHA-256 已驗證通過；TPEX benchmark 尚未
-  封存至 R2，5 日標籤、模型與 UI 也尚未建立。
+- Artifact typed read-back、Parquet SHA-256 與 schema SHA-256 已驗證通過。
+- 本次分支新增 TPEX 官方月 OHLC 的獨立 queue／RPC、Parquet、immutable R2 read-back、CLI 與
+  GitHub Actions workflow；Local migration、validation、rollback 與 schema lint 已通過。
+  Production gate `TPEX_PRICE_INDEX_OHLC_BACKFILL_ENABLED` 仍應保持關閉，直到 migration 經
+  GitHub 發布並完成單月 smoke test。
+- 這份 OHLC 是櫃買價格指數，不是總報酬指數；Production 尚無 object，5 日標籤、模型與 UI
+  也尚未建立。
 
 以上資料與程式均維持 `RESEARCH_ONLY`；完成 feature artifact 不等於完成 point-in-time、
 基準交易路徑、標籤或正式模型驗證。

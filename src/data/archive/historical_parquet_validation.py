@@ -24,6 +24,8 @@ from src.data.ingestion.historical_supplemental_parquet import (
     historical_supplemental_schema,
 )
 from src.data.ingestion.taiex_ohlc_parquet import taiex_ohlc_schema
+from src.data.ingestion.tpex_ohlc_parquet import tpex_ohlc_schema
+from src.data.providers.tpex import TPEX_MONTHLY_OHLC_DATASET
 from src.data.providers.twse import TAIEX_MONTHLY_OHLC_DATASET
 
 from .contracts import (
@@ -31,6 +33,7 @@ from .contracts import (
     HistoricalArchiveReadError,
 )
 from .taiex_ohlc_validation import validate_taiex_ohlc_rows
+from .tpex_ohlc_validation import validate_tpex_ohlc_rows
 
 
 def _fail(reason_code: str, message: str) -> HistoricalArchiveReadError:
@@ -114,6 +117,8 @@ def _read_table(payload: bytes, manifest: HistoricalArchiveManifest) -> Any:
         expected_schema = historical_benchmark_schema()
     elif manifest.source_dataset == TAIEX_MONTHLY_OHLC_DATASET:
         expected_schema = taiex_ohlc_schema()
+    elif manifest.source_dataset == TPEX_MONTHLY_OHLC_DATASET:
+        expected_schema = tpex_ohlc_schema()
     else:
         raise _fail(
             "HISTORICAL_ARCHIVE_SCHEMA_UNSUPPORTED",
@@ -277,4 +282,6 @@ def validate_historical_parquet(
     rows = _verified_rows(_read_table(payload, manifest), manifest)
     if manifest.source_dataset == TAIEX_MONTHLY_OHLC_DATASET:
         validate_taiex_ohlc_rows(rows, manifest)
+    elif manifest.source_dataset == TPEX_MONTHLY_OHLC_DATASET:
+        validate_tpex_ohlc_rows(rows, manifest)
     return rows

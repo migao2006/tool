@@ -41,6 +41,17 @@ export function snapshotRows(): SnapshotRows {
         asset_type: "COMMON_STOCK",
       },
     ],
+    currentSecurityHistory: [
+      {
+        security_id: 101,
+        effective_from: "2026-07-18",
+        effective_to: null,
+        industry_code: "24",
+        industry_name: null,
+        source_version: "fixture-v1",
+        available_at: "2026-07-18T08:00:00+00:00",
+      },
+    ],
     audits: [
       {
         security_id: 102,

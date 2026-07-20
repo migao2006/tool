@@ -77,6 +77,13 @@ Function 以 server-side `SUPABASE_SERVICE_ROLE_KEY` 讀取私有 schema，該 k
 | `cost_profile_version` | 成本契約版本 |
 | `validation` | Walk-forward、holdout、排名、校準與成本敏感度摘要 |
 
+研究快照可附加下列目前證券主檔分類欄位：`current_industry`、
+`current_industry_code`、`industry_classification_effective_from`、
+`industry_classification_available_at` 及 `industry_classification_basis`。
+它們只供目前畫面顯示與篩選，不是模型在 `decision_at` 使用的 point-in-time
+`industry`，不得用來產生或補寫 `industry_rank`。`cost_profile` 可由已綁定的
+`cost_profile_version` 解析為已知成本情境；無法辨識時必須回傳 `null`。
+
 若指定市場尚無任何 `prediction_run`，端點回 `200` 與該市場的真實空快照：
 `system_status=RESEARCH_ONLY`、`reason_codes=["NO_PREDICTION_SNAPSHOT"]`、
 `predictions/watchlist/excluded=[]`，且未知日期與版本欄位為 `null`。不得以目前日期

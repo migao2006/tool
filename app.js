@@ -2,7 +2,7 @@ import { createBottomNavigation } from "./src/components/bottom-navigation.js";
 import { initializeDrawers } from "./src/components/drawer-controller.js?v=debug-1";
 import { initializeMarketScopeSwitches } from "./src/components/market-scope-switch.js?v=market-scope-1";
 import { initializeResearchSettings } from "./src/features/research-settings.js?v=stored-snapshot-1";
-import { initializeCandidateFilters } from "./src/features/candidate-filters.js?v=filter-sheet-1";
+import { initializeCandidateFilters } from "./src/features/candidate-filters.js?v=classification-1";
 import { initializeWatchlistFilters } from "./src/features/watchlist-filters.js";
 import { CURRENT_HORIZON } from "./src/core/five-day-contract.js";
 import {
@@ -19,16 +19,16 @@ import {
 } from "./src/core/ui-state.js?v=research-ui-1";
 import { renderHomeDataStatus } from "./src/components/home-data-status.js?v=mobile-ui-1";
 import { loadHomeDataStatus } from "./src/data/home-data-status-api.js?v=home-data-2";
-import { loadPredictionSnapshot } from "./src/data/prediction-api.js?v=market-scope-1";
-import { createUnavailableSnapshot } from "./src/data/prediction-contract.js?v=market-scope-1";
+import { loadPredictionSnapshot } from "./src/data/prediction-api.js?v=classification-1";
+import { createUnavailableSnapshot } from "./src/data/prediction-contract.js?v=classification-1";
 import { setWatchlistMembership } from "./src/data/watchlist-api.js?v=market-scope-1";
 import { isSupabaseSdkLoadError } from "./src/data/supabase-sdk-loader.js?v=auth-1";
 import {
   createCandidatesPage,
   initializeCandidatePagination,
   renderCandidatesPage,
-} from "./src/pages/candidates-page.js?v=filter-sheet-1";
-import { createOverviewPage, renderOverviewPage } from "./src/pages/overview-page.js?v=market-scope-1";
+} from "./src/pages/candidates-page.js?v=classification-1";
+import { createOverviewPage, renderOverviewPage } from "./src/pages/overview-page.js?v=classification-1";
 import { createStockDetailPage, renderStockDetailPage } from "./src/pages/stock-detail-page.js?v=market-scope-1";
 import { createWatchlistPage, renderWatchlistPage } from "./src/pages/watchlist-page.js?v=research-ui-1";
 

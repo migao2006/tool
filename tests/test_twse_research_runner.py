@@ -53,10 +53,10 @@ def _frame() -> pd.DataFrame:
             "usage_scope": "MODEL_RESEARCH_ONLY",
             "reason_codes": ("UNADJUSTED_PRICE_RESEARCH_ONLY",),
             "feature_schema_hash": TWSE_PRICE_VOLUME_FEATURE_SCHEMA_HASH,
-            "label_version": "label-v1",
-            "benchmark_id": "TAIEX",
+            "label_version": "twse-research-unadjusted-open-close-5d-v1",
+            "benchmark_id": "TWSE_TAIEX_PRICE_INDEX",
             "benchmark_version": "benchmark-v1",
-            "cost_profile_version": "cost-v1",
+            "cost_profile_version": "tw_stock_swing_v1:base_cost",
             "dataset_snapshot_id": "snapshot-v1",
             "source_hash": "a" * 64,
         }

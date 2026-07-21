@@ -154,9 +154,7 @@ class SupabaseWriter:
         body = (
             None
             if rows is None
-            else json.dumps(rows, ensure_ascii=False, separators=(",", ":")).encode(
-                "utf-8"
-            )
+            else json.dumps(rows, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         )
         response = self.transport.request(
             method,
@@ -240,17 +238,53 @@ class SupabaseWriter:
         select: str,
         filters: Mapping[str, str] | None = None,
         limit: int = 1_000,
+        offset: int = 0,
     ) -> list[dict[str, object]]:
         if not select.strip():
             raise ValueError("select must not be empty")
-        if limit <= 0:
-            raise ValueError("limit must be positive")
+        if limit <= 0 or offset < 0:
+            raise ValueError("limit must be positive and offset must not be negative")
         response = self._request(
             "GET",
             table,
-            query={"select": select, "limit": str(limit), **dict(filters or {})},
+            query={
+                "select": select,
+                "limit": str(limit),
+                "offset": str(offset),
+                **dict(filters or {}),
+            },
         )
         return self._decode_rows(response, table=table)
+
+    def select_all_rows(
+        self,
+        table: str,
+        *,
+        select: str,
+        filters: Mapping[str, str] | None = None,
+        page_size: int = 1_000,
+        max_rows: int = 10_000,
+    ) -> list[dict[str, object]]:
+        """Read a bounded, deterministic PostgREST result across pages."""
+
+        if page_size <= 0 or max_rows <= 0 or page_size > max_rows:
+            raise ValueError("page_size and max_rows are outside allowed bounds")
+        rows: list[dict[str, object]] = []
+        for offset in range(0, max_rows, page_size):
+            page = self.select_rows(
+                table,
+                select=select,
+                filters=filters,
+                limit=min(page_size, max_rows - offset),
+                offset=offset,
+            )
+            rows.extend(page)
+            if len(page) < page_size:
+                return rows
+        raise IngestionError(
+            "SUPABASE_SELECT_LIMIT_EXCEEDED",
+            f"Supabase result for {table} exceeds the configured read limit",
+        )
 
     def rpc(
         self,
@@ -302,11 +336,7 @@ class SupabaseWriter:
             extra_headers={"Prefer": "count=exact", "Range": "0-0"},
         )
         content_range = next(
-            (
-                value
-                for key, value in response.headers.items()
-                if key.casefold() == "content-range"
-            ),
+            (value for key, value in response.headers.items() if key.casefold() == "content-range"),
             None,
         )
         if not content_range or "/" not in content_range:

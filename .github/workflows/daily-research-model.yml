@@ -1,0 +1,528 @@
+name: Daily research model
+
+on:
+  workflow_run:
+    workflows:
+      - Import market data
+    types:
+      - completed
+  schedule:
+    # Weekday fallback at 21:15 Asia/Taipei. A successful import normally triggers this earlier.
+    - cron: "15 13 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      as_of_date:
+        description: Optional exact aligned daily-bar date (YYYY-MM-DD)
+        required: false
+        type: string
+      publish_production:
+        description: Publish the staging-verified immutable snapshot to Production
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: daily-research-model
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.repository.full_name == github.repository)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      should_run: ${{ steps.resolve.outputs.should_run }}
+      as_of_date: ${{ steps.resolve.outputs.as_of_date }}
+      markets: ${{ steps.resolve.outputs.markets }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install uv with dependency caching
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Synchronize locked environment
+        run: uv sync --frozen
+
+      - name: Resolve aligned date and markets still missing a snapshot
+        id: resolve
+        env:
+          REQUESTED_AS_OF_DATE: ${{ inputs.as_of_date }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          arguments=(
+            --max-age-days 14
+            --output daily-research-resolution.json
+            --github-output "$GITHUB_OUTPUT"
+          )
+          if [[ -n "${REQUESTED_AS_OF_DATE:-}" ]]; then
+            arguments+=(--as-of-date "$REQUESTED_AS_OF_DATE")
+          fi
+          uv run python -m scripts.resolve_daily_research_date "${arguments[@]}"
+
+      - name: Preserve date resolution evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: daily-research-resolution-${{ github.run_id }}
+          path: daily-research-resolution.json
+          if-no-files-found: error
+          retention-days: 90
+
+  publish-current-bars:
+    needs: resolve
+    if: needs.resolve.outputs.should_run == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install uv with dependency caching
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Synchronize locked environment
+        run: uv sync --frozen
+
+      - name: Publish immutable exact-date current bars to private R2
+        env:
+          TARGET_DATE: ${{ needs.resolve.outputs.as_of_date }}
+          MARKETS_JSON: ${{ needs.resolve.outputs.markets }}
+          R2_ACCOUNT_ID: ${{ vars.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET_NAME: ${{ vars.R2_BUCKET_NAME }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          required=(
+            TARGET_DATE
+            MARKETS_JSON
+            R2_ACCOUNT_ID
+            R2_ACCESS_KEY_ID
+            R2_SECRET_ACCESS_KEY
+            R2_BUCKET_NAME
+            SUPABASE_URL
+            SUPABASE_SERVICE_ROLE_KEY
+          )
+          for name in "${required[@]}"; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "Required daily publication configuration is not set: $name" >&2
+              exit 1
+            fi
+          done
+          mapfile -t markets < <(
+            python -c 'import json, os; [print(value) for value in json.loads(os.environ["MARKETS_JSON"])]'
+          )
+          arguments=(--as-of-date "$TARGET_DATE" --output daily-bar-publications.json)
+          for market in "${markets[@]}"; do
+            arguments+=(--market "$market")
+          done
+          uv run python -m scripts.publish_daily_bar_publication_snapshots \
+            "${arguments[@]}"
+
+      - name: Preserve immutable publication evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: daily-bar-publications-${{ github.run_id }}
+          path: daily-bar-publications.json
+          if-no-files-found: error
+          retention-days: 90
+
+  build-features:
+    needs:
+      - resolve
+      - publish-current-bars
+    if: needs.resolve.outputs.should_run == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        market: ${{ fromJSON(needs.resolve.outputs.markets) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install uv with dependency caching
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Synchronize locked environment
+        run: uv sync --frozen
+
+      - name: Build exact-date feature artifact from history plus current publication
+        env:
+          MARKET: ${{ matrix.market }}
+          TARGET_DATE: ${{ needs.resolve.outputs.as_of_date }}
+          R2_ACCOUNT_ID: ${{ vars.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET_NAME: ${{ vars.R2_BUCKET_NAME }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          slug="$(printf '%s' "$MARKET" | tr '[:upper:]' '[:lower:]')"
+          mkdir -p "outputs/${MARKET}"
+          case "$MARKET" in
+            TWSE) module="scripts.build_twse_research_feature_dataset" ;;
+            TPEX) module="scripts.build_tpex_research_feature_dataset" ;;
+            *) echo "Unsupported market: $MARKET" >&2; exit 1 ;;
+          esac
+          uv run python -m "$module" \
+            --output "outputs/${MARKET}/${slug}-research-features.parquet" \
+            --audit "outputs/${MARKET}/${slug}-research-features-audit.json" \
+            --include-current-publication \
+            --required-as-of-date "$TARGET_DATE"
+
+      - name: Preserve exact-date feature artifact
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: daily-research-features-${{ matrix.market }}-${{ github.run_id }}
+          path: outputs/${{ matrix.market }}/*
+          if-no-files-found: error
+          retention-days: 30
+
+  publish-staging:
+    needs:
+      - resolve
+      - build-features
+    if: needs.resolve.outputs.should_run == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        market: ${{ fromJSON(needs.resolve.outputs.markets) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    environment: staging
+    env:
+      MARKET: ${{ matrix.market }}
+      TARGET_DATE: ${{ needs.resolve.outputs.as_of_date }}
+      SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
+      SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      ALPHA_LENS_TARGET_ENVIRONMENT: staging
+      RESEARCH_PREDICTION_SUPABASE_PUBLISH_ENABLED: "true"
+      RESEARCH_PREDICTION_PRODUCTION_PUBLISH_ENABLED: "false"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Resolve one trusted prepared research artifact
+        id: prepared
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin \
+            "+refs/heads/main:refs/remotes/origin/main"
+          case "$MARKET" in
+            TWSE)
+              workflow="build-twse-prepared-research-dataset.yml"
+              workflow_path=".github/workflows/${workflow}"
+              artifact_prefix="twse-prepared-research-"
+              ;;
+            TPEX)
+              workflow="build-tpex-prepared-research-dataset.yml"
+              workflow_path=".github/workflows/${workflow}"
+              artifact_prefix="tpex-prepared-research-"
+              ;;
+            *) echo "Unsupported market: $MARKET" >&2; exit 1 ;;
+          esac
+          found="false"
+          while IFS=$'\t' read -r run_id status conclusion event head_branch head_sha path repository head_repository; do
+            path="${path%%@*}"
+            if [[
+              "$status" != "completed" ||
+              "$conclusion" != "success" ||
+              "$event" != "workflow_dispatch" ||
+              "$head_branch" != "main" ||
+              "$path" != "$workflow_path" ||
+              "$repository" != "$GITHUB_REPOSITORY" ||
+              "$head_repository" != "$GITHUB_REPOSITORY" ||
+              ! "$head_sha" =~ ^[0-9a-f]{40}$
+            ]]; then
+              continue
+            fi
+            if ! git merge-base --is-ancestor "$head_sha" origin/main; then
+              continue
+            fi
+            artifact_rows="$(
+              gh api --paginate \
+                "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts?per_page=100" \
+                --jq ".artifacts[] | select(.name == \"${artifact_prefix}${run_id}\" and .expired == false) | [.id, .digest // \"\"] | @tsv"
+            )"
+            if [[ -z "$artifact_rows" || "$(printf '%s\n' "$artifact_rows" | wc -l)" != "1" ]]; then
+              continue
+            fi
+            IFS=$'\t' read -r artifact_id artifact_digest <<< "$artifact_rows"
+            if [[
+              ! "$artifact_id" =~ ^[1-9][0-9]*$ ||
+              ! "$artifact_digest" =~ ^sha256:[0-9a-f]{64}$
+            ]]; then
+              continue
+            fi
+            echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+            echo "artifact_id=$artifact_id" >> "$GITHUB_OUTPUT"
+            echo "artifact_digest=$artifact_digest" >> "$GITHUB_OUTPUT"
+            echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
+            found="true"
+            break
+          done < <(
+            gh api --paginate \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/runs?branch=main&status=success&per_page=100" \
+              --jq '.workflow_runs[] | [.id, .status // "", .conclusion // "", .event // "", .head_branch // "", .head_sha // "", .path // "", .repository.full_name // "", .head_repository.full_name // ""] | @tsv'
+          )
+          if [[ "$found" != "true" ]]; then
+            echo "No trusted unexpired prepared research artifact is available for $MARKET" >&2
+            exit 1
+          fi
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install uv with dependency caching
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Synchronize locked environment
+        run: uv sync --frozen
+
+      - name: Require isolated Staging credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$SUPABASE_PROJECT_REF"
+          test -n "$SUPABASE_URL"
+          test -n "$SUPABASE_SERVICE_ROLE_KEY"
+          test "$ALPHA_LENS_TARGET_ENVIRONMENT" = "staging"
+          test "$RESEARCH_PREDICTION_PRODUCTION_PUBLISH_ENABLED" = "false"
+          case "$SUPABASE_URL" in
+            "https://${SUPABASE_PROJECT_REF}.supabase.co"|\
+            "https://${SUPABASE_PROJECT_REF}.supabase.co/") ;;
+            *) echo "Supabase URL does not match Staging project ref" >&2; exit 1 ;;
+          esac
+
+      - name: Download exact-date feature artifact from this workflow
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: daily-research-features-${{ matrix.market }}-${{ github.run_id }}
+          path: inputs/features
+          digest-mismatch: error
+
+      - name: Download trusted prepared research artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ steps.prepared.outputs.artifact_id }}
+          path: inputs/prepared
+          merge-multiple: true
+          digest-mismatch: error
+          github-token: ${{ github.token }}
+          run-id: ${{ steps.prepared.outputs.run_id }}
+
+      - name: Train and publish exact-date snapshot to Staging
+        env:
+          # The shared provenance contract currently uses these stable variable names
+          # for all GitHub-hosted venue runs. They identify the verified prepared input.
+          TPEX_PREPARED_SOURCE_RUN_ID: ${{ steps.prepared.outputs.run_id }}
+          TPEX_PREPARED_SOURCE_RUN_SHA: ${{ steps.prepared.outputs.head_sha }}
+          TPEX_PREPARED_SOURCE_ARTIFACT_ID: ${{ steps.prepared.outputs.artifact_id }}
+          TPEX_PREPARED_SOURCE_ARTIFACT_DIGEST: ${{ steps.prepared.outputs.artifact_digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          slug="$(printf '%s' "$MARKET" | tr '[:upper:]' '[:lower:]')"
+          case "$MARKET" in
+            TWSE) module="scripts.publish_twse_daily_research_snapshot" ;;
+            TPEX) module="scripts.publish_tpex_daily_research_snapshot" ;;
+            *) echo "Unsupported market: $MARKET" >&2; exit 1 ;;
+          esac
+          uv run python -m "$module" \
+            --prepared-input "inputs/prepared/${slug}-prepared-research.parquet" \
+            --prepared-audit "inputs/prepared/${slug}-prepared-research-audit.json" \
+            --feature-input "inputs/features/${slug}-research-features.parquet" \
+            --feature-audit "inputs/features/${slug}-research-features-audit.json" \
+            --artifact-root "artifacts/${MARKET}" \
+            --report "${slug}-staging-publish-report.json" \
+            --required-as-of-date "$TARGET_DATE" \
+            --horizon 5 \
+            --publish-supabase
+
+      - name: Verify Staging database and prepare immutable release snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          slug="$(printf '%s' "$MARKET" | tr '[:upper:]' '[:lower:]')"
+          uv run python -m scripts.verify_daily_research_publish \
+            --market "$MARKET" \
+            --as-of-date "$TARGET_DATE" \
+            --target-environment staging \
+            --report "${slug}-staging-publish-report.json" \
+            --output "${slug}-staging-verification.json"
+          MARKET="$MARKET" SLUG="$slug" python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          from shutil import copy2
+          from urllib.parse import unquote, urlparse
+
+          market = os.environ["MARKET"]
+          slug = os.environ["SLUG"]
+          report = json.loads(Path(f"{slug}-staging-publish-report.json").read_text())
+          uri = report["artifacts"]["daily_research_snapshot"]
+          basename = Path(unquote(urlparse(uri).path)).name
+          matches = list(Path(f"artifacts/{market}").rglob(basename))
+          if len(matches) != 1:
+              raise SystemExit("exactly one persisted daily snapshot is required")
+          release = Path(f"release/{market}")
+          release.mkdir(parents=True, exist_ok=True)
+          copy2(matches[0], release / "snapshot.json")
+          copy2(f"{slug}-staging-publish-report.json", release / "staging-publish-report.json")
+          copy2(f"{slug}-staging-verification.json", release / "staging-verification.json")
+          PY
+
+      - name: Preserve Staging-verified release artifact
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: daily-research-staging-${{ matrix.market }}-${{ github.run_id }}
+          path: |
+            release/${{ matrix.market }}/*
+            artifacts/${{ matrix.market }}/**/*
+          if-no-files-found: error
+          retention-days: 90
+
+  publish-production:
+    needs:
+      - resolve
+      - publish-staging
+    if: >-
+      needs.resolve.outputs.should_run == 'true' &&
+      (github.event_name != 'workflow_dispatch' || inputs.publish_production == true) &&
+      vars.DAILY_RESEARCH_PRODUCTION_PUBLISH_ENABLED != 'false'
+    strategy:
+      fail-fast: false
+      matrix:
+        market: ${{ fromJSON(needs.resolve.outputs.markets) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    environment: production
+    env:
+      MARKET: ${{ matrix.market }}
+      TARGET_DATE: ${{ needs.resolve.outputs.as_of_date }}
+      SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
+      SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      ALPHA_LENS_TARGET_ENVIRONMENT: production
+      RESEARCH_PREDICTION_SUPABASE_PUBLISH_ENABLED: "true"
+      RESEARCH_PREDICTION_PRODUCTION_PUBLISH_ENABLED: "true"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install uv with dependency caching
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Synchronize locked environment
+        run: uv sync --frozen
+
+      - name: Require isolated Production credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$SUPABASE_PROJECT_REF"
+          test -n "$SUPABASE_URL"
+          test -n "$SUPABASE_SERVICE_ROLE_KEY"
+          test "$ALPHA_LENS_TARGET_ENVIRONMENT" = "production"
+          test "$RESEARCH_PREDICTION_PRODUCTION_PUBLISH_ENABLED" = "true"
+          case "$SUPABASE_URL" in
+            "https://${SUPABASE_PROJECT_REF}.supabase.co"|\
+            "https://${SUPABASE_PROJECT_REF}.supabase.co/") ;;
+            *) echo "Supabase URL does not match Production project ref" >&2; exit 1 ;;
+          esac
+
+      - name: Download Staging-verified immutable snapshot
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: daily-research-staging-${{ matrix.market }}-${{ github.run_id }}
+          path: inputs/staging
+          digest-mismatch: error
+
+      - name: Publish the identical snapshot to Production
+        shell: bash
+        run: |
+          set -euo pipefail
+          slug="$(printf '%s' "$MARKET" | tr '[:upper:]' '[:lower:]')"
+          uv run python -m scripts.publish_stored_research_snapshot \
+            --market "$MARKET" \
+            --snapshot "inputs/staging/release/${MARKET}/snapshot.json" \
+            --required-as-of-date "$TARGET_DATE" \
+            --report "${slug}-production-publish-report.json"
+
+      - name: Verify Production database
+        shell: bash
+        run: |
+          set -euo pipefail
+          slug="$(printf '%s' "$MARKET" | tr '[:upper:]' '[:lower:]')"
+          uv run python -m scripts.verify_daily_research_publish \
+            --market "$MARKET" \
+            --as-of-date "$TARGET_DATE" \
+            --target-environment production \
+            --report "${slug}-production-publish-report.json" \
+            --output "${slug}-production-verification.json"
+
+      - name: Preserve Production publish evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: daily-research-production-${{ matrix.market }}-${{ github.run_id }}
+          path: |
+            *-production-publish-report.json
+            *-production-verification.json
+          if-no-files-found: error
+          retention-days: 90

@@ -26,6 +26,9 @@ from src.data.research.twse_research_prediction_supabase import (  # noqa: E402
     TpexResearchPredictionSupabasePublisher,
 )
 from src.pipeline.contracts import PipelineMode, PipelineStatus  # noqa: E402
+from src.pipeline.daily_research_publish_contract import (  # noqa: E402
+    require_daily_research_coverage,
+)
 from src.pipeline.orchestrator import PipelineOrchestrator  # noqa: E402
 from src.pipeline.tpex_latest_feature_repository import (  # noqa: E402
     LatestTpexFeatureRepository,
@@ -100,12 +103,10 @@ def _publish(payload: Mapping[str, object]) -> dict[str, object]:
         ),
         target_environment=os.environ.get("ALPHA_LENS_TARGET_ENVIRONMENT", ""),
         publish_enabled=(
-            os.environ.get("RESEARCH_PREDICTION_SUPABASE_PUBLISH_ENABLED", "").lower()
-            == "true"
+            os.environ.get("RESEARCH_PREDICTION_SUPABASE_PUBLISH_ENABLED", "").lower() == "true"
         ),
         production_publish_enabled=(
-            os.environ.get("RESEARCH_PREDICTION_PRODUCTION_PUBLISH_ENABLED", "").lower()
-            == "true"
+            os.environ.get("RESEARCH_PREDICTION_PRODUCTION_PUBLISH_ENABLED", "").lower() == "true"
         ),
     ).publish(payload)
     return {
@@ -167,15 +168,22 @@ def main(argv: Sequence[str] | None = None) -> int:
             as_of_date=cast(date | None, arguments.required_as_of_date),
         )
         required_as_of_date = cast(date | None, arguments.required_as_of_date)
-        if (
-            required_as_of_date is not None
-            and features.as_of_date != required_as_of_date
-        ):
+        if required_as_of_date is not None and features.as_of_date != required_as_of_date:
             raise ValueError("TPEX_REQUIRED_AS_OF_DATE_NOT_AVAILABLE")
+        feature_count = len(features.frame)
+        require_daily_research_coverage(
+            "TPEX",
+            feature_count=feature_count,
+        )
         snapshot = TpexDailyResearchInference().run(
             features,
             bundle,
             load_mvp_config(config_path),
+        )
+        require_daily_research_coverage(
+            "TPEX",
+            feature_count=feature_count,
+            prediction_count=len(snapshot.predictions),
         )
         output = (
             artifact_root

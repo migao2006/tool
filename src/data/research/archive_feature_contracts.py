@@ -60,9 +60,7 @@ class IdentitySnapshot:
     snapshot_sha256: str
 
     def __post_init__(self) -> None:
-        if any(
-            symbol != identity.symbol for symbol, identity in self.by_symbol.items()
-        ):
+        if any(symbol != identity.symbol for symbol, identity in self.by_symbol.items()):
             raise ValueError("identity snapshot keys do not match symbols")
         if len(self.snapshot_sha256) != 64:
             raise ValueError("identity snapshot hash is invalid")
@@ -75,14 +73,10 @@ def identity_snapshot_hash(
         {
             "asset_type": identity.asset_type,
             "delisting_date": (
-                identity.delisting_date.isoformat()
-                if identity.delisting_date is not None
-                else None
+                identity.delisting_date.isoformat() if identity.delisting_date is not None else None
             ),
             "listing_date": (
-                identity.listing_date.isoformat()
-                if identity.listing_date is not None
-                else None
+                identity.listing_date.isoformat() if identity.listing_date is not None else None
             ),
             "market": identity.market,
             "security_id": identity.security_id,
@@ -92,6 +86,31 @@ def identity_snapshot_hash(
     ]
     encoded = json.dumps(
         payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return sha256(encoded).hexdigest()
+
+
+def combined_source_snapshot_hash(
+    *,
+    historical_archive_snapshot_sha256: str,
+    publication_snapshot_sha256: str | None = None,
+) -> str:
+    """Bind optional current publication evidence to the historical snapshot."""
+
+    digests = (historical_archive_snapshot_sha256, publication_snapshot_sha256)
+    if any(value is not None and len(value) != 64 for value in digests):
+        raise ValueError("source snapshot contains an invalid SHA-256 digest")
+    if publication_snapshot_sha256 is None:
+        return historical_archive_snapshot_sha256
+    encoded = json.dumps(
+        {
+            "historical_archive_snapshot_sha256": (historical_archive_snapshot_sha256),
+            "publication_snapshot_sha256": publication_snapshot_sha256,
+            "source_snapshot_contract": "archive-plus-current-publication.v1",
+        },
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
@@ -152,6 +171,11 @@ class ArchiveFeatureAudit:
     usage_scope: str = "FEATURE_RESEARCH_ONLY"
     system_status: str = "RESEARCH_ONLY"
     reason_codes: tuple[str, ...] = _DEFAULT_PROFILE.global_reason_codes
+    historical_archive_snapshot_sha256: str | None = None
+    publication_snapshot_sha256: str | None = None
+    publication_snapshot_id: int | None = None
+    publication_row_count: int = 0
+    latest_decision_date: date | None = None
 
     def __post_init__(self) -> None:
         profile = archive_feature_market_profile(self.market)
@@ -174,12 +198,30 @@ class ArchiveFeatureAudit:
             self.output_row_count,
             self.excluded_row_count,
         )
-        if any(count < 0 for count in counts):
+        if any(count < 0 for count in counts) or self.publication_row_count < 0:
             raise ValueError("audit counts cannot be negative")
         if self.verified_archive_count != self.manifest_count:
-            raise ValueError(
-                "every manifest must be verified before output is complete"
-            )
+            raise ValueError("every manifest must be verified before output is complete")
+        if (
+            self.historical_archive_snapshot_sha256 is not None
+            and len(self.historical_archive_snapshot_sha256) != 64
+        ):
+            raise ValueError("historical archive snapshot hash is invalid")
+        publication_fields = (
+            self.publication_snapshot_sha256,
+            self.publication_snapshot_id,
+        )
+        if any(value is not None for value in publication_fields):
+            if (
+                self.publication_snapshot_sha256 is None
+                or len(self.publication_snapshot_sha256) != 64
+                or self.publication_snapshot_id is None
+                or self.publication_snapshot_id <= 0
+                or self.publication_row_count <= 0
+            ):
+                raise ValueError("publication snapshot audit fields are incomplete")
+        elif self.publication_row_count != 0:
+            raise ValueError("publication row count requires publication lineage")
         if self.system_status != "RESEARCH_ONLY" or self.horizon != 5:
             raise ValueError("archive features cannot be promoted or relabeled")
         if self.label_status != "LABELS_NOT_ASSEMBLED":
@@ -188,8 +230,7 @@ class ArchiveFeatureAudit:
             self.dataset_version != profile.dataset_version
             or self.feature_schema_version != profile.feature.schema_version
             or self.feature_schema_hash != profile.feature.schema_hash
-            or self.decision_time_policy_version
-            != profile.decision_time_policy_version
+            or self.decision_time_policy_version != profile.decision_time_policy_version
             or self.reason_codes != profile.global_reason_codes
         ):
             raise ValueError("audit metadata does not match its market profile")
@@ -201,6 +242,17 @@ class ArchiveFeatureAudit:
             "dataset_version": self.dataset_version,
             "dataset_snapshot_sha256": self.dataset_snapshot_sha256,
             "source_archive_snapshot_sha256": self.source_archive_snapshot_sha256,
+            "historical_archive_snapshot_sha256": (
+                self.historical_archive_snapshot_sha256 or self.source_archive_snapshot_sha256
+            ),
+            "publication_snapshot_sha256": self.publication_snapshot_sha256,
+            "publication_snapshot_id": self.publication_snapshot_id,
+            "publication_row_count": self.publication_row_count,
+            "latest_decision_date": (
+                self.latest_decision_date.isoformat()
+                if self.latest_decision_date is not None
+                else None
+            ),
             "current_identity_snapshot_sha256": self.current_identity_snapshot_sha256,
             "market": self.market,
             "scope_filters": dict(profile.scope_filters),
@@ -230,6 +282,7 @@ __all__ = [
     "ArchiveFeatureBuildError",
     "CurrentSecurityIdentity",
     "IdentitySnapshot",
+    "combined_source_snapshot_hash",
     "dataset_snapshot_hash",
     "identity_snapshot_hash",
 ]

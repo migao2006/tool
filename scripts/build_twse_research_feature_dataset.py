@@ -45,6 +45,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     return run_feature_build(
         argv,
         VenueFeatureBuildDependencies(
+            market="TWSE",
             description=(
                 "Stream fully verified TWSE daily-bar archives into a "
                 "RESEARCH_ONLY price/volume feature dataset."

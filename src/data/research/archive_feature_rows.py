@@ -11,6 +11,7 @@ from typing import cast
 from zoneinfo import ZoneInfo
 
 from src.data.archive.contracts import HistoricalArchiveManifest
+from src.data.ingestion.daily_bar_publication import DailyBarPublicationSourceRow
 from src.features.price_volume_contracts import PriceVolumeFeatureRow
 
 from .archive_feature_market import (
@@ -21,7 +22,6 @@ from .archive_feature_contracts import (
     ArchiveFeatureBuildError,
     CurrentSecurityIdentity,
 )
-
 
 
 TAIPEI = ZoneInfo("Asia/Taipei")
@@ -61,9 +61,7 @@ def group_manifests(
     market: str = "TWSE",
 ) -> dict[str, list[Mapping[str, object]]]:
     profile = archive_feature_market_profile(market)
-    grouped: dict[
-        str, list[tuple[HistoricalArchiveManifest, Mapping[str, object]]]
-    ] = {}
+    grouped: dict[str, list[tuple[HistoricalArchiveManifest, Mapping[str, object]]]] = {}
     for row in rows:
         manifest = HistoricalArchiveManifest.from_mapping(row)
         if (
@@ -166,6 +164,47 @@ def canonical_record(
     }
 
 
+def publication_canonical_record(
+    row: DailyBarPublicationSourceRow,
+    *,
+    identity: CurrentSecurityIdentity,
+) -> dict[str, object]:
+    """Adapt a verified R2 publication row without claiming PIT verification."""
+
+    if (
+        identity.market != row.market
+        or identity.symbol != row.symbol
+        or identity.security_id != row.security_id
+        or identity.asset_type != "COMMON_STOCK"
+    ):
+        raise ArchiveFeatureBuildError(
+            f"{row.market}_DAILY_PUBLICATION_IDENTITY_MISMATCH",
+            "A current daily-bar publication row conflicts with current identity",
+        )
+    return {
+        "security_id": identity.security_id,
+        "listing_period_id": identity.listing_period_id,
+        "market": row.market,
+        "symbol": row.symbol,
+        "asset_type": "COMMON_STOCK",
+        "trade_date": row.trade_date,
+        "decision_at": datetime.combine(row.trade_date, DECISION_TIME, tzinfo=TAIPEI),
+        "available_at": row.available_at,
+        "available_at_basis": "FIRST_OBSERVED_AT_RETRIEVAL",
+        "open_price": row.open_price,
+        "high_price": row.high_price,
+        "low_price": row.low_price,
+        "close_price": row.close_price,
+        "trading_volume": row.trading_volume,
+        "trading_value": row.trading_value,
+        "point_in_time_status": "UNVERIFIED",
+        "parse_status": "PARSED",
+        # The full publication manifest reasons stay in output provenance. Only
+        # the frozen first-observed allowlist participates in feature hard gates.
+        "reason_codes": BUILDER_SOURCE_REASONS,
+    }
+
+
 def output_row(
     feature: PriceVolumeFeatureRow,
     *,
@@ -244,14 +283,10 @@ def output_row(
         "availability_mode": feature.availability_mode,
         "decision_close_price": decision_close_price,
         "latest_available_at": feature.latest_available_at.astimezone(UTC),
-        "latest_observed_available_at": feature.latest_observed_available_at.astimezone(
-            UTC
-        ),
+        "latest_observed_available_at": feature.latest_observed_available_at.astimezone(UTC),
         "point_in_time_audit_pass": feature.point_in_time_audit_pass,
         "hard_fail": False,
-        "research_limitation_reason_codes": list(
-            feature.research_limitation_reason_codes
-        ),
+        "research_limitation_reason_codes": list(feature.research_limitation_reason_codes),
         "hard_fail_reason_codes": [],
         "label_status": "LABELS_NOT_ASSEMBLED",
         "usage_scope": "FEATURE_RESEARCH_ONLY",
@@ -272,5 +307,6 @@ __all__ = [
     "canonical_record",
     "group_manifests",
     "output_row",
+    "publication_canonical_record",
     "source_reason_codes",
 ]

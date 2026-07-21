@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Mapping, Sequence
+from datetime import date
 import json
 import os
 from pathlib import Path
@@ -25,6 +26,9 @@ from src.data.research.twse_research_prediction_supabase import (  # noqa: E402
     TwseResearchPredictionSupabasePublisher,
 )
 from src.pipeline.contracts import PipelineMode, PipelineStatus  # noqa: E402
+from src.pipeline.daily_research_publish_contract import (  # noqa: E402
+    require_daily_research_coverage,
+)
 from src.pipeline.orchestrator import PipelineOrchestrator  # noqa: E402
 from src.pipeline.twse_latest_feature_repository import (  # noqa: E402
     LatestTwseFeatureRepository,
@@ -59,6 +63,7 @@ def _parser() -> argparse.ArgumentParser:
     _ = parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH)
     _ = parser.add_argument("--report", type=Path)
     _ = parser.add_argument("--horizon", type=int, default=5)
+    _ = parser.add_argument("--required-as-of-date", type=date.fromisoformat)
     _ = parser.add_argument("--publish-supabase", action="store_true")
     return parser
 
@@ -90,16 +95,15 @@ def _publish(payload: Mapping[str, object]) -> dict[str, object]:
         ),
         target_environment=os.environ.get("ALPHA_LENS_TARGET_ENVIRONMENT", ""),
         publish_enabled=(
-            os.environ.get("RESEARCH_PREDICTION_SUPABASE_PUBLISH_ENABLED", "").lower()
-            == "true"
+            os.environ.get("RESEARCH_PREDICTION_SUPABASE_PUBLISH_ENABLED", "").lower() == "true"
         ),
         production_publish_enabled=(
-            os.environ.get("RESEARCH_PREDICTION_PRODUCTION_PUBLISH_ENABLED", "").lower()
-            == "true"
+            os.environ.get("RESEARCH_PREDICTION_PRODUCTION_PUBLISH_ENABLED", "").lower() == "true"
         ),
     ).publish(payload)
     return {
         "status": "COMPLETED",
+        "market": "TWSE",
         "target_environment": result.target_environment,
         "prediction_run_id": result.prediction_run_id,
         "prediction_count": result.prediction_count,
@@ -141,14 +145,28 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise ValueError("TWSE_RESEARCH_MODEL_BUNDLE_NOT_CREATED")
         bundle_dir = _local_path(bundle_uri, directory=True)
         bundle = TwseResearchBundleReader.read(bundle_dir)
+        required_as_of_date = cast(date | None, arguments.required_as_of_date)
         features = LatestTwseFeatureRepository().load(
             cast(Path, arguments.feature_input),
             cast(Path, arguments.feature_audit),
+            as_of_date=required_as_of_date,
+        )
+        if required_as_of_date is not None and features.as_of_date != required_as_of_date:
+            raise ValueError("TWSE_REQUIRED_AS_OF_DATE_NOT_AVAILABLE")
+        feature_count = len(features.frame)
+        require_daily_research_coverage(
+            "TWSE",
+            feature_count=feature_count,
         )
         snapshot = TwseDailyResearchInference().run(
             features,
             bundle,
             load_mvp_config(config_path),
+        )
+        require_daily_research_coverage(
+            "TWSE",
+            feature_count=feature_count,
+            prediction_count=len(snapshot.predictions),
         )
         output = (
             artifact_root
@@ -163,6 +181,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         payload = snapshot.to_dict()
         report: dict[str, object] = {
             "status": "RESEARCH_ONLY",
+            "market": "TWSE",
             "horizon": 5,
             "as_of_date": snapshot.as_of_date.isoformat(),
             "evaluation_scope": snapshot.predictions[0].evaluation_scope,
@@ -187,13 +206,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             report_path,
             {
                 "status": "FAIL",
+                "market": "TWSE",
                 "horizon": 5,
                 "reason_codes": [
-                    str(
-                        getattr(
-                            error, "reason_code", "TWSE_DAILY_RESEARCH_INFERENCE_FAILED"
-                        )
-                    )
+                    str(getattr(error, "reason_code", "TWSE_DAILY_RESEARCH_INFERENCE_FAILED"))
                 ],
                 "message": str(error),
             },

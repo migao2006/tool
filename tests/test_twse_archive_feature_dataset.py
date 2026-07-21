@@ -221,10 +221,7 @@ def test_builder_streams_eligible_rows_and_preserves_research_limits(
     assert set(table["label_status"].to_pylist()) == {"LABELS_NOT_ASSEMBLED"}
     assert set(table["availability_mode"].to_pylist()) == {"RESEARCH_SCHEDULING_HINT"}
     assert set(table["point_in_time_audit_pass"].to_pylist()) == {False}
-    assert (
-        "RESEARCH_SCHEDULING_HINT"
-        in table["research_limitation_reason_codes"][0].as_py()
-    )
+    assert "RESEARCH_SCHEDULING_HINT" in table["research_limitation_reason_codes"][0].as_py()
     reasons = json.loads(table["reason_codes"][0].as_py())
     assert "LABELS_NOT_ASSEMBLED" in reasons
     assert "IDENTITY_UNRESOLVED" in reasons
@@ -326,3 +323,114 @@ def test_builder_rejects_overlapping_symbol_archive_campaigns(
     assert captured.value.reason_code == "TWSE_ARCHIVE_DATE_RANGE_OVERLAP"
     assert not output.exists()
     assert not writer.partial_path.exists()
+
+
+def test_builder_merges_exact_date_current_publication_into_latest_features(
+    tmp_path: Path,
+) -> None:
+    from src.data.ingestion.daily_bar_publication import DailyBarPublicationSourceRow
+    from src.data.research.archive_feature_contracts import (
+        combined_source_snapshot_hash,
+    )
+    from src.data.research.daily_bar_publication_snapshot import (
+        DailyBarPublicationManifest,
+        DailyBarPublicationSnapshot,
+    )
+
+    reader, manifests = _archive()
+    identity = TwseCurrentSecurityIdentity(
+        security_id=2330,
+        symbol="2330",
+        listing_date=START_DATE,
+    )
+    identities = TwseIdentitySnapshot(
+        by_symbol={"2330": identity},
+        snapshot_sha256=identity_snapshot_hash({"2330": identity}),
+    )
+    current_date = END_DATE + timedelta(days=1)
+    current_row = DailyBarPublicationSourceRow(
+        daily_bar_id=9001,
+        security_id=2330,
+        symbol="2330",
+        market="TWSE",
+        trade_date=current_date,
+        open_price=171.0,
+        high_price=173.0,
+        low_price=170.0,
+        close_price=172.0,
+        trading_volume=1_200_000.0,
+        trading_value=206_400_000.0,
+        trade_count=1_200,
+        source_id=7,
+        source_version="official-openapi.v1",
+        available_at=OBSERVED_AT,
+    )
+    publication_manifest = DailyBarPublicationManifest(
+        publication_snapshot_id=91,
+        snapshot_key="1" * 64,
+        bucket_name=BUCKET,
+        object_key="current/v1/twse.parquet",
+        object_etag='"publication"',
+        schema_version="daily-bar-publication.v1",
+        parquet_sha256="2" * 64,
+        normalized_content_sha256="3" * 64,
+        byte_size=100,
+        row_count=1,
+        market="TWSE",
+        trading_date=current_date,
+        source_id=7,
+        source_version="official-openapi-normalized-snapshot.v1",
+        source_revision_hash="4" * 64,
+        source_payload_hash="5" * 64,
+        first_observed_at=OBSERVED_AT,
+        available_at=OBSERVED_AT,
+        available_at_basis="FIRST_OBSERVED_AT_RETRIEVAL",
+        verification_status="UNRESOLVED",
+        usage_scope="BAR_PUBLICATION_RESEARCH_ONLY",
+        system_status="RESEARCH_ONLY",
+        reason_codes=(
+            "OFFICIAL_PUBLICATION_TIMESTAMP_UNVERIFIED",
+            "BAR_PUBLICATION_RESEARCH_ONLY",
+        ),
+    )
+    publication = DailyBarPublicationSnapshot(
+        manifest=publication_manifest,
+        rows=(current_row,),
+    )
+    combined_hash = combined_source_snapshot_hash(
+        historical_archive_snapshot_sha256=manifests.snapshot_sha256,
+        publication_snapshot_sha256=publication_manifest.snapshot_sha256,
+    )
+    output = tmp_path / "twse-current-features.parquet"
+    writer = TwseArchiveFeatureParquetWriter(
+        output,
+        dataset_snapshot_sha256=dataset_snapshot_hash(
+            source_archive_snapshot_sha256=combined_hash,
+            current_identity_snapshot_sha256=identities.snapshot_sha256,
+        ),
+        source_archive_snapshot_sha256=combined_hash,
+        current_identity_snapshot_sha256=identities.snapshot_sha256,
+    )
+
+    audit = TwseArchiveFeatureDatasetBuilder(
+        reader,
+        now_fn=lambda: OBSERVED_AT,
+    ).build(
+        manifests=manifests,
+        identities=identities,
+        writer=writer,
+        publication_snapshot=publication,
+    )
+
+    table = pq.read_table(output)
+    assert audit.latest_decision_date == current_date
+    assert audit.publication_snapshot_id == 91
+    assert audit.publication_row_count == 1
+    assert audit.source_archive_snapshot_sha256 == combined_hash
+    assert table["decision_date"][-1].as_py() == current_date
+    assert table["latest_available_at"][-1].as_py() <= table["decision_at"][-1].as_py()
+    assert table["latest_observed_available_at"][-1].as_py() == OBSERVED_AT
+    assert table["decision_close_price"][-1].as_py() == 172.0
+    assert table["archive_id"][-1].as_py() == 91
+    reasons = json.loads(table["reason_codes"][-1].as_py())
+    assert "DAILY_BAR_PUBLICATION_RESEARCH_ONLY" in reasons

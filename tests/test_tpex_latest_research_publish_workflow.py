@@ -7,28 +7,22 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/publish-tpex-latest-research-snapshot.yml"
 
 
-def test_tpex_daily_publish_is_environment_scoped_and_scheduled_after_benchmark() -> None:
+def test_tpex_manual_publish_is_environment_scoped_without_a_stale_schedule() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
 
-    assert 'cron: "0 13 * * 1-5"' in workflow
+    assert "schedule:" not in workflow
+    assert "daily automation uses daily-research-model.yml" in workflow
     assert "target_environment:" in workflow
     assert "- staging" in workflow
     assert "- production" in workflow
-    assert (
-        "environment: ${{ github.event_name == 'schedule' && 'staging' || "
-        "inputs.target_environment }}" in workflow
-    )
+    assert "environment: ${{ inputs.target_environment }}" in workflow
     assert "SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}" in workflow
     assert "SUPABASE_URL: ${{ vars.SUPABASE_URL }}" in workflow
     assert "SUPABASE_URL: ${{ secrets.SUPABASE_URL }}" not in workflow
-    assert (
-        "SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}"
-        in workflow
-    )
+    assert "SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}" in workflow
     assert "ALPHA_LENS_TARGET_ENVIRONMENT: ${{" in workflow
     assert "RESEARCH_PREDICTION_PRODUCTION_PUBLISH_ENABLED: ${{" in workflow
     assert 'test "$GITHUB_EVENT_NAME" = "workflow_dispatch"' in workflow
-    assert 'test "$ALPHA_LENS_TARGET_ENVIRONMENT" = "staging"' in workflow
     assert 'test "$RESEARCH_PREDICTION_PRODUCTION_PUBLISH_ENABLED" = "true"' in workflow
     assert 'test "$RESEARCH_PREDICTION_PRODUCTION_PUBLISH_ENABLED" = "false"' in workflow
     assert "TPEX_DAILY_RESEARCH_PREDICTION_ENABLED == 'true'" in workflow
@@ -65,7 +59,7 @@ def test_tpex_daily_publish_fails_closed_on_stale_features() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
 
     assert "REQUESTED_AS_OF_DATE: ${{ inputs.as_of_date }}" in workflow
-    assert '"$GITHUB_EVENT_NAME" == "schedule"' in workflow
+    assert "schedule:" not in workflow
     assert 'required_as_of_date="$(TZ=Asia/Taipei date +%F)"' in workflow
     assert '"$REQUESTED_AS_OF_DATE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$' in workflow
     assert 'date -u -d "$REQUESTED_AS_OF_DATE" +%F' in workflow
@@ -82,7 +76,4 @@ def test_dispatch_inputs_only_reach_shell_through_environment_variables() -> Non
     assert "REQUESTED_FEATURE_RUN_ID: ${{ inputs.feature_run_id }}" in workflow
     assert "REQUESTED_AS_OF_DATE: ${{ inputs.as_of_date }}" in workflow
     run_blocks = workflow.split("run:")[1:]
-    assert all(
-        "${{ inputs." not in block.split("\n      - name:", 1)[0]
-        for block in run_blocks
-    )
+    assert all("${{ inputs." not in block.split("\n      - name:", 1)[0] for block in run_blocks)

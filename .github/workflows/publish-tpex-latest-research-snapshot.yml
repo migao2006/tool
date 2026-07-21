@@ -1,9 +1,6 @@
 name: Publish TPEX latest research snapshot
 
 on:
-  schedule:
-    # 21:00 Asia/Taipei, after the 20:35 benchmark import window.
-    - cron: "0 13 * * 1-5"
   workflow_dispatch:
     inputs:
       prepared_run_id:
@@ -19,7 +16,7 @@ on:
         required: false
         type: string
       target_environment:
-        description: Publish destination; scheduled runs always use staging
+        description: Manual publish destination; daily automation uses daily-research-model.yml
         required: true
         default: staging
         type: choice
@@ -40,7 +37,7 @@ jobs:
     if: ${{ vars.TPEX_DAILY_RESEARCH_PREDICTION_ENABLED == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 150
-    environment: ${{ github.event_name == 'schedule' && 'staging' || inputs.target_environment }}
+    environment: ${{ inputs.target_environment }}
     env:
       REQUESTED_PREPARED_RUN_ID: ${{ inputs.prepared_run_id }}
       REQUESTED_FEATURE_RUN_ID: ${{ inputs.feature_run_id }}
@@ -48,9 +45,9 @@ jobs:
       SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
       SUPABASE_URL: ${{ vars.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-      ALPHA_LENS_TARGET_ENVIRONMENT: ${{ github.event_name == 'schedule' && 'staging' || inputs.target_environment }}
+      ALPHA_LENS_TARGET_ENVIRONMENT: ${{ inputs.target_environment }}
       RESEARCH_PREDICTION_SUPABASE_PUBLISH_ENABLED: "true"
-      RESEARCH_PREDICTION_PRODUCTION_PUBLISH_ENABLED: ${{ github.event_name != 'schedule' && inputs.target_environment == 'production' && 'true' || 'false' }}
+      RESEARCH_PREDICTION_PRODUCTION_PUBLISH_ENABLED: ${{ inputs.target_environment == 'production' && 'true' || 'false' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -190,9 +187,7 @@ jobs:
           echo "TPEX_FEATURE_SOURCE_RUN_SHA=$feature_run_sha" >> "$GITHUB_ENV"
           echo "TPEX_FEATURE_SOURCE_ARTIFACT_ID=$feature_artifact_id" >> "$GITHUB_ENV"
           echo "TPEX_FEATURE_SOURCE_ARTIFACT_DIGEST=$feature_artifact_digest" >> "$GITHUB_ENV"
-          if [[ "$GITHUB_EVENT_NAME" == "schedule" ]]; then
-            required_as_of_date="$(TZ=Asia/Taipei date +%F)"
-          elif [[ -z "$REQUESTED_AS_OF_DATE" ]]; then
+          if [[ -z "$REQUESTED_AS_OF_DATE" ]]; then
             required_as_of_date="$(TZ=Asia/Taipei date +%F)"
           else
             if [[ ! "$REQUESTED_AS_OF_DATE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
@@ -245,9 +240,6 @@ jobs:
               exit 1
               ;;
           esac
-          if [[ "$GITHUB_EVENT_NAME" == "schedule" ]]; then
-            test "$ALPHA_LENS_TARGET_ENVIRONMENT" = "staging"
-          fi
           case "$SUPABASE_URL" in
             "https://${SUPABASE_PROJECT_REF}.supabase.co"|\
             "https://${SUPABASE_PROJECT_REF}.supabase.co/") ;;

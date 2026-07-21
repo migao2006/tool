@@ -1,0 +1,52 @@
+name: Probe Fugle adjusted historical candles
+
+on:
+  workflow_dispatch:
+    inputs:
+      symbol:
+        description: One explicit symbol used only for the capability probe
+        required: true
+        default: "2330"
+        type: string
+      start_date:
+        description: Inclusive start date (YYYY-MM-DD)
+        required: true
+        default: "2025-05-01"
+        type: string
+      end_date:
+        description: Inclusive end date (YYYY-MM-DD, maximum one year)
+        required: true
+        default: "2025-07-31"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: probe-fugle-adjusted
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          enable-cache: true
+      - name: Install locked dependencies
+        run: uv sync --frozen
+      - name: Run bounded read-only probe
+        env:
+          FUGLE_API_KEY: ${{ secrets.FUGLE_API_KEY }}
+          PROBE_SYMBOL: ${{ inputs.symbol }}
+          PROBE_START_DATE: ${{ inputs.start_date }}
+          PROBE_END_DATE: ${{ inputs.end_date }}
+          API_HTTP_TIMEOUT_SECONDS: "30"
+        run: >-
+          uv run --frozen python -m scripts.probe_fugle_adjusted
+          --symbol "$PROBE_SYMBOL"
+          --start-date "$PROBE_START_DATE"
+          --end-date "$PROBE_END_DATE"
+          --pacing-seconds 1

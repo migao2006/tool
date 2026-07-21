@@ -1,0 +1,89 @@
+name: Backfill TWSE FinMind historical evidence
+
+on:
+  workflow_dispatch:
+    inputs:
+      start_date:
+        description: Earliest event date (YYYY-MM-DD)
+        required: true
+        default: "2000-01-01"
+        type: string
+      end_date:
+        description: Latest event date; blank means today in Asia/Taipei
+        required: false
+        default: ""
+        type: string
+      max_symbols:
+        description: Maximum symbols per credential (1-20)
+        required: true
+        default: 12
+        type: number
+      dry_run:
+        description: Fetch and validate without writing evidence rows
+        required: true
+        default: true
+        type: boolean
+  schedule:
+    - cron: "17 1,7,13,19 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: finmind-historical-evidence-backfill
+  cancel-in-progress: false
+
+jobs:
+  primary:
+    if: ${{ vars.FINMIND_HISTORICAL_EVIDENCE_ENABLED == 'true' }}
+    uses: ./.github/workflows/finmind-historical-evidence-worker.yml
+    with:
+      credential_slot: primary
+      shard_index: 0
+      shard_count: 3
+      batch_index: ${{ fromJSON(github.run_number) }}
+      max_symbols: ${{ fromJSON(inputs.max_symbols || '12') }}
+      start_date: ${{ inputs.start_date || '2000-01-01' }}
+      end_date: ${{ inputs.end_date || '' }}
+      include_global: true
+      dry_run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+    secrets:
+      finmind_token: ${{ secrets.FINMIND_TOKEN }}
+      supabase_url: ${{ secrets.SUPABASE_URL }}
+      supabase_service_role_key: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
+  secondary:
+    if: ${{ vars.FINMIND_HISTORICAL_EVIDENCE_ENABLED == 'true' }}
+    uses: ./.github/workflows/finmind-historical-evidence-worker.yml
+    with:
+      credential_slot: secondary
+      shard_index: 1
+      shard_count: 3
+      batch_index: ${{ fromJSON(github.run_number) }}
+      max_symbols: ${{ fromJSON(inputs.max_symbols || '12') }}
+      start_date: ${{ inputs.start_date || '2000-01-01' }}
+      end_date: ${{ inputs.end_date || '' }}
+      include_global: false
+      dry_run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+    secrets:
+      finmind_token: ${{ secrets.FINMIND_TOKEN_SECONDARY }}
+      supabase_url: ${{ secrets.SUPABASE_URL }}
+      supabase_service_role_key: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
+  tertiary:
+    if: ${{ vars.FINMIND_HISTORICAL_EVIDENCE_ENABLED == 'true' }}
+    uses: ./.github/workflows/finmind-historical-evidence-worker.yml
+    with:
+      credential_slot: tertiary
+      shard_index: 2
+      shard_count: 3
+      batch_index: ${{ fromJSON(github.run_number) }}
+      max_symbols: ${{ fromJSON(inputs.max_symbols || '12') }}
+      start_date: ${{ inputs.start_date || '2000-01-01' }}
+      end_date: ${{ inputs.end_date || '' }}
+      include_global: false
+      dry_run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+    secrets:
+      finmind_token: ${{ secrets.FINMIND_TOKEN_TERTIARY }}
+      supabase_url: ${{ secrets.SUPABASE_URL }}
+      supabase_service_role_key: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}

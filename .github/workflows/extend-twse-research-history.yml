@@ -1,0 +1,92 @@
+name: Extend TWSE research history
+
+on:
+  workflow_dispatch:
+    inputs:
+      max_tasks:
+        description: Maximum FinMind symbols processed by each credential
+        required: true
+        default: 100
+        type: number
+
+permissions:
+  contents: read
+
+# This fixed, non-overlapping slice precedes the existing 2021-07-19 campaign.
+# The shared queue always claims TWSE common stocks before TPEX and ETFs.
+concurrency:
+  group: historical-daily-bar-backfill
+  cancel-in-progress: false
+
+jobs:
+  primary:
+    uses: ./.github/workflows/historical-daily-bar-backfill-worker.yml
+    with:
+      credential_slot: primary-history-extension
+      max_tasks: ${{ fromJSON(github.event.inputs.max_tasks || '100') }}
+      start_date: "2018-01-01"
+      end_date: "2021-07-18"
+      seed_common_tasks: true
+    secrets:
+      finmind_token: ${{ secrets.FINMIND_TOKEN }}
+      r2_access_key_id: ${{ secrets.R2_ACCESS_KEY_ID }}
+      r2_secret_access_key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      supabase_url: ${{ secrets.SUPABASE_URL }}
+      supabase_service_role_key: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
+  secondary:
+    uses: ./.github/workflows/historical-daily-bar-backfill-worker.yml
+    with:
+      credential_slot: secondary-history-extension
+      max_tasks: ${{ fromJSON(github.event.inputs.max_tasks || '100') }}
+      start_date: "2018-01-01"
+      end_date: "2021-07-18"
+      seed_common_tasks: false
+    secrets:
+      finmind_token: ${{ secrets.FINMIND_TOKEN_SECONDARY }}
+      r2_access_key_id: ${{ secrets.R2_ACCESS_KEY_ID }}
+      r2_secret_access_key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      supabase_url: ${{ secrets.SUPABASE_URL }}
+      supabase_service_role_key: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
+  tertiary:
+    uses: ./.github/workflows/historical-daily-bar-backfill-worker.yml
+    with:
+      credential_slot: tertiary-history-extension
+      max_tasks: ${{ fromJSON(github.event.inputs.max_tasks || '100') }}
+      start_date: "2018-01-01"
+      end_date: "2021-07-18"
+      seed_common_tasks: false
+    secrets:
+      finmind_token: ${{ secrets.FINMIND_TOKEN_TERTIARY }}
+      r2_access_key_id: ${{ secrets.R2_ACCESS_KEY_ID }}
+      r2_secret_access_key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      supabase_url: ${{ secrets.SUPABASE_URL }}
+      supabase_service_role_key: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
+  finalize-home-status:
+    needs: [primary, secondary, tertiary]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install uv with dependency caching
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Synchronize locked environment
+        run: uv sync --frozen
+
+      - name: Refresh homepage data status once
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: uv run python -m scripts.refresh_home_data_status

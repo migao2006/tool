@@ -1,0 +1,236 @@
+name: Project tests
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  schedule:
+    # Weekly full regression: Monday 02:20 Asia/Taipei.
+    - cron: "20 18 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: project-tests-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  changes:
+    name: Select test scopes
+    runs-on: ubuntu-24.04
+    outputs:
+      python: ${{ steps.scope.outputs.python }}
+      frontend: ${{ steps.scope.outputs.frontend }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Detect affected scopes
+        id: scope
+        shell: bash
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$EVENT_NAME" != "pull_request" ]]; then
+            echo "python=true" >> "$GITHUB_OUTPUT"
+            echo "frontend=true" >> "$GITHUB_OUTPUT"
+            echo "Non-PR run: selecting the complete regression suite."
+            exit 0
+          fi
+
+          git fetch --no-tags origin \
+            "refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
+          merge_base="$(git merge-base HEAD "origin/${BASE_REF}")"
+          mapfile -t changed_files < <(
+            git diff --name-only --diff-filter=ACMR "$merge_base" HEAD
+          )
+
+          python=false
+          frontend=false
+
+          for path in "${changed_files[@]}"; do
+            case "$path" in
+              .github/workflows/project-tests.yml|.github/actions/*)
+                python=true
+                frontend=true
+                ;;
+              tests/support/frontend_api_fixture_server.py)
+                python=true
+                frontend=true
+                ;;
+              .github/workflows/backfill-historical-daily-bars.yml|pyproject.toml|uv.lock|requirements.lock|config/*|scripts/*.py|src/*.py|tests/*.py|supabase/*)
+                python=true
+                ;;
+              package.json|pnpm-lock.yaml|biome.json|playwright.config.*|index.html|app.js|styles.css|src/*.js|src/*.css|tests/e2e/*)
+                frontend=true
+                ;;
+              AGENTS.md|*.md|docs/*|artifacts/*|.gitignore)
+                # Documentation and generated research artifacts do not execute.
+                ;;
+              *)
+                # Unknown files are treated conservatively to avoid missed regressions.
+                python=true
+                frontend=true
+                ;;
+            esac
+          done
+
+          printf 'python=%s\n' "$python" | tee -a "$GITHUB_OUTPUT"
+          printf 'frontend=%s\n' "$frontend" | tee -a "$GITHUB_OUTPUT"
+          printf 'Changed files:\n%s\n' "${changed_files[*]:-(none)}"
+
+  python-tests:
+    name: Python tests
+    needs: changes
+    if: needs.changes.outputs.python == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install uv with dependency caching
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Synchronize locked test environment
+        run: uv sync --frozen --extra test
+
+      - name: Run Python tests
+        run: uv run pytest
+
+  frontend-tests:
+    name: Frontend and browser tests
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install uv with dependency caching
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - name: Configure Node.js with pnpm store caching
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install locked frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Synchronize fixture-server dependencies
+        run: uv sync --frozen --extra test
+
+      - name: Discover browser tests
+        run: pnpm run check
+
+      - name: Install Chromium and WebKit runtimes
+        run: pnpm exec playwright install --with-deps chromium webkit
+
+      - name: Run browser tests with configured workers
+        run: pnpm run test:e2e
+
+      - name: Preserve mobile UI audit screenshots
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mobile-ui-audit-${{ github.run_id }}
+          path: |
+            artifacts/mobile-ui-audit/**/*
+            artifacts/playwright-results/**/*
+            playwright-report/**/*
+          if-no-files-found: ignore
+          retention-days: 7
+
+  quality-security:
+    name: Quality and security
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install uv with dependency caching
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - name: Configure Node.js for pinned frontend tooling
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Configure Go for pinned workflow and secret scanners
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26.5"
+          cache: false
+
+      - uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2.0.5
+        with:
+          deno-version: v2.8.1
+
+      - name: Run required quality and security checks
+        shell: bash
+        run: scripts/run_quality_security_checks.sh
+
+  test-gate:
+    name: Test gate
+    if: always()
+    needs:
+      - changes
+      - python-tests
+      - frontend-tests
+      - quality-security
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require every selected scope to pass
+        shell: bash
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          FRONTEND_RESULT: ${{ needs.frontend-tests.result }}
+          PYTHON_RESULT: ${{ needs.python-tests.result }}
+          QUALITY_RESULT: ${{ needs.quality-security.result }}
+        run: |
+          set -euo pipefail
+          for result in "$CHANGES_RESULT" "$PYTHON_RESULT" "$FRONTEND_RESULT" "$QUALITY_RESULT"; do
+            if [[ "$result" == "failure" || "$result" == "cancelled" ]]; then
+              echo "A required test scope did not pass (result: $result)."
+              exit 1
+            fi
+          done

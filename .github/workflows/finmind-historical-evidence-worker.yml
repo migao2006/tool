@@ -1,0 +1,128 @@
+name: FinMind historical evidence worker
+
+on:
+  workflow_call:
+    inputs:
+      credential_slot:
+        required: true
+        type: string
+      shard_index:
+        required: true
+        type: number
+      shard_count:
+        required: true
+        type: number
+      batch_index:
+        required: true
+        type: number
+      max_symbols:
+        required: true
+        type: number
+      start_date:
+        required: true
+        type: string
+      end_date:
+        required: false
+        type: string
+      include_global:
+        required: true
+        type: boolean
+      dry_run:
+        required: true
+        type: boolean
+    secrets:
+      finmind_token:
+        required: true
+      supabase_url:
+        required: true
+      supabase_service_role_key:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  backfill:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install uv with dependency caching
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Synchronize locked environment
+        run: uv sync --frozen
+
+      - name: Run quota-aware evidence batch
+        env:
+          FINMIND_TOKEN: ${{ secrets.finmind_token }}
+          SUPABASE_URL: ${{ secrets.supabase_url }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.supabase_service_role_key }}
+          API_HTTP_TIMEOUT_SECONDS: "30"
+          START_DATE: ${{ inputs.start_date }}
+          END_DATE: ${{ inputs.end_date }}
+          SHARD_INDEX: ${{ inputs.shard_index }}
+          SHARD_COUNT: ${{ inputs.shard_count }}
+          BATCH_INDEX: ${{ inputs.batch_index }}
+          MAX_SYMBOLS: ${{ inputs.max_symbols }}
+          CREDENTIAL_SLOT: ${{ inputs.credential_slot }}
+          INCLUDE_GLOBAL: ${{ inputs.include_global }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "$START_DATE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+            echo "start_date must use YYYY-MM-DD"
+            exit 2
+          fi
+          if [[ -n "$END_DATE" && ! "$END_DATE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+            echo "end_date must be blank or use YYYY-MM-DD"
+            exit 2
+          fi
+          if [[ ! "$SHARD_INDEX" =~ ^[0-9]+$ || ! "$SHARD_COUNT" =~ ^[0-9]+$ || ! "$BATCH_INDEX" =~ ^[0-9]+$ || ! "$MAX_SYMBOLS" =~ ^[0-9]+$ ]]; then
+            echo "numeric workflow inputs are invalid"
+            exit 2
+          fi
+          if [[ ! "$CREDENTIAL_SLOT" =~ ^(primary|secondary|tertiary)$ ]]; then
+            echo "credential_slot is invalid"
+            exit 2
+          fi
+          args=(
+            --start-date "$START_DATE"
+            --shard-index "$SHARD_INDEX"
+            --shard-count "$SHARD_COUNT"
+            --batch-index "$BATCH_INDEX"
+            --max-symbols "$MAX_SYMBOLS"
+            --pacing-seconds 7.5
+            --quota-reserve 30
+            --credential-slot "$CREDENTIAL_SLOT"
+            --defer-on-quota
+            --output finmind-historical-evidence-summary.json
+          )
+          if [[ -n "$END_DATE" ]]; then
+            args+=(--end-date "$END_DATE")
+          fi
+          if [[ "$INCLUDE_GLOBAL" == "true" ]]; then
+            args+=(--include-global)
+          fi
+          if [[ "$DRY_RUN" == "true" ]]; then
+            args+=(--dry-run)
+          fi
+          uv run python -m scripts.backfill_finmind_historical_evidence "${args[@]}"
+
+      - name: Preserve RESEARCH_ONLY evidence audit summary
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: finmind-historical-evidence-${{ inputs.credential_slot }}-${{ github.run_id }}
+          path: finmind-historical-evidence-summary.json
+          if-no-files-found: warn
+          retention-days: 90

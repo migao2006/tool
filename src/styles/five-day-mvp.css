@@ -1,0 +1,110 @@
+.eyebrow {
+  display: block;
+  margin-bottom: 3px;
+  color: var(--green);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.action-heading { align-items: flex-end; flex-wrap: wrap; }
+.action-heading > :first-child { min-width: 0; flex: 1 1 12rem; }
+
+.icon-text-button,
+.drawer-close {
+  min-height: 44px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--green);
+  font-size: 0.76rem;
+  font-weight: 650;
+}
+
+small {
+  color: var(--muted-2);
+  font-size: 0.62rem;
+  font-weight: 500;
+}
+
+.overview-facts,
+.field-list,
+.audit-list,
+.report-list {
+  margin: 12px 0 0;
+}
+
+.overview-facts > div,
+.field-list > div,
+.audit-list > div,
+.report-list > div {
+  min-width: 0;
+  min-height: 43px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 0.5px solid var(--separator-soft);
+}
+
+.overview-facts > div:last-child,
+.field-list > div:last-child,
+.audit-list > div:last-child,
+.report-list > div:last-child { border-bottom: 0; }
+
+dt { min-width: 0; color: var(--muted); font-size: 0.71rem; overflow-wrap: anywhere; word-break: break-word; }
+dd { min-width: 0; margin: 0; font-size: 0.76rem; font-weight: 620; text-align: right; overflow-wrap: anywhere; word-break: break-word; }
+
+.full-width { width: 100%; }
+
+.quantile-note,
+.form-note {
+  margin: 12px 0 0;
+  color: var(--muted);
+  font-size: 0.71rem;
+}
+
+.reason-code,
+.reason-list,
+.gate-main code {
+  display: inline-block;
+  margin-top: 9px;
+  color: var(--amber);
+  font: 0.65rem/1.35 ui-monospace, SFMono-Regular, Menlo, monospace;
+  overflow-wrap: anywhere;
+}
+
+.wide-filter-grid { grid-template-columns: repeat(2, 1fr); }
+
+.filter-grid input {
+  width: 100%;
+  min-height: 34px;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 0.78rem;
+}
+
+body[data-system-status="PASS"] .system-badge,
+body[data-system-status="PASS"] .top-status {
+  background: var(--green-soft);
+  color: var(--green);
+}
+
+body[data-system-status="FAIL"] .system-badge,
+body[data-system-status="FAIL"] .top-status {
+  background: rgba(255, 69, 58, 0.14);
+  color: var(--red);
+}
+
+body[data-ui-state="research_only"] [data-traceability-status] { display: none; }
+
+body[data-ui-state="loading"] [data-candidate-list],
+body[data-ui-state="loading"] [data-overview-candidates],
+body[data-ui-state="loading"] [data-watchlist-results] {
+  opacity: 0.72;
+}

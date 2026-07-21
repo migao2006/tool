@@ -1,0 +1,82 @@
+export const authTitles = Object.freeze({
+  signin: "登入",
+  signup: "建立帳號",
+  forgot: "重設密碼",
+  "update-password": "設定新密碼",
+  account: "帳戶",
+});
+
+export function createAccountEntryMarkup() {
+  return `
+    <div class="auth-entry-card">
+      <div class="auth-entry-copy">
+        <strong data-auth-entry-title>登入後使用自選股</strong>
+        <small data-auth-entry-detail>同步自選清單與模型警示</small>
+      </div>
+      <button class="auth-account-button" type="button" data-auth-open aria-haspopup="dialog">
+        <span class="auth-account-icon" aria-hidden="true"></span>
+        <span data-auth-account-label>登入</span>
+      </button>
+    </div>`;
+}
+
+export function createAuthDialogMarkup() {
+  return `
+    <dialog class="auth-dialog" data-auth-dialog aria-labelledby="auth-dialog-title" tabindex="-1">
+      <div class="auth-sheet">
+        <header class="auth-header">
+          <div><small>Alpha Lens</small><h2 id="auth-dialog-title">登入</h2></div>
+          <button class="auth-close" type="button" data-auth-close aria-label="關閉">×</button>
+        </header>
+        <p class="auth-status" data-auth-status role="status" hidden></p>
+
+        <section class="auth-view" data-auth-view="signin">
+          <form data-auth-form="signin">
+            <label class="auth-field"><span>Email</span><input name="email" type="email" autocomplete="email" required /></label>
+            <label class="auth-field"><span>密碼</span><input name="password" type="password" autocomplete="current-password" required /></label>
+            <button class="auth-primary" type="submit" data-auth-submit>登入</button>
+          </form>
+          <div class="auth-link-row auth-link-row-split">
+            <button type="button" data-auth-view-target="forgot">忘記密碼</button>
+            <button type="button" data-auth-view-target="signup">建立帳號</button>
+          </div>
+        </section>
+
+        <section class="auth-view" data-auth-view="signup" hidden>
+          <p class="auth-description">建立後需點擊 Supabase 寄送的確認連結。</p>
+          <form data-auth-form="signup">
+            <label class="auth-field"><span>Email</span><input name="email" type="email" autocomplete="email" required /></label>
+            <label class="auth-field"><span>密碼</span><input name="password" type="password" autocomplete="new-password" minlength="8" required /></label>
+            <label class="auth-field"><span>確認密碼</span><input name="passwordConfirm" type="password" autocomplete="new-password" minlength="8" required /></label>
+            <button class="auth-primary" type="submit" data-auth-submit>建立帳號</button>
+          </form>
+          <button class="auth-back" type="button" data-auth-view-target="signin">返回登入</button>
+        </section>
+
+        <section class="auth-view" data-auth-view="forgot" hidden>
+          <p class="auth-description">輸入 Email 後，我們會寄送密碼重設連結。為保護帳號，畫面不會透露此 Email 是否已註冊。</p>
+          <form data-auth-form="request-reset">
+            <label class="auth-field"><span>Email</span><input name="email" type="email" autocomplete="email" required /></label>
+            <button class="auth-primary" type="submit" data-auth-submit>寄送重設連結</button>
+          </form>
+          <button class="auth-back" type="button" data-auth-view-target="signin">返回登入</button>
+        </section>
+
+        <section class="auth-view" data-auth-view="update-password" hidden>
+          <p class="auth-description">此連結只應在你主動申請重設密碼後使用。新密碼至少需要 8 個字元。</p>
+          <form data-auth-form="update-password">
+            <label class="auth-field"><span>新密碼</span><input name="password" type="password" autocomplete="new-password" minlength="8" required /></label>
+            <label class="auth-field"><span>確認新密碼</span><input name="passwordConfirm" type="password" autocomplete="new-password" minlength="8" required /></label>
+            <button class="auth-primary" type="submit" data-auth-submit>更新密碼</button>
+          </form>
+        </section>
+
+        <section class="auth-view auth-account-view" data-auth-view="account" hidden>
+          <span class="auth-large-icon" aria-hidden="true"></span>
+          <strong data-auth-account-email>—</strong>
+          <p>登入狀態會安全保留在這台裝置。</p>
+          <button class="auth-secondary" type="button" data-auth-signout>登出</button>
+        </section>
+      </div>
+    </dialog>`;
+}

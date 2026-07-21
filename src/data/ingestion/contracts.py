@@ -35,6 +35,13 @@ class ImportSummary:
 class IngestionError(RuntimeError):
     """Stable ingestion error that never embeds credentials or row payloads."""
 
-    def __init__(self, reason_code: str, message: str) -> None:
+    def __init__(
+        self,
+        reason_code: str,
+        message: str,
+        *,
+        context: Mapping[str, object] | None = None,
+    ) -> None:
         super().__init__(message)
         self.reason_code = reason_code
+        self.context = dict(context or {})

@@ -138,7 +138,6 @@ export interface BacktestRunRow extends JsonRecord {
   completed_at: string | null;
 }
 
-
 export interface TradingCalendarObservationRow extends JsonRecord {
   market: MarketScope;
   trading_date: string;

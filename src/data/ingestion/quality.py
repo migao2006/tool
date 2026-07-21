@@ -62,6 +62,11 @@ def validate_first_stage_batch(
         raise IngestionError(
             "SOURCE_MARKET_DATE_MISMATCH",
             "TWSE and TPEX daily bars are not aligned to the same trading date",
+            context={
+                "requested_as_of_date": requested_as_of_date.isoformat(),
+                "twse_source_date": dates["TWSE"].isoformat(),
+                "tpex_source_date": dates["TPEX"].isoformat(),
+            },
         )
     source_date = dates["TWSE"]
     if source_date > requested_as_of_date:

@@ -31,9 +31,7 @@ function calendar(
       market: "TWSE",
       trading_date: tradingDate,
       is_trading_day: isTradingDay,
-      decision_data_cutoff_at: isTradingDay
-        ? `${tradingDate}T09:00:00Z`
-        : null,
+      decision_data_cutoff_at: isTradingDay ? `${tradingDate}T09:00:00Z` : null,
       calendar_verification_status: "VERIFIED",
       market_basis: "SOURCE_ASSERTED",
       available_at: `${tradingDate}T00:00:00Z`,

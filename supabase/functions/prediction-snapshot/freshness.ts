@@ -69,7 +69,9 @@ function compareIsoDates(left: string, right: string): number {
 
 function requiredCoverageDate(now: Date, readyHourTaipei: number): string {
   const local = taipeiClock(now);
-  return local.hour >= readyHourTaipei ? local.date : addUtcDays(local.date, -1);
+  return local.hour >= readyHourTaipei
+    ? local.date
+    : addUtcDays(local.date, -1);
 }
 
 function verifiedObservationMap(
@@ -135,7 +137,8 @@ function wallClockFallback(
 ): FreshnessEvaluation {
   const latestAvailableAt = Date.parse(run.latest_available_at);
   const stale = !Number.isFinite(latestAvailableAt) ||
-    now.getTime() - latestAvailableAt > fallbackStaleHours * MILLISECONDS_PER_HOUR;
+    now.getTime() - latestAvailableAt >
+      fallbackStaleHours * MILLISECONDS_PER_HOUR;
   return {
     stale,
     reasonCodes: [
@@ -213,9 +216,10 @@ export function evaluateSnapshotFreshness(
     );
   }
 
-  const coverageEnd = compareIsoDates(latestSession.trading_date, requiredDate) > 0
-    ? latestSession.trading_date
-    : requiredDate;
+  const coverageEnd =
+    compareIsoDates(latestSession.trading_date, requiredDate) > 0
+      ? latestSession.trading_date
+      : requiredDate;
   const coverage = contiguousCoverage(verified, coverageEnd, lookbackDays);
   if (!coverage.complete) {
     return wallClockFallback(

@@ -329,3 +329,8 @@ def test_quality_gate_rejects_future_or_misaligned_source_dates() -> None:
             tpex_bars=[{"trade_date": "2026-07-16"}] * 500,
         )
     assert mismatch.value.reason_code == "SOURCE_MARKET_DATE_MISMATCH"
+    assert mismatch.value.context == {
+        "requested_as_of_date": "2026-07-18",
+        "twse_source_date": "2026-07-17",
+        "tpex_source_date": "2026-07-16",
+    }

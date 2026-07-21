@@ -36,7 +36,8 @@ X-Alpha-Lens-Contract: prediction-snapshot.v1
 
 ## 交易日曆感知 freshness
 
-快照過期判斷優先使用 `market_data.trading_calendar_observations` 中符合下列全部條件的 point-in-time 觀測：
+快照過期判斷優先使用 `market_data.trading_calendar_observations`
+中符合下列全部條件的 point-in-time 觀測：
 
 - `calendar_verification_status=VERIFIED`
 - `market_basis=SOURCE_ASSERTED`
@@ -44,9 +45,14 @@ X-Alpha-Lens-Contract: prediction-snapshot.v1
 - `system_status=PASS`
 - `available_at <= request observed_at`
 
-Edge Function 必須取得連續日曆覆蓋，並以已完成的 `decision_data_cutoff_at` 找出最近應完成交易 session。週末、國定假日與來源明確標示的臨時休市均由日曆處理。若可信日曆不存在、缺日或尚未覆蓋必要日期，系統會明確加入 `PREDICTION_FRESHNESS_WALL_CLOCK_FALLBACK`，再採用 `PREDICTION_STALE_AFTER_HOURS` 的保守門檻；不得自行猜測休市日。
+Edge Function 必須取得連續日曆覆蓋，並以已完成的 `decision_data_cutoff_at`
+找出最近應完成交易
+session。週末、國定假日與來源明確標示的臨時休市均由日曆處理。若可信日曆不存在、缺日或尚未覆蓋必要日期，系統會明確加入
+`PREDICTION_FRESHNESS_WALL_CLOCK_FALLBACK`，再採用
+`PREDICTION_STALE_AFTER_HOURS` 的保守門檻；不得自行猜測休市日。
 
-回應的 `freshness.method` 只會是 `TRADING_CALENDAR` 或 `WALL_CLOCK_FALLBACK`，並附帶覆蓋範圍、預期 session 與原因碼。
+回應的 `freshness.method` 只會是 `TRADING_CALENDAR` 或
+`WALL_CLOCK_FALLBACK`，並附帶覆蓋範圍、預期 session 與原因碼。
 
 ## 環境設定
 
@@ -58,14 +64,16 @@ Supabase 自動提供：
 必須另設：
 
 - `PREDICTION_ALLOWED_ORIGINS`：以逗號分隔的完整 origin allowlist，不支援 `*`。
-- `PREDICTION_STALE_AFTER_HOURS`：可選，僅作日曆資料不可用時的保守 fallback，預設 `72`。
+- `PREDICTION_STALE_AFTER_HOURS`：可選，僅作日曆資料不可用時的保守
+  fallback，預設 `72`。
 - `PREDICTION_CALENDAR_READY_HOUR_TAIPEI`：可選，台北時間 0～23，預設 `17`。
-- `PREDICTION_CALENDAR_LOOKBACK_DAYS`：可選，連續覆蓋天數 14～62，預設 `45`；RPC 固定取回 63 個曆日，以涵蓋就緒時間前的最大 lookback 邊界。
+- `PREDICTION_CALENDAR_LOOKBACK_DAYS`：可選，連續覆蓋天數 14～62，預設 `45`；RPC
+  固定取回 63 個曆日，以涵蓋就緒時間前的最大 lookback 邊界。
 - `PREDICTION_DATABASE_TIMEOUT_MS`：單次 PostgREST 呼叫上限，預設 `4000`。
 - `PREDICTION_REQUEST_TIMEOUT_MS`：整體請求上限，預設 `10000`。
 - `PREDICTION_SNAPSHOT_READ_MODE`：`rpc`（預設）或 `legacy`。必須先在目標環境
-  依序套用並驗證基礎 RPC 與 calendar freshness v2 migration，再部署預設 `rpc` 的 Function；`legacy` 只作經核准的
-  緊急回復，不得作為長期設定。
+  依序套用並驗證基礎 RPC 與 calendar freshness v2 migration，再部署預設 `rpc` 的
+  Function；`legacy` 只作經核准的 緊急回復，不得作為長期設定。
 
 `SUPABASE_SERVICE_ROLE_KEY` 只由 Function 對 PostgREST 使用，不得傳入前端、
 回應、URL 或 log。因公開快照允許未登入使用者讀取，本 Function 在

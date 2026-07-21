@@ -1,14 +1,6 @@
 name: Import market data
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - .github/workflows/import-market-data.yml
-      - scripts/import_market_data.py
-      - src/data/ingestion/**
-      - src/data/providers/**
   workflow_dispatch:
     inputs:
       dry_run:
@@ -30,7 +22,7 @@ concurrency:
 jobs:
   import:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -46,8 +38,28 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           API_HTTP_TIMEOUT_SECONDS: "30"
         run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.dry_run }}" == "true" ]]; then
-            python -m scripts.import_market_data --dry-run
-          else
-            python -m scripts.import_market_data
-          fi
+          set -uo pipefail
+          max_attempts=4
+          attempt=1
+          while (( attempt <= max_attempts )); do
+            set +e
+            if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.dry_run }}" == "true" ]]; then
+              python -m scripts.import_market_data --dry-run
+            else
+              python -m scripts.import_market_data
+            fi
+            status=$?
+            set -e
+
+            if (( status == 0 )); then
+              exit 0
+            fi
+            if (( status != 75 || attempt == max_attempts )); then
+              exit "$status"
+            fi
+
+            delay_seconds=$((attempt * 180))
+            echo "::warning::TWSE/TPEX source dates are temporarily misaligned; retrying in ${delay_seconds}s (attempt ${attempt}/${max_attempts})."
+            sleep "$delay_seconds"
+            attempt=$((attempt + 1))
+          done

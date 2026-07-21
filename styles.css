@@ -818,6 +818,11 @@ h2 {
   .bottom-nav button:hover { color: var(--text); }
 }
 
+
+html.is-scroll-restoring {
+  scroll-behavior: auto !important;
+}
+
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
   *, *::before, *::after {

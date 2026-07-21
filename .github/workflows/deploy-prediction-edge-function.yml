@@ -6,6 +6,10 @@ on:
       - ".github/workflows/deploy-prediction-edge-function.yml"
       - ".github/scripts/smoke-prediction-snapshot.mjs"
       - "supabase/functions/prediction-snapshot/**"
+      - "supabase/migrations/20260720170000_prediction_snapshot_rate_limit.sql"
+      - "supabase/snippets/validate_prediction_snapshot_rate_limit.sql"
+      - "supabase/migrations/20260720190000_prediction_snapshot_read_rpc.sql"
+      - "supabase/snippets/validate_prediction_snapshot_read_rpc.sql"
       - "supabase/config.toml"
   push:
     branches:
@@ -14,6 +18,10 @@ on:
       - ".github/workflows/deploy-prediction-edge-function.yml"
       - ".github/scripts/smoke-prediction-snapshot.mjs"
       - "supabase/functions/prediction-snapshot/**"
+      - "supabase/migrations/20260720170000_prediction_snapshot_rate_limit.sql"
+      - "supabase/snippets/validate_prediction_snapshot_rate_limit.sql"
+      - "supabase/migrations/20260720190000_prediction_snapshot_read_rpc.sql"
+      - "supabase/snippets/validate_prediction_snapshot_read_rpc.sql"
       - "supabase/config.toml"
   workflow_dispatch:
     inputs:
@@ -24,6 +32,11 @@ on:
         options:
           - staging
           - production
+      rpc_migration_verified:
+        description: I verified the snapshot read RPC migration on every environment this run may target
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -37,11 +50,11 @@ jobs:
     name: Edge Function tests
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: denoland/setup-deno@v2
+      - uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2.0.5
         with:
-          deno-version: v2.x
+          deno-version: v2.8.1
 
       - name: Check and test prediction-snapshot
         working-directory: supabase/functions/prediction-snapshot
@@ -80,12 +93,20 @@ jobs:
       SUPABASE_URL: ${{ vars.SUPABASE_URL }}
       PREDICTION_ALLOWED_ORIGINS: ${{ vars.PREDICTION_ALLOWED_ORIGINS }}
       PREDICTION_STALE_AFTER_HOURS: ${{ vars.PREDICTION_STALE_AFTER_HOURS }}
+      PREDICTION_DATABASE_TIMEOUT_MS: ${{ vars.PREDICTION_DATABASE_TIMEOUT_MS }}
+      PREDICTION_REQUEST_TIMEOUT_MS: ${{ vars.PREDICTION_REQUEST_TIMEOUT_MS }}
+      PREDICTION_SNAPSHOT_READ_MODE: ${{ vars.PREDICTION_SNAPSHOT_READ_MODE }}
+      PREDICTION_RATE_LIMIT_ENABLED: ${{ vars.PREDICTION_RATE_LIMIT_ENABLED }}
+      PREDICTION_RATE_LIMIT_REQUESTS: ${{ vars.PREDICTION_RATE_LIMIT_REQUESTS }}
+      PREDICTION_RATE_LIMIT_WINDOW_SECONDS: ${{ vars.PREDICTION_RATE_LIMIT_WINDOW_SECONDS }}
+      PREDICTION_RATE_LIMIT_CLIENT_IP_HEADER: ${{ vars.PREDICTION_RATE_LIMIT_CLIENT_IP_HEADER }}
+      PREDICTION_RATE_LIMIT_KEY_SECRET: ${{ secrets.PREDICTION_RATE_LIMIT_KEY_SECRET }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: pnpm/action-setup@v6.0.9
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22"
           cache: pnpm
@@ -102,15 +123,46 @@ jobs:
           test -n "$SUPABASE_PROJECT_REF"
           test -n "$SUPABASE_URL"
           test -n "$PREDICTION_ALLOWED_ORIGINS"
+          snapshot_read_mode="${PREDICTION_SNAPSHOT_READ_MODE:-rpc}"
+          [[ "$snapshot_read_mode" =~ ^(rpc|legacy)$ ]]
+          if [[ "$snapshot_read_mode" == "rpc" && "${{ inputs.rpc_migration_verified }}" != "true" ]]; then
+            echo "RPC mode requires verified migration attestation." >&2
+            exit 1
+          fi
+          rate_limit_enabled="${PREDICTION_RATE_LIMIT_ENABLED:-false}"
+          rate_limit_client_ip_header="${PREDICTION_RATE_LIMIT_CLIENT_IP_HEADER:-CF-Connecting-IP}"
+          if [[ "${rate_limit_enabled,,}" == "true" ]]; then
+            test "${#PREDICTION_RATE_LIMIT_KEY_SECRET}" -ge 32
+            [[ "$rate_limit_client_ip_header" =~ ^[A-Za-z0-9-]{1,64}$ ]]
+          fi
 
-      - name: Configure function allowlist
+      - name: Configure function runtime settings
         shell: bash
         run: |
           set -euo pipefail
           stale_hours="${PREDICTION_STALE_AFTER_HOURS:-72}"
-          pnpm exec supabase secrets set \
-            "PREDICTION_ALLOWED_ORIGINS=$PREDICTION_ALLOWED_ORIGINS" \
-            "PREDICTION_STALE_AFTER_HOURS=$stale_hours" \
+          database_timeout_ms="${PREDICTION_DATABASE_TIMEOUT_MS:-4000}"
+          request_timeout_ms="${PREDICTION_REQUEST_TIMEOUT_MS:-10000}"
+          snapshot_read_mode="${PREDICTION_SNAPSHOT_READ_MODE:-rpc}"
+          rate_limit_enabled="${PREDICTION_RATE_LIMIT_ENABLED:-false}"
+          rate_limit_requests="${PREDICTION_RATE_LIMIT_REQUESTS:-30}"
+          rate_limit_window_seconds="${PREDICTION_RATE_LIMIT_WINDOW_SECONDS:-60}"
+          rate_limit_client_ip_header="${PREDICTION_RATE_LIMIT_CLIENT_IP_HEADER:-CF-Connecting-IP}"
+          settings=(
+            "PREDICTION_ALLOWED_ORIGINS=$PREDICTION_ALLOWED_ORIGINS"
+            "PREDICTION_STALE_AFTER_HOURS=$stale_hours"
+            "PREDICTION_DATABASE_TIMEOUT_MS=$database_timeout_ms"
+            "PREDICTION_REQUEST_TIMEOUT_MS=$request_timeout_ms"
+            "PREDICTION_SNAPSHOT_READ_MODE=$snapshot_read_mode"
+            "PREDICTION_RATE_LIMIT_ENABLED=$rate_limit_enabled"
+            "PREDICTION_RATE_LIMIT_REQUESTS=$rate_limit_requests"
+            "PREDICTION_RATE_LIMIT_WINDOW_SECONDS=$rate_limit_window_seconds"
+            "PREDICTION_RATE_LIMIT_CLIENT_IP_HEADER=$rate_limit_client_ip_header"
+          )
+          if [[ "${rate_limit_enabled,,}" == "true" ]]; then
+            settings+=("PREDICTION_RATE_LIMIT_KEY_SECRET=$PREDICTION_RATE_LIMIT_KEY_SECRET")
+          fi
+          pnpm exec supabase secrets set "${settings[@]}" \
             --project-ref "$SUPABASE_PROJECT_REF"
 
       - name: Deploy prediction-snapshot through GitHub
@@ -133,12 +185,20 @@ jobs:
       SUPABASE_URL: ${{ vars.SUPABASE_URL }}
       PREDICTION_ALLOWED_ORIGINS: ${{ vars.PREDICTION_ALLOWED_ORIGINS }}
       PREDICTION_STALE_AFTER_HOURS: ${{ vars.PREDICTION_STALE_AFTER_HOURS }}
+      PREDICTION_DATABASE_TIMEOUT_MS: ${{ vars.PREDICTION_DATABASE_TIMEOUT_MS }}
+      PREDICTION_REQUEST_TIMEOUT_MS: ${{ vars.PREDICTION_REQUEST_TIMEOUT_MS }}
+      PREDICTION_SNAPSHOT_READ_MODE: ${{ vars.PREDICTION_SNAPSHOT_READ_MODE }}
+      PREDICTION_RATE_LIMIT_ENABLED: ${{ vars.PREDICTION_RATE_LIMIT_ENABLED }}
+      PREDICTION_RATE_LIMIT_REQUESTS: ${{ vars.PREDICTION_RATE_LIMIT_REQUESTS }}
+      PREDICTION_RATE_LIMIT_WINDOW_SECONDS: ${{ vars.PREDICTION_RATE_LIMIT_WINDOW_SECONDS }}
+      PREDICTION_RATE_LIMIT_CLIENT_IP_HEADER: ${{ vars.PREDICTION_RATE_LIMIT_CLIENT_IP_HEADER }}
+      PREDICTION_RATE_LIMIT_KEY_SECRET: ${{ secrets.PREDICTION_RATE_LIMIT_KEY_SECRET }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: pnpm/action-setup@v6.0.9
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22"
           cache: pnpm
@@ -156,15 +216,46 @@ jobs:
           test -n "$SUPABASE_PROJECT_REF"
           test -n "$SUPABASE_URL"
           test -n "$PREDICTION_ALLOWED_ORIGINS"
+          snapshot_read_mode="${PREDICTION_SNAPSHOT_READ_MODE:-rpc}"
+          [[ "$snapshot_read_mode" =~ ^(rpc|legacy)$ ]]
+          if [[ "$snapshot_read_mode" == "rpc" && "${{ inputs.rpc_migration_verified }}" != "true" ]]; then
+            echo "RPC mode requires verified migration attestation." >&2
+            exit 1
+          fi
+          rate_limit_enabled="${PREDICTION_RATE_LIMIT_ENABLED:-false}"
+          rate_limit_client_ip_header="${PREDICTION_RATE_LIMIT_CLIENT_IP_HEADER:-CF-Connecting-IP}"
+          if [[ "${rate_limit_enabled,,}" == "true" ]]; then
+            test "${#PREDICTION_RATE_LIMIT_KEY_SECRET}" -ge 32
+            [[ "$rate_limit_client_ip_header" =~ ^[A-Za-z0-9-]{1,64}$ ]]
+          fi
 
-      - name: Configure function allowlist
+      - name: Configure function runtime settings
         shell: bash
         run: |
           set -euo pipefail
           stale_hours="${PREDICTION_STALE_AFTER_HOURS:-72}"
-          pnpm exec supabase secrets set \
-            "PREDICTION_ALLOWED_ORIGINS=$PREDICTION_ALLOWED_ORIGINS" \
-            "PREDICTION_STALE_AFTER_HOURS=$stale_hours" \
+          database_timeout_ms="${PREDICTION_DATABASE_TIMEOUT_MS:-4000}"
+          request_timeout_ms="${PREDICTION_REQUEST_TIMEOUT_MS:-10000}"
+          snapshot_read_mode="${PREDICTION_SNAPSHOT_READ_MODE:-rpc}"
+          rate_limit_enabled="${PREDICTION_RATE_LIMIT_ENABLED:-false}"
+          rate_limit_requests="${PREDICTION_RATE_LIMIT_REQUESTS:-30}"
+          rate_limit_window_seconds="${PREDICTION_RATE_LIMIT_WINDOW_SECONDS:-60}"
+          rate_limit_client_ip_header="${PREDICTION_RATE_LIMIT_CLIENT_IP_HEADER:-CF-Connecting-IP}"
+          settings=(
+            "PREDICTION_ALLOWED_ORIGINS=$PREDICTION_ALLOWED_ORIGINS"
+            "PREDICTION_STALE_AFTER_HOURS=$stale_hours"
+            "PREDICTION_DATABASE_TIMEOUT_MS=$database_timeout_ms"
+            "PREDICTION_REQUEST_TIMEOUT_MS=$request_timeout_ms"
+            "PREDICTION_SNAPSHOT_READ_MODE=$snapshot_read_mode"
+            "PREDICTION_RATE_LIMIT_ENABLED=$rate_limit_enabled"
+            "PREDICTION_RATE_LIMIT_REQUESTS=$rate_limit_requests"
+            "PREDICTION_RATE_LIMIT_WINDOW_SECONDS=$rate_limit_window_seconds"
+            "PREDICTION_RATE_LIMIT_CLIENT_IP_HEADER=$rate_limit_client_ip_header"
+          )
+          if [[ "${rate_limit_enabled,,}" == "true" ]]; then
+            settings+=("PREDICTION_RATE_LIMIT_KEY_SECRET=$PREDICTION_RATE_LIMIT_KEY_SECRET")
+          fi
+          pnpm exec supabase secrets set "${settings[@]}" \
             --project-ref "$SUPABASE_PROJECT_REF"
 
       - name: Deploy prediction-snapshot through GitHub

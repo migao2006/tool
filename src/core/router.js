@@ -10,10 +10,12 @@ const ROUTE_TITLES = Object.freeze({
 
 function setScrollPosition(top) {
   const root = document.documentElement;
-  const previousBehavior = root.style.scrollBehavior;
-  root.style.scrollBehavior = "auto";
-  window.scrollTo({ top, left: 0, behavior: "auto" });
-  root.style.scrollBehavior = previousBehavior;
+  root.classList.add("is-scroll-restoring");
+  try {
+    window.scrollTo({ top, left: 0, behavior: "auto" });
+  } finally {
+    root.classList.remove("is-scroll-restoring");
+  }
 }
 
 function routeRequest(value, stockKey = null) {

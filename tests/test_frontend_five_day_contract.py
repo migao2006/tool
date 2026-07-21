@@ -78,13 +78,23 @@ def test_prediction_client_accepts_horizon_fetches_only_when_configured() -> Non
     assert "PREDICTION_API_CONTRACT_ERROR" in client
 
 
-def test_watchlist_api_requires_session_and_refreshes_after_auth_changes() -> None:
+def test_watchlist_api_is_capability_gated_until_persistence_exists() -> None:
     app = read("app.js")
+    config = read("src/core/public-config.js")
     watchlist = read("src/data/watchlist-api.js")
     stock = read("src/pages/stock-detail-page.js")
     auth_controller = read("src/auth/auth-controller.js")
 
     assert "data-toggle-watchlist" in stock
+    assert "watchlistPersistenceEnabled: false" in config
+    assert "自選股儲存功能尚未上線" in stock
+    assert "button.disabled = !watchlistPersistenceEnabled" in app
+    assert "!button || button.disabled || !watchlistPersistenceEnabled" in app
+    assert "config.watchlistPersistenceEnabled !== true" in watchlist
+    assert watchlist.index("config.watchlistPersistenceEnabled !== true") < watchlist.index(
+        "token = await readSupabaseAccessToken"
+    )
+    assert "WATCHLIST_NOT_AVAILABLE" in watchlist
     assert "readSupabaseAccessToken" in watchlist
     assert 'method: selected ? "PUT" : "DELETE"' in watchlist
     assert "WATCHLIST_AUTH_REQUIRED" in watchlist
@@ -230,6 +240,7 @@ def test_prediction_schema_rejects_wrong_horizon_and_invalid_formal_output() -> 
     assert "使用了決策時間之後的資料" in contract
     assert "決策 gate 缺漏或順序錯誤" in contract
     assert 'market_regime: nullableString(firstValue(record' in contract
+    assert "industry_classification_effective_to" in contract
 
 
 def test_forbidden_unverified_outputs_are_absent_from_stock_page() -> None:

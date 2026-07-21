@@ -1,6 +1,6 @@
 # 產品與 UI 規範
 
-> 2026-07-19 現況：頁面與資料契約已建立，但 `predictionApiBaseUrl` 尚未接上正式模型快照。正式模型欄位顯示 `—`，系統維持 `RESEARCH_ONLY`；Supabase 資料累積摘要不等於可推薦模型。完整狀態見 [`current-status.md`](current-status.md)。
+> 2026-07-20 現況：頁面已設定 Production Prediction Edge Function URL，公開研究快照仍維持 `RESEARCH_ONLY`；Watchlist 持久化能力尚未上線，相關控制保持停用。Supabase 資料累積摘要不等於可推薦模型。完整狀態見 [`current-status.md`](current-status.md)，部署證據邊界見 [`release-state.md`](release-state.md)。
 
 ## 一、固定使用者頁面
 

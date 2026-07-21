@@ -215,8 +215,10 @@ export function buildSnapshot(
     .toISOString().slice(0, 10);
   for (const row of rows.currentSecurityHistory) {
     const availableAt = Date.parse(row.available_at);
+    const activeOnTaipeiDate = row.effective_from <= taipeiDate &&
+      (row.effective_to === null || taipeiDate < row.effective_to);
     if (
-      row.effective_from <= taipeiDate &&
+      activeOnTaipeiDate &&
       Number.isFinite(availableAt) &&
       availableAt <= now.getTime() &&
       !currentSecurityHistory.has(row.security_id)

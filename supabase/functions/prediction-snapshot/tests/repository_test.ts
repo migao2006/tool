@@ -1,105 +1,272 @@
 import { SnapshotRepository } from "../repository.ts";
 import { assert, assertEquals } from "./assertions.ts";
+import { snapshotRows } from "./fixtures.ts";
 
-Deno.test("repository keeps the service role key server-side", async () => {
+const OBSERVED_AT = new Date("2026-07-20T08:30:00.000Z");
+
+Deno.test("repository reads a snapshot through exactly one service-role RPC", async () => {
   const requests: Request[] = [];
   const fakeFetch: typeof fetch = (input, init) => {
     const request = new Request(input, init);
     requests.push(request);
-    return Promise.resolve(
-      new Response("[]", {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }),
-    );
+    return Promise.resolve(Response.json(null));
   };
   const secret = "server-only-service-role-key";
   const repository = new SnapshotRepository({
     supabaseUrl: "https://project.supabase.co",
     serviceRoleKey: secret,
+    readMode: "rpc",
   }, fakeFetch);
 
-  assertEquals(await repository.loadLatest(5, "TPEX"), null);
-  assertEquals(requests.length, 1);
-  assertEquals(requests[0].headers.get("apikey"), secret);
-  assertEquals(requests[0].headers.get("Accept-Profile"), "market_data");
   assertEquals(
-    new URL(requests[0].url).searchParams.get("market_scope"),
-    "eq.TPEX",
+    await repository.loadLatest(5, "TPEX", undefined, OBSERVED_AT),
+    null,
+  );
+  assertEquals(requests.length, 1);
+  const request = requests[0];
+  assertEquals(request.method, "POST");
+  assertEquals(
+    new URL(request.url).pathname,
+    "/rest/v1/rpc/get_prediction_snapshot_rows",
+  );
+  assertEquals(request.headers.get("apikey"), secret);
+  assertEquals(request.headers.get("Accept-Profile"), "market_data");
+  assertEquals(request.headers.get("Content-Profile"), "market_data");
+  assertEquals(await request.clone().json(), {
+    p_horizon: 5,
+    p_market_scope: "TPEX",
+    p_observed_at: OBSERVED_AT.toISOString(),
+  });
+  assert(
+    !request.url.includes(secret),
+    "service role key must not enter the URL",
   );
   assert(
-    !requests[0].url.includes(secret),
-    "service role key must not enter the URL",
+    !request.url.includes("prediction_runs"),
+    "the primary path must not use request-time table fan-out",
   );
 });
 
-Deno.test("repository only links one validation completed before the prediction run", async () => {
+Deno.test("rpc mode does not fall back when the RPC is missing", async () => {
   const requests: Request[] = [];
   const fakeFetch: typeof fetch = (input, init) => {
-    const request = new Request(input, init);
-    requests.push(request);
-    const table = new URL(request.url).pathname.split("/").at(-1);
-    const payload = table === "prediction_runs"
-      ? [{
-        prediction_run_id: 7,
-        as_of_date: "2026-07-17",
-        decision_at: "2026-07-17T06:00:00+00:00",
-        horizon: 5,
-        model_bundle_version: "rank-research-v1",
-        feature_schema_hash: "feature-hash",
-        cost_profile_version: "tw-stock-base-v1",
-        training_end_date: "2026-06-30",
-        system_validation_status: "RESEARCH_ONLY",
-        source_dates: {},
-        latest_available_at: "2026-07-17T05:30:00+00:00",
-        candidate_count: 0,
-        watch_count: 0,
-        no_trade_count: 0,
-        hard_fail_count: 0,
-        created_at: "2026-07-18T02:00:00+00:00",
-      }]
-      : table === "validation_runs"
-      ? [
-        validationRow(5, "2026-07-18T01:00:00+00:00"),
-        validationRow(4, "2026-07-18T00:30:00+00:00"),
-      ]
-      : [];
-    return Promise.resolve(Response.json(payload));
+    requests.push(new Request(input, init));
+    return Promise.resolve(Response.json({
+      code: "PGRST202",
+      message:
+        "Could not find the function market_data.get_prediction_snapshot_rows",
+    }, { status: 404 }));
+  };
+  const repository = new SnapshotRepository({
+    supabaseUrl: "https://project.supabase.co",
+    serviceRoleKey: "server-only-service-role-key",
+    readMode: "rpc",
+  }, fakeFetch);
+
+  let error: unknown = null;
+  try {
+    await repository.loadLatest(5, "TWSE");
+  } catch (caught) {
+    error = caught;
+  }
+  assert(error instanceof Error);
+  assertEquals(
+    (error as { code?: string }).code,
+    "PREDICTION_SNAPSHOT_RPC_NOT_DEPLOYED",
+  );
+  assertEquals(requests.length, 1);
+});
+
+Deno.test("the default mode fails closed when the RPC is not deployed", async () => {
+  const requests: Request[] = [];
+  const fakeFetch: typeof fetch = (input, init) => {
+    requests.push(new Request(input, init));
+    return Promise.resolve(Response.json({
+      code: "PGRST202",
+      message:
+        "Could not find the function market_data.get_prediction_snapshot_rows",
+    }, { status: 404 }));
   };
   const repository = new SnapshotRepository({
     supabaseUrl: "https://project.supabase.co",
     serviceRoleKey: "server-only-service-role-key",
   }, fakeFetch);
 
-  const rows = await repository.loadLatest(5, "TWSE");
-  assert(rows !== null, "prediction run must be loaded");
-  assertEquals(rows.validationLinkStatus, "AMBIGUOUS");
-  assertEquals(rows.validationRun, null);
-  const validationRequest = requests.find((request) =>
-    new URL(request.url).pathname.endsWith("/validation_runs")
+  const error = await capturedError(() =>
+    repository.loadLatest(5, "TWSE", undefined, OBSERVED_AT)
   );
-  assert(validationRequest, "validation query must be issued");
-  const query = new URL(validationRequest.url).searchParams;
-  assertEquals(query.get("completed_at"), "lte.2026-07-18T02:00:00+00:00");
-  assertEquals(query.get("limit"), "2");
-  const runRequest = requests.find((request) =>
-    new URL(request.url).pathname.endsWith("/prediction_runs")
-  );
-  assert(runRequest, "prediction run query must be issued");
+  assertEquals(error.code, "PREDICTION_SNAPSHOT_RPC_NOT_DEPLOYED");
+  assertEquals(requests.length, 1);
   assertEquals(
-    new URL(runRequest.url).searchParams.get("market_scope"),
-    "eq.TWSE",
+    new URL(requests[0].url).pathname,
+    "/rest/v1/rpc/get_prediction_snapshot_rows",
   );
 });
 
-function validationRow(validationRunId: number, completedAt: string) {
-  return {
-    validation_run_id: validationRunId,
-    validation_status: "RESEARCH_ONLY",
-    locked_holdout: false,
-    frozen_config_hash: "config-hash",
-    started_at: "2026-07-18T00:00:00+00:00",
-    completed_at: completedAt,
-    limitations: [],
+Deno.test("RPC ambiguity is treated as a database failure, not as an undeployed RPC", async () => {
+  const requests: Request[] = [];
+  const fakeFetch: typeof fetch = (input, init) => {
+    requests.push(new Request(input, init));
+    return Promise.resolve(Response.json({
+      code: "PGRST203",
+      message: "Could not choose the best candidate function",
+    }, { status: 300 }));
   };
+  const repository = new SnapshotRepository({
+    supabaseUrl: "https://project.supabase.co",
+    serviceRoleKey: "server-only-service-role-key",
+    readMode: "rpc",
+  }, fakeFetch);
+
+  const error = await capturedError(() =>
+    repository.loadLatest(5, "TWSE", undefined, OBSERVED_AT)
+  );
+  assertEquals(error.code, "PREDICTION_DATABASE_READ_FAILED");
+  assertEquals(requests.length, 1);
+});
+
+Deno.test("repository accepts the complete RPC payload without extra reads", async () => {
+  const requests: Request[] = [];
+  const expected = snapshotRows();
+  expected.validationRun = null;
+  expected.validationMetrics = [];
+  expected.backtests = [];
+  expected.validationLinkStatus = "AMBIGUOUS";
+  const fakeFetch: typeof fetch = (input, init) => {
+    requests.push(new Request(input, init));
+    return Promise.resolve(Response.json(expected));
+  };
+  const repository = new SnapshotRepository({
+    supabaseUrl: "https://project.supabase.co",
+    serviceRoleKey: "server-only-service-role-key",
+    readMode: "rpc",
+  }, fakeFetch);
+
+  const actual = await repository.loadLatest(5, "TWSE", undefined, OBSERVED_AT);
+  assertEquals(actual, expected);
+  assertEquals(requests.length, 1);
+});
+
+Deno.test("repository tolerates PostgREST scalar wrappers", async () => {
+  const expected = snapshotRows();
+  const wrappedPayloads = [
+    { get_prediction_snapshot_rows: expected },
+    [{ get_prediction_snapshot_rows: expected }],
+  ];
+  for (const payload of wrappedPayloads) {
+    const fakeFetch: typeof fetch = () =>
+      Promise.resolve(Response.json(payload));
+    const repository = new SnapshotRepository({
+      supabaseUrl: "https://project.supabase.co",
+      serviceRoleKey: "server-only-service-role-key",
+      readMode: "rpc",
+    }, fakeFetch);
+    assertEquals(
+      await repository.loadLatest(5, "TWSE", undefined, OBSERVED_AT),
+      expected,
+    );
+  }
+});
+
+Deno.test("legacy mode remains an explicit emergency rollback path", async () => {
+  const requests: Request[] = [];
+  const fakeFetch: typeof fetch = (input, init) => {
+    const request = new Request(input, init);
+    requests.push(request);
+    return Promise.resolve(Response.json([]));
+  };
+  const repository = new SnapshotRepository({
+    supabaseUrl: "https://project.supabase.co",
+    serviceRoleKey: "server-only-service-role-key",
+    readMode: "legacy",
+  }, fakeFetch);
+
+  assertEquals(
+    await repository.loadLatest(5, "TWSE", undefined, OBSERVED_AT),
+    null,
+  );
+  assertEquals(requests.length, 1);
+  assertEquals(
+    new URL(requests[0].url).pathname,
+    "/rest/v1/prediction_runs",
+  );
+  const query = new URL(requests[0].url).searchParams;
+  assertEquals(query.get("decision_at"), `lte.${OBSERVED_AT.toISOString()}`);
+  assertEquals(
+    query.get("latest_available_at"),
+    `lte.${OBSERVED_AT.toISOString()}`,
+  );
+  assertEquals(query.get("created_at"), `lte.${OBSERVED_AT.toISOString()}`);
+});
+
+Deno.test("repository rejects an incomplete RPC response", async () => {
+  const fakeFetch: typeof fetch = () =>
+    Promise.resolve(Response.json({ run: {}, predictions: [] }));
+  const repository = new SnapshotRepository({
+    supabaseUrl: "https://project.supabase.co",
+    serviceRoleKey: "server-only-service-role-key",
+    readMode: "rpc",
+  }, fakeFetch);
+
+  const error = await capturedError(() =>
+    repository.loadLatest(5, "TWSE", undefined, OBSERVED_AT)
+  );
+  assertEquals(error.code, "PREDICTION_DATABASE_RESPONSE_INVALID");
+});
+
+Deno.test("repository rejects an unknown read mode", () => {
+  let error: unknown = null;
+  try {
+    new SnapshotRepository({
+      supabaseUrl: "https://project.supabase.co",
+      serviceRoleKey: "server-only-service-role-key",
+      readMode: "silent-fallback",
+    });
+  } catch (caught) {
+    error = caught;
+  }
+  assert(error instanceof Error);
+  assertEquals(
+    (error as { code?: string }).code,
+    "PREDICTION_API_NOT_CONFIGURED",
+  );
+});
+
+Deno.test("repository database reads have a bounded timeout", async () => {
+  const fakeFetch: typeof fetch = (_input, init) =>
+    new Promise((_resolve, reject) => {
+      const requestInit = init as { signal?: AbortSignal | null } | undefined;
+      const signal = requestInit?.signal;
+      if (signal?.aborted) {
+        reject(signal.reason);
+        return;
+      }
+      signal?.addEventListener("abort", () => reject(signal.reason), {
+        once: true,
+      });
+    });
+  const repository = new SnapshotRepository({
+    supabaseUrl: "https://project.supabase.co",
+    serviceRoleKey: "server-only-service-role-key",
+    queryTimeoutMs: 5,
+    readMode: "rpc",
+  }, fakeFetch);
+
+  const error = await capturedError(() =>
+    repository.loadLatest(5, "TWSE", undefined, OBSERVED_AT)
+  );
+  assertEquals(error.code, "PREDICTION_DATABASE_TIMEOUT");
+});
+
+async function capturedError(
+  operation: () => Promise<unknown>,
+): Promise<{ code?: string }> {
+  let error: unknown = null;
+  try {
+    await operation();
+  } catch (caught) {
+    error = caught;
+  }
+  assert(error instanceof Error);
+  return error as { code?: string };
 }

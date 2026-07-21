@@ -1,5 +1,7 @@
 from pathlib import Path
 
+from scripts.check_github_action_pins import reviewed_action_reference
+
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/publish-tpex-latest-research-snapshot.yml"
@@ -47,7 +49,7 @@ def test_tpex_daily_publish_authenticates_exact_artifact_producers() -> None:
     assert '"$event" != "workflow_dispatch"' in workflow
     assert "gh api --paginate" in workflow
     assert "^sha256:[0-9a-f]{64}$" in workflow
-    assert workflow.count("uses: actions/download-artifact@v8") == 2
+    assert workflow.count(f"uses: {reviewed_action_reference('actions/download-artifact')}") == 2
     assert workflow.count("digest-mismatch: error") == 2
     assert "artifact-ids: ${{ env.PREPARED_ARTIFACT_ID }}" in workflow
     assert "artifact-ids: ${{ env.FEATURE_ARTIFACT_ID }}" in workflow

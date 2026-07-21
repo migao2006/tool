@@ -66,22 +66,37 @@ const PERCENT_FIELDS = [
   "max_single_position", "max_industry_position", "market_exposure_cap",
 ];
 
-export function renderStockDetailPage(prediction, { isWatchlisted = false } = {}) {
+export function renderStockDetailPage(
+  prediction,
+  { isWatchlisted = false, watchlistPersistenceEnabled = false } = {},
+) {
   const root = document.querySelector('[data-page="stock"]');
   if (!root || !prediction) return;
   const title = root.querySelector("#stock-title");
   if (title) title.textContent = [prediction.symbol, prediction.name].filter(Boolean).join(" ") || "尚未選擇股票";
   const watchButton = root.querySelector("[data-toggle-watchlist]");
   if (watchButton) {
-    watchButton.disabled = false;
+    watchButton.disabled = !watchlistPersistenceEnabled;
     watchButton.dataset.symbol = prediction.symbol;
     watchButton.dataset.market = prediction.market;
     watchButton.setAttribute("aria-pressed", String(isWatchlisted));
-    watchButton.setAttribute("aria-label", isWatchlisted ? "移出自選股" : "加入自選股");
+    watchButton.setAttribute(
+      "aria-label",
+      watchlistPersistenceEnabled
+        ? (isWatchlisted ? "移出自選股" : "加入自選股")
+        : "自選股儲存功能尚未上線",
+    );
+    watchButton.title = watchlistPersistenceEnabled
+      ? ""
+      : "自選股儲存功能尚未上線";
     watchButton.textContent = isWatchlisted ? "★" : "☆";
   }
   const feedback = root.querySelector("[data-watchlist-feedback]");
-  if (feedback) feedback.textContent = "";
+  if (feedback) {
+    feedback.textContent = watchlistPersistenceEnabled
+      ? ""
+      : "自選股儲存功能尚未上線。";
+  }
   const noFormalDecisionPolicy = prediction.reason_codes?.includes("RESEARCH_ONLY_NO_FORMAL_DECISION_POLICY");
   setText(
     root,

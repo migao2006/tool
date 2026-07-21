@@ -1,6 +1,6 @@
 # Alpha Lens 5 日預測 API 契約
 
-> 2026-07-19 現況：`supabase/functions/prediction-snapshot` 已建立可部署的唯讀實作；在 GitHub Staging／Production workflow 實際發布且前端設定 base URL 前，`predictionApiBaseUrl` 仍為空。Watchlist 持久化尚未上線。UI 必須維持真實系統狀態，不得使用示例資料冒充回應。
+> 2026-07-20 現況：`supabase/functions/prediction-snapshot` 已有唯讀實作，前端 `predictionApiBaseUrl` 已指向本專案 Supabase Edge Functions。Watchlist 持久化尚未上線，`watchlistPersistenceEnabled=false`，UI 必須停用寫入操作。限流 migration 已加入 repository，但在完成 Staging／Production migration 與環境設定前維持關閉。UI 不得使用示例資料冒充回應。
 
 目前前端固定使用 `horizon=5`，並以 `market=TWSE|TPEX` 分別取得上市與上櫃資料集；契約版本為 `prediction-snapshot.v1`。缺省 `market` 時只查詢 `TWSE`，不得回傳跨市場混合資料。後端應使用 `src.api.PredictionSnapshotOutput` 產生回應，避免自行拼接欄位。
 
@@ -9,10 +9,11 @@
 在 `src/core/public-config.js` 設定：
 
 ```js
-predictionApiBaseUrl: "",
+predictionApiBaseUrl: "https://<project-ref>.supabase.co/functions/v1/",
+watchlistPersistenceEnabled: false,
 ```
 
-空值代表正式 API 尚未發布；部署後只能填入本專案實際的 HTTPS API base URL，不得保留 `example.com`。也可以在部署時於 `<html>` 設定 `data-prediction-api-base-url` 覆寫。前端逾時預設為 12 秒，所有請求都帶有：
+Base URL 只能指向本專案實際的 HTTPS Edge Functions，不得保留 `example.com`。Watchlist table、RLS 與 PUT／DELETE 端點完成前，capability flag 必須保持 `false`；資料層也會以 `WATCHLIST_NOT_AVAILABLE` fail closed，不會讀取 session 或送出網路請求。前端逾時預設為 12 秒，所有 prediction 請求都帶有：
 
 ```http
 Accept: application/json
@@ -79,7 +80,10 @@ Function 以 server-side `SUPABASE_SERVICE_ROLE_KEY` 讀取私有 schema，該 k
 
 研究快照可附加下列最新已發布證券主檔分類欄位：`current_industry`、
 `current_industry_code`、`industry_classification_effective_from`、
-`industry_classification_available_at` 及 `industry_classification_basis`。
+`industry_classification_effective_to`、`industry_classification_available_at` 及
+`industry_classification_basis`。有效期間採半開區間
+`[effective_from, effective_to)`；`effective_to=null` 代表尚未結束。已過期或尚未
+`available_at` 的分類不得回傳為目前分類。
 它們只供目前畫面顯示與篩選，不是模型在 `decision_at` 使用的 point-in-time
 `industry`，不得用來產生或補寫 `industry_rank`。`cost_profile` 可由已綁定的
 `cost_profile_version` 解析為已知成本情境；無法辨識時必須回傳 `null`。
@@ -147,6 +151,10 @@ Validation 不以「同版本最新一筆」任意拼接。只有同一
 - `prediction-snapshot` 應回傳 `Cache-Control: no-store`，或使用包含 `as_of_date`、設定與使用者身分的正確快取鍵。
 - Edge Function 使用 `PREDICTION_ALLOWED_ORIGINS` 的逗號分隔 exact-origin allowlist；不得使用 `*`。
 - 公開研究快照不要求登入，因此 Function gateway 設為 `verify_jwt=false`；這不會讓瀏覽器直接取得私有 schema，所有資料仍只經 server-side repository 整理後回傳。
+- 每個回應都帶 `X-Request-Id`；若客戶端提供符合格式的 `X-Request-Id` 會沿用，否則由後端產生 UUID。錯誤 JSON 同時回傳 `request_id`，供 Edge Function logs 對照。
+- `PREDICTION_REQUEST_TIMEOUT_MS` 控制整體 request deadline，預設 10 秒；`PREDICTION_DATABASE_TIMEOUT_MS` 控制單次 PostgREST 查詢，預設 4 秒。逾時分別回 `504 PREDICTION_REQUEST_TIMEOUT` 或 `504 PREDICTION_DATABASE_TIMEOUT`，不得等待至平台強制終止。
+- 結構化 logs 只記錄 request ID、method、market、status、error code 與耗時，不得記錄 Authorization、原始 client address、service role key 或資料庫 payload。
+- 可部署的持久化 fixed-window 限流使用 `market_data.consume_prediction_snapshot_rate_limit`。客戶端位址先以 server-side `PREDICTION_RATE_LIMIT_KEY_SECRET` 做 HMAC-SHA256；來源 header 由 `PREDICTION_RATE_LIMIT_CLIENT_IP_HEADER` 明確指定，預設為 `CF-Connecting-IP`。部署前必須確認該 header 在實際 Edge 平台由可信代理覆寫且外部用戶不能任意偽造；若無法確認，不得開啟限流。資料庫只保存 64 字元 opaque key，不保存原始位址。限流必須在 migration 套用、權限與 rollback 驗證通過並設定至少 32 字元專用 secret 後，才可將 `PREDICTION_RATE_LIMIT_ENABLED=true`；否則維持關閉。啟用後後端不可因限流儲存不可用而 fail open。
 
 ## 接入檢查
 

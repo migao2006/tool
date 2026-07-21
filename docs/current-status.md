@@ -1,12 +1,25 @@
 # 目前實作與阻塞狀態
 
+
+<!-- release-manifest:status-header:start -->
 > 更新日期：2026-07-20（Asia/Taipei）
 >
-> 文件基準：`be9ca59`；OOS 驗證 workflow 使用 `29690820942`，最新特徵與研究推論 workflow 使用 `29693937930`、`29695406502`
+> 文件基準：最新發布 commit 未記錄於目前可用證據，不得沿用舊快照 commit；OOS 驗證 workflow 使用 `29690820942`，最新特徵與研究推論 workflow 使用 `29693937930`、`29701335309`
 >
 > 系統狀態：`RESEARCH_ONLY`
-
-本文件只記錄已由實際 workflow、資料庫、artifact 或稽核結果證實的現況。資料管線已能累積原始行情、產生研究資料集，並完成第一次真實 5 日 purged walk-forward 訓練與 Production 研究快照發布。排名模型未優於 20 日動能基準，平均 Rank IC 也為負；locked holdout 尚未執行，因此不得產生正式 `CANDIDATE` 或把研究產物描述為正式推薦。
+>
+> Repository 目前包含 36 個 migration 檔案；本修補新增且待隔離驗證／部署：`20260720170000_prediction_snapshot_rate_limit.sql`、`20260720190000_prediction_snapshot_read_rpc.sql`。
+>
+> Staging／Production 的既有文件最後完整紀錄均為 31／31 筆；其後 Repository 共有 5 檔：`20260720051630_tpex_price_index_ohlc_queue.sql`、`20260720061143_scope_prediction_runs_by_market.sql`、`20260720064801_exclude_legacy_prediction_publisher_from_lint.sql`、`20260720170000_prediction_snapshot_rate_limit.sql`、`20260720190000_prediction_snapshot_read_rpc.sql`。本修補未連線重新驗證這些 migration 的遠端套用狀態，不得由檔案存在與否推測已部署或未部署。
+>
+> Prediction Snapshot 主要讀取路徑已改為單一 RPC `market_data.get_prediction_snapshot_rows(integer,text,timestamptz)`，正常路徑預期每次快照只產生 1 次 PostgREST 請求。預設模式為 `rpc`；RPC 未部署時 fail closed，只有明確設定 `legacy` 才走緊急舊路徑。
+>
+> CI 品質工作：`quality-security`；彙總 gate：`test-gate`；外部 GitHub Actions 全部固定完整 commit SHA。遠端 branch protection 尚未由本修補重新驗證。
+>
+> Vercel 使用 `vercel.json` 強制 CSP 與安全標頭；本修補尚未直接讀取正式站 response headers，因此遠端生效狀態不得推測。
+>
+> 本區塊與下方最新快照由 `release-manifest.json` 產生；請勿直接修改。
+<!-- release-manifest:status-header:end -->
 
 ## 一、環境與 Migration
 
@@ -15,9 +28,8 @@
 - 已建立每月費用為 `$0` 的獨立 Staging 專案 `alpha-lens-staging`。
 - Project ref：`kretvnnfavndkmckyidl`。
 - 專案狀態：`ACTIVE_HEALTHY`。
-- Staging migration history 已與 Production 對齊，共 31 筆 migrations。
-- 最新 migration 為
-  `20260719152201_publish_research_snapshot_atomically.sql`。
+- 既有文件紀錄顯示 Staging migration history 曾與 Production 對齊，共 31 筆 migrations；
+  當時最新 migration 為 `20260719152201_publish_research_snapshot_atomically.sql`。
 - 新約束已實測允許來源日期後才取得的快照，仍拒絕未來快照日期，且驗證資料無殘留。
 - `supabase db lint --linked --level error`：0 個 schema error。
 - Supplemental task transaction RPC 與研究快照原子發布 RPC contract：`PASS`。
@@ -26,17 +38,19 @@
 
 ### Supabase Production
 
-- Production migration history 已與 Staging 對齊，共 31 筆 migrations，最新為
-  `20260719152201_publish_research_snapshot_atomically.sql`。
+- 既有文件紀錄顯示 Production migration history 曾與 Staging 對齊，共 31 筆 migrations；
+  當時最新 migration 為 `20260719152201_publish_research_snapshot_atomically.sql`。
 - Production `db lint` 沒有 schema error；原子發布 RPC 權限已驗證為 service-role only。
 
 ### 本機隔離環境
 
 - Docker Engine `29.6.1`、Docker Compose `5.3.0` 與 Docker Desktop 已驗證可用。
-- Supabase Local 已用 Docker 完整重建 32 個 migrations；新增的 TPEX benchmark migration 尚未
-  套用至 Staging 或 Production。
-- 新 security snapshot 與 TPEX benchmark 約束、validation、rollback 及 `supabase db lint` 已
-  實際通過。
+- 既有文件紀錄顯示 Supabase Local 曾用 Docker 完整重建前 32 個 migrations，最後包含
+  `20260720051630_tpex_price_index_ohlc_queue.sql`；相關 TPEX benchmark validation、rollback 與
+  schema lint 曾通過。
+- 本修補環境未重新啟動 Supabase Local，也未連線查詢 Staging／Production migration history。
+  Repository 第 33～35 個 migration 的遠端套用狀態不得由本文件推測；其中本修補新增的
+  `20260720170000_prediction_snapshot_rate_limit.sql` 尚待隔離執行、權限驗證及 rollback 演練。
 
 ## 二、已封存及已產生的真實資料
 
@@ -206,7 +220,9 @@ Artifact／provenance：
 
 ### 最新上市橫截面研究推論
 
-[GitHub Actions run `29701335309`](https://github.com/migao2006/tool/actions/runs/29701335309) 已使用最新驗證特徵橫截面、最後一個 walk-forward fold 的凍結模型 bundle，完成研究推論並發布至 Production Supabase；快照 RPC 與後續 gate attachment 均完成不可變讀回驗證：
+
+<!-- release-manifest:status-snapshot:start -->
+[GitHub Actions run `29701335309`](https://github.com/migao2006/tool/actions/runs/29701335309) 已使用最新驗證特徵橫截面、最後一個 walk-forward fold 的凍結模型 bundle，完成研究推論並發布至 Production Supabase；快照 RPC 與後續 gate attachment 的既有紀錄顯示已完成不可變讀回驗證。發布 commit 未記錄於目前可用證據，因此文件不再沿用舊快照 commit。
 
 | 項目 | 已驗證結果 |
 | --- | ---: |
@@ -223,8 +239,7 @@ Artifact／provenance：
 | Industry coverage | 0／1,068 |
 | Decision gate rows | 8,544；每檔固定 8 層 |
 
-完整性核對：股票與 global rank 均無重複、排名為 1～1,068 連續整數、三分類機率總和為 1、
-毛／淨 P10≤P50≤P90，且 `latest_available_at <= decision_at`。Provenance：
+完整性核對紀錄：股票與 global rank 均無重複、排名為 1～1,068 連續整數、三分類機率總和為 1、毛／淨 P10≤P50≤P90，且 `latest_available_at <= decision_at`。Provenance：
 
 - Feature artifact SHA-256：`24c90589d51de6b0c06f084ca977c4bfb99993f91164d65b3bad33bce3c73aac`。
 - Model bundle SHA-256：`c41b76df09decf6be62da3cc59012597c7fd889d4980e43c14eb7cca70de5ca7`。
@@ -232,11 +247,8 @@ Artifact／provenance：
 - Snapshot artifact SHA-256：`605c19a53b4321e307848e4affa081c4a760601a3a0186a26192036c61395eee`。
 - GitHub artifact：`8446597593`，digest `b06a8280e9780f19378f682ed4ad55ff9017fb684cbe1dd9abc953d7d9948199`。
 
-這是回溯研究推論，不是新的 OOS 驗證。Production API 已實測回傳 HTTP 200、1,068 檔且每檔
-恰好 8 層 gate；gate order、actual、threshold、reason code 與 attachment snapshot hash 均通過
-契約驗證。已具備真實輸入的資料品質、流動性容量、校準方向機率、淨分位數及排名資格會顯示
-實際值與門檻；缺少 point-in-time 可交易性、市場模型及部位配置輸入時一律 fail closed。
-所有列仍固定為 `NO_TRADE / RESEARCH_ONLY`，不得描述為正式候選股、即時交易訊號或獲利保證。
+這是回溯研究推論，不是新的 OOS 驗證。既有契約驗證紀錄顯示每檔恰好 8 層 gate；gate order、actual、threshold、reason code 與 attachment snapshot hash 均通過。具備真實輸入的資料品質、流動性容量、校準方向機率、淨分位數及排名資格會顯示實際值與門檻；缺少 point-in-time 可交易性、市場模型及部位配置輸入時一律 fail closed。所有列仍固定為 `NO_TRADE / RESEARCH_ONLY`，不得描述為正式候選股、即時交易訊號或獲利保證。
+<!-- release-manifest:status-snapshot:end -->
 
 ## 三、Supplemental 回補現況
 

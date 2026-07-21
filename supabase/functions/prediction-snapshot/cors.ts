@@ -47,9 +47,12 @@ export function corsHeaders(request: Request, policy: CorsPolicy): Headers {
   headers.set("Access-Control-Allow-Methods", "GET, OPTIONS");
   headers.set(
     "Access-Control-Allow-Headers",
-    "Authorization, Content-Type, X-Alpha-Lens-Contract",
+    "Authorization, Content-Type, X-Alpha-Lens-Contract, X-Request-Id",
   );
-  headers.set("Access-Control-Expose-Headers", "X-Alpha-Lens-Contract");
+  headers.set(
+    "Access-Control-Expose-Headers",
+    "X-Alpha-Lens-Contract, X-Request-Id, X-RateLimit-Limit, X-RateLimit-Remaining, Retry-After",
+  );
   headers.set("Access-Control-Max-Age", "600");
   return headers;
 }

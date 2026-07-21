@@ -5,6 +5,7 @@
 ## 目前狀態
 
 - 最新已核對現況：[`docs/current-status.md`](docs/current-status.md)
+- Release／部署證據邊界：[`docs/release-state.md`](docs/release-state.md)
 - 模型卡：[`model_card.md`](model_card.md)／[`model_card.json`](model_card.json)
 - 正式產品 horizon：`5`
 - 2／3／10 日：未發布，不能用 5 日模型代替
@@ -22,6 +23,7 @@
 - [`docs/data-model.md`](docs/data-model.md)：point-in-time、模型、驗證與回測
 - [`docs/security.md`](docs/security.md)：Supabase Auth、RLS 與機密
 - [`docs/tooling-release.md`](docs/tooling-release.md)：工具、Git、migration 與發布閘門
+- [`docs/p1-repair-report-2026-07-20.md`](docs/p1-repair-report-2026-07-20.md)：P1 修復、驗證結果與部署限制
 
 資料來源與匯入：
 
@@ -48,6 +50,11 @@ uv run pytest
 pnpm install --frozen-lockfile
 pnpm exec playwright install chromium
 pnpm run test:e2e
+python scripts/sync_release_manifest.py --check
 ```
+
+`release-manifest.json` 是最新模型快照、平台強化狀態與 migration 證據邊界的單一來源；更新後執行
+`python scripts/sync_release_manifest.py` 重新產生 `model_card.json`、模型卡、現況受管區段、
+`docs/release-state.md` 與 manifest digest。CI／本機驗證使用 `--check` 防止文件漂移。未知的遠端 migration 狀態或發布 commit 必須保留為未確認，不得沿用舊值。
 
 品質工具、Windows 憑證處理及完整發布規則請以 [`docs/tooling-release.md`](docs/tooling-release.md) 為準。任何測試成功都只代表程式驗證，不代表模型具備樣本外獲利能力。

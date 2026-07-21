@@ -13,7 +13,7 @@ import {
   requestPredictionApi,
   resolvePredictionApiBaseUrl,
 } from "./api-client.js?v=api-5";
-import { createUnavailableSnapshot, normalizePredictionSnapshot } from "./prediction-contract.js?v=classification-1";
+import { createUnavailableSnapshot, normalizePredictionSnapshot } from "./prediction-contract.js?v=classification-2";
 import { readSupabaseAccessToken } from "./session-token.js?v=api-4";
 import { isSupabaseSdkLoadError } from "./supabase-sdk-loader.js?v=auth-1";
 

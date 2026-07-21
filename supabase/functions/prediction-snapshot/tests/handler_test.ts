@@ -432,3 +432,58 @@ Deno.test("CORS configuration rejects wildcard or path-based origins", () => {
     assert(error instanceof Error, `invalid origin ${value} must be rejected`);
   }
 });
+
+Deno.test("current industry classification respects the half-open effective interval", async () => {
+  const expiredRows = snapshotRows();
+  expiredRows.currentSecurityHistory = [{
+    security_id: 101,
+    effective_from: "2026-07-01",
+    effective_to: "2026-07-17",
+    industry_code: "24",
+    industry_name: "半導體業",
+    source_version: "fixture-v1",
+    available_at: "2026-07-01T00:00:00+00:00",
+  }];
+
+  const expiredResponse = await handler(expiredRows)(
+    new Request(
+      "https://api.example/functions/v1/prediction-snapshot?horizon=5",
+    ),
+  );
+  const expiredPayload = await expiredResponse.json();
+  assertEquals(expiredResponse.status, 200);
+  assertEquals(
+    expiredPayload.predictions[0].industry_classification_effective_from,
+    null,
+  );
+  assertEquals(
+    expiredPayload.predictions[0].industry_classification_effective_to,
+    null,
+  );
+
+  const activeRows = snapshotRows();
+  activeRows.currentSecurityHistory = [{
+    security_id: 101,
+    effective_from: "2026-07-01",
+    effective_to: "2026-07-18",
+    industry_code: "24",
+    industry_name: "半導體業",
+    source_version: "fixture-v1",
+    available_at: "2026-07-01T00:00:00+00:00",
+  }];
+  const activeResponse = await handler(activeRows)(
+    new Request(
+      "https://api.example/functions/v1/prediction-snapshot?horizon=5",
+    ),
+  );
+  const activePayload = await activeResponse.json();
+  assertEquals(activeResponse.status, 200);
+  assertEquals(
+    activePayload.predictions[0].industry_classification_effective_from,
+    "2026-07-01",
+  );
+  assertEquals(
+    activePayload.predictions[0].industry_classification_effective_to,
+    "2026-07-18",
+  );
+});

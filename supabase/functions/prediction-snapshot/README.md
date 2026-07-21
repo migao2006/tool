@@ -1,9 +1,13 @@
 # prediction-snapshot Edge Function
 
-這個 Function 是 `prediction-snapshot.v1` 的唯讀發布層。它只讀取 Supabase
-`market_data` 私有 schema 中已保存的 `prediction_runs`、`stock_predictions`、
-`market_predictions`、data-quality、decision-gate、validation 與 backtest 紀錄。
-它不訓練模型、不即時計算新分數，也不以 placeholder 補值。
+這個 Function 是 `prediction-snapshot.v1` 的唯讀發布層。主要讀取路徑透過
+`market_data.get_prediction_snapshot_rows(...)`，由單一 PostgREST RPC
+組裝已保存的
+`prediction_runs`、`stock_predictions`、`market_predictions`、data-quality、
+decision-gate、validation 與 backtest
+紀錄。它不訓練模型、不即時計算新分數，也不以 placeholder 補值。正式預設為
+`rpc`，RPC 尚未安裝、資料庫錯誤或逾時時都會 fail closed；`legacy`
+只保留為需明確設定的緊急回復路徑。
 
 ## HTTP 契約
 
@@ -41,6 +45,11 @@ Supabase 自動提供：
 
 - `PREDICTION_ALLOWED_ORIGINS`：以逗號分隔的完整 origin allowlist，不支援 `*`。
 - `PREDICTION_STALE_AFTER_HOURS`：可選，預設 `72`。
+- `PREDICTION_DATABASE_TIMEOUT_MS`：單次 PostgREST 呼叫上限，預設 `4000`。
+- `PREDICTION_REQUEST_TIMEOUT_MS`：整體請求上限，預設 `10000`。
+- `PREDICTION_SNAPSHOT_READ_MODE`：`rpc`（預設）或 `legacy`。必須先在目標環境
+  套用並驗證 RPC migration，再部署預設 `rpc` 的 Function；`legacy` 只作經核准的
+  緊急回復，不得作為長期設定。
 
 `SUPABASE_SERVICE_ROLE_KEY` 只由 Function 對 PostgREST 使用，不得傳入前端、
 回應、URL 或 log。因公開快照允許未登入使用者讀取，本 Function 在
@@ -67,6 +76,10 @@ docker run --rm -v "${PWD}:/workspace" -w /workspace/supabase/functions/predicti
 - Variable：`SUPABASE_URL`
 - Variable：`PREDICTION_ALLOWED_ORIGINS`
 - Variable（可選）：`PREDICTION_STALE_AFTER_HOURS`
+- Variable（可選）：`PREDICTION_DATABASE_TIMEOUT_MS`
+- Variable（可選）：`PREDICTION_REQUEST_TIMEOUT_MS`
+- Variable（可選）：`PREDICTION_SNAPSHOT_READ_MODE`（正式預設
+  `rpc`；只有經核准的緊急回復才可暫設 `legacy`）
 
 `production` 只能由 `main` 手動觸發；相同 commit 會先部署及 smoke-test Staging，
 成功後才進入 Production environment。Production environment 應設定 required

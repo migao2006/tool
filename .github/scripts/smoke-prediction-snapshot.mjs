@@ -31,10 +31,12 @@ for (const origin of allowedOrigins) {
 }
 
 const uiOrigin = allowedOrigins[0];
+const smokeRequestId = `deployment-smoke-${process.env.GITHUB_RUN_ID ?? "local"}`;
 const requestHeaders = {
 	Accept: "application/json",
 	Origin: uiOrigin,
 	"X-Alpha-Lens-Contract": "prediction-snapshot.v1",
+	"X-Request-Id": smokeRequestId,
 };
 
 async function readSnapshot(query, expectedMarket) {
@@ -56,6 +58,9 @@ async function readSnapshot(query, expectedMarket) {
 		response.headers.get("x-alpha-lens-contract") !== "prediction-snapshot.v1"
 	) {
 		throw new Error("Prediction snapshot response contract header is invalid");
+	}
+	if (response.headers.get("x-request-id") !== smokeRequestId) {
+		throw new Error("Prediction snapshot request ID was not preserved");
 	}
 
 	const payload = await response.json();
@@ -81,6 +86,12 @@ async function expectUnsupportedMarket(query) {
 		{ headers: requestHeaders },
 	);
 	const payload = await response.json();
+	if (
+		response.headers.get("x-request-id") !== smokeRequestId ||
+		payload.request_id !== smokeRequestId
+	) {
+		throw new Error("Prediction snapshot error request ID was not preserved");
+	}
 	if (response.status !== 422 || payload.code !== "UNSUPPORTED_MARKET") {
 		throw new Error("Unsupported market was not rejected");
 	}

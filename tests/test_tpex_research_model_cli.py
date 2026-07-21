@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from scripts.check_github_action_pins import reviewed_action_reference
 from scripts.run_tpex_research_model import main
 
 
@@ -35,7 +36,7 @@ def test_tpex_research_workflow_is_manual_and_local_only() -> None:
 
     assert "workflow_dispatch:" in workflow
     assert "TPEX_RESEARCH_MODEL_ENABLED" in workflow
-    assert "actions/github-script@v8" in workflow
+    assert reviewed_action_reference("actions/github-script") in workflow
     assert "getWorkflowRun" in workflow
     assert "build-tpex-prepared-research-dataset.yml" in workflow
     assert 'run.head_branch !== "main"' in workflow
@@ -43,7 +44,7 @@ def test_tpex_research_workflow_is_manual_and_local_only() -> None:
     assert "compareCommitsWithBasehead" in workflow
     assert "listWorkflowRunArtifacts" in workflow
     assert "TPEX_PREPARED_SOURCE_RUN_SHA" in workflow
-    assert "actions/download-artifact@v8" in workflow
+    assert reviewed_action_reference("actions/download-artifact") in workflow
     assert "artifact-ids: ${{ steps.prepared-source.outputs.artifact_id }}" in workflow
     assert "digest-mismatch: error" in workflow
     assert "scripts.run_tpex_research_model" in workflow

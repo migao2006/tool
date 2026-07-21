@@ -1,4 +1,4 @@
-import { publicConfig } from "../core/public-config.js?v=api-3";
+import { publicConfig } from "../core/public-config.js?v=capabilities-1";
 import { normalizeMarketScope } from "../core/market-scope.js";
 import { PredictionApiError, requestPredictionApi } from "./api-client.js?v=api-4";
 import { readSupabaseAccessToken } from "./session-token.js?v=api-4";
@@ -10,6 +10,12 @@ export async function setWatchlistMembership({
   signal,
   config = publicConfig,
 }) {
+  if (config.watchlistPersistenceEnabled !== true) {
+    throw new PredictionApiError(
+      "WATCHLIST_NOT_AVAILABLE",
+      "自選股儲存功能尚未上線。",
+    );
+  }
   const normalizedSymbol = String(symbol ?? "").trim().toUpperCase();
   if (!/^[0-9A-Z.-]{1,20}$/u.test(normalizedSymbol)) {
     throw new PredictionApiError("WATCHLIST_SYMBOL_INVALID", "自選股代號格式不正確。");

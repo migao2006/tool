@@ -5,6 +5,7 @@ import { initializeResearchSettings } from "./src/features/research-settings.js?
 import { initializeCandidateFilters } from "./src/features/candidate-filters.js?v=classification-2";
 import { initializeWatchlistFilters } from "./src/features/watchlist-filters.js";
 import { CURRENT_HORIZON } from "./src/core/five-day-contract.js";
+import { publicConfig } from "./src/core/public-config.js?v=capabilities-1";
 import {
   DEFAULT_MARKET_SCOPE,
   createStockKey,
@@ -19,9 +20,9 @@ import {
 } from "./src/core/ui-state.js?v=research-ui-1";
 import { renderHomeDataStatus } from "./src/components/home-data-status.js?v=mobile-ui-1";
 import { loadHomeDataStatus } from "./src/data/home-data-status-api.js?v=home-data-2";
-import { loadPredictionSnapshot } from "./src/data/prediction-api.js?v=classification-1";
-import { createUnavailableSnapshot } from "./src/data/prediction-contract.js?v=classification-1";
-import { setWatchlistMembership } from "./src/data/watchlist-api.js?v=market-scope-1";
+import { loadPredictionSnapshot } from "./src/data/prediction-api.js?v=classification-2";
+import { createUnavailableSnapshot } from "./src/data/prediction-contract.js?v=classification-2";
+import { setWatchlistMembership } from "./src/data/watchlist-api.js?v=capabilities-1";
 import { isSupabaseSdkLoadError } from "./src/data/supabase-sdk-loader.js?v=auth-1";
 import {
   createCandidatesPage,
@@ -29,7 +30,7 @@ import {
   renderCandidatesPage,
 } from "./src/pages/candidates-page.js?v=classification-2";
 import { createOverviewPage, renderOverviewPage } from "./src/pages/overview-page.js?v=classification-2";
-import { createStockDetailPage, renderStockDetailPage } from "./src/pages/stock-detail-page.js?v=market-scope-1";
+import { createStockDetailPage, renderStockDetailPage } from "./src/pages/stock-detail-page.js?v=capabilities-1";
 import { createWatchlistPage, renderWatchlistPage } from "./src/pages/watchlist-page.js?v=research-ui-1";
 
 const appRoot = document.querySelector("#app-content");
@@ -50,6 +51,7 @@ if (appRoot && navigationRoot) {
   let selectedStockKey = null;
   let watchlistKeys = new Set();
   let marketSwitch = null;
+  const watchlistPersistenceEnabled = publicConfig.watchlistPersistenceEnabled === true;
 
   function findStock(stockKey) {
     const market = String(stockKey ?? "").split(":", 1)[0];
@@ -67,6 +69,7 @@ if (appRoot && navigationRoot) {
       marketSwitch?.setActive(prediction.market);
       renderStockDetailPage(prediction, {
         isWatchlisted: watchlistKeys.has(selectedStockKey),
+        watchlistPersistenceEnabled,
       });
       return true;
     },
@@ -105,6 +108,7 @@ if (appRoot && navigationRoot) {
       if (selected) {
         renderStockDetailPage(selected, {
           isWatchlisted: watchlistKeys.has(selectedStockKey),
+          watchlistPersistenceEnabled,
         });
       } else {
         selectedStockKey = null;
@@ -192,12 +196,15 @@ if (appRoot && navigationRoot) {
     const prediction = findStock(stockKey);
     if (!prediction) return;
     selectedStockKey = stockKey;
-    renderStockDetailPage(prediction, { isWatchlisted: watchlistKeys.has(stockKey) });
+    renderStockDetailPage(prediction, {
+      isWatchlisted: watchlistKeys.has(stockKey),
+      watchlistPersistenceEnabled,
+    });
     router.show("stock", { stockKey });
   });
   document.addEventListener("click", async (event) => {
     const button = event.target.closest("[data-toggle-watchlist][data-symbol]");
-    if (!button || button.disabled) return;
+    if (!button || button.disabled || !watchlistPersistenceEnabled) return;
     const symbol = button.dataset.symbol;
     const market = button.dataset.market;
     const selected = button.getAttribute("aria-pressed") !== "true";
@@ -213,7 +220,7 @@ if (appRoot && navigationRoot) {
       if (feedback) feedback.textContent = error?.message ?? "無法更新自選股。";
       globalThis.Sentry?.captureException?.(error);
     } finally {
-      button.disabled = false;
+      button.disabled = !watchlistPersistenceEnabled;
     }
   });
   globalThis.addEventListener("alpha-lens:auth-change", () => refreshSnapshot());

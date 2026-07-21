@@ -1,5 +1,7 @@
 from pathlib import Path
 
+from scripts.check_github_action_pins import reviewed_action_reference
+
 
 ROOT = Path(__file__).resolve().parents[1]
 MIGRATION = (
@@ -74,7 +76,7 @@ def test_workflow_is_bounded_paced_retriable_and_does_not_receive_vendor_keys() 
     assert '${{ inputs.start_month' not in workflow.split("run: |", 1)[1]
     assert '${{ inputs.end_month' not in workflow.split("run: |", 1)[1]
     assert '${{ inputs.max_tasks' not in workflow.split("run: |", 1)[1]
-    assert "upload-artifact@v4" in workflow
+    assert reviewed_action_reference("actions/upload-artifact") in workflow
     assert "retention-days: 90" in workflow
     assert "FINMIND" not in workflow
     assert "FUGLE" not in workflow

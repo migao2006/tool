@@ -75,7 +75,13 @@ def _fitted_components():
         row_available_ats=[fit_at] * len(raw),
     )
     matrix = imputer.transform_frame(raw, decision_dates=[date(2024, 1, 31)] * len(raw))
-    common = {"n_estimators": 4, "num_leaves": 4, "verbosity": -1, "random_state": 7}
+    common = {
+        "n_estimators": 4,
+        "num_leaves": 4,
+        "verbosity": -1,
+        "random_state": 7,
+        "n_jobs": 1,
+    }
     rank = lightgbm.LGBMRegressor(**common).fit(
         matrix, np.linspace(-0.1, 0.1, len(matrix))
     )

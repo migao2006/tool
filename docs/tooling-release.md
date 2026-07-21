@@ -1,6 +1,6 @@
 # 工具、Git 與發布規範
 
-> 2026-07-19 已依本機、專案設定與 GitHub Actions 核對。工具存在不等於 CI 已強制執行；發布與 migration 現況見 [`current-status.md`](current-status.md)。
+> 2026-07-20 已依目前 Repository 設定核對。CI、migration 與部署證據邊界見 [`release-state.md`](release-state.md)；遠端 branch protection 與正式環境生效狀態未由本修補重新驗證。
 
 ## 一、可用工具
 
@@ -41,8 +41,9 @@ Python：
 2026-07-19 已實際確認 PowerShell `7.6.3`、jq `1.8.2`、yq `4.53.3`、
 fd `10.4.2`、fzf `0.74.1`、Docker Engine `29.6.1`、Docker Compose
 `5.3.0`、Docker Desktop 與 Supabase 本機容器可正常運作；目前 Supabase
-CLI 為 `2.109.1`。Biome 已全域安裝，但專案尚無 `biome.json`；
-pre-commit 也尚無專案設定檔。這兩者不得描述為已完整接入專案。
+CLI 為 `2.109.1`。Biome 已由 `biome.json` 採用高信號 correctness／security 規則；pre-commit 已以
+`.pre-commit-config.yaml` 接入 manifest、Action pin、migration 與 Vercel header 契約。
+工具版本統一固定於 `config/quality-tools.env`。
 
 PowerShell 7 作為 Windows 自動化腳本的優先 shell；jq 用於 JSON 查詢，
 yq 用於 YAML 查詢，fd 用於檔案名稱搜尋，fzf 主要供互動式終端搜尋。
@@ -63,15 +64,19 @@ Docker 工具狀態：`AVAILABLE`。可直接使用 `docker` 與 `docker compose
 
 ## 二、CI 已強制的驗證
 
-`Project tests` workflow 目前強制：
+`Project tests` workflow 目前包含：
 
-- Python：`pytest`，pytest-xdist 最多 4 process，使用 `loadfile` 分配。
-- 前端：Playwright 2 workers，共用一次本機 web server。
-- PR：依受影響檔案選擇 Python／前端範圍。
-- 非 PR 與每週排程：完整 Python 與前端回歸。
-- 安裝：uv 與 pnpm lockfile／cache。
+- Python：鎖定環境後執行完整 `pytest`。
+- 前端：Playwright Chromium／WebKit browser tests。
+- `quality-security`：Ruff、basedpyright、Biome、actionlint、Gitleaks、pip-audit、SQLFluff 與 pre-commit。
+- GitHub Actions：所有外部 `uses:` 必須符合 `config/github-actions-pins.json` 的完整 40 字元 commit SHA。
+- 文件：`release-manifest.json` 的生成輸出必須無漂移。
+- 平台契約：migration 權限／PIT 條件及 `vercel.json` 安全標頭必須通過靜態檢查。
+- `test-gate` 會彙總 Python、前端與 `quality-security`；任一已選範圍失敗或取消，gate 即失敗。
 
-Ruff、basedpyright、Biome、actionlint、Gitleaks、SQLFluff、pip-audit 與 pre-commit 是可用或發布前工具，但目前沒有全部納入 `Project tests` required check。只有實際執行過的項目才能在交付報告中標示通過。
+工具版本固定於 `config/quality-tools.env`，不得在 workflow 中使用浮動 `latest`。
+Repository 已建立上述 gate，但遠端 GitHub branch protection 是否已將 `test-gate` 設為 required check
+尚未由本修補重新驗證；不得把 workflow 存在等同於遠端規則已生效。
 
 ## 三、Windows 憑證
 
@@ -150,14 +155,9 @@ $env:NODE_OPTIONS = "--use-system-ca"
 - 正式推送前，migration 差異必須只包含經驗證、確實尚未套用的
   forward-only migration。
 
-2026-07-19 的具體狀態：
-
-- 本機共有 28 個 migration 檔案；Docker Supabase 完整 reset 與 lint 已通過。
-- Staging history 已對齊 28 筆，截止
-  `20260719090300_allow_late_retrieval_for_current_security_snapshot.sql`。
-- Production history 已對齊 27 筆，截止
-  `20260719081157_defer_unavailable_supplemental_datasets.sql`。
-- `20260719090300` 尚未套用至 Production；必須先通過 GitHub 發布閘門。
+目前 Repository migration 數量、已記錄的 Staging／Production 最新 migration，以及
+本修補新增但尚待隔離驗證的 migration，全部由 `release-manifest.json` 產生至
+[`release-state.md`](release-state.md)。不得在本文件另維護一份容易漂移的數字。
 
 ## 六、發布閘門
 

@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 
@@ -17,7 +18,11 @@ def test_edge_function_requires_an_exact_market_scope() -> None:
     assert 'marketValues.length === 0 ? "TWSE"' in handler
     assert 'market !== "TWSE" && market !== "TPEX"' in handler
     assert '"UNSUPPORTED_MARKET"' in handler
-    assert "loadLatest(horizon, marketScope)" in handler
+    assert re.search(
+        r"loadLatest\(\s*query\.horizon,\s*query\.marketScope,"
+        r"\s*signal,\s*observedAt,\s*\)",
+        handler,
+    )
     assert "market_scope: `eq.${marketScope}`" in repository
     assert "market_scope: MarketScope | null" in types
     assert 'rows.run.market_scope ?? "TWSE"' in snapshot

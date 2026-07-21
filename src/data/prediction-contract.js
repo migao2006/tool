@@ -76,6 +76,7 @@ export function normalizePrediction(record, snapshotHorizon = CURRENT_HORIZON) {
     current_industry: nullableString(firstValue(record, ["current_industry", "currentIndustry"])),
     current_industry_code: nullableString(firstValue(record, ["current_industry_code", "currentIndustryCode"])),
     industry_classification_effective_from: nullableString(firstValue(record, ["industry_classification_effective_from", "industryClassificationEffectiveFrom"])),
+    industry_classification_effective_to: nullableString(firstValue(record, ["industry_classification_effective_to", "industryClassificationEffectiveTo"])),
     industry_classification_available_at: nullableString(firstValue(record, ["industry_classification_available_at", "industryClassificationAvailableAt"])),
     industry_classification_basis: nullableString(firstValue(record, ["industry_classification_basis", "industryClassificationBasis"])),
     asset_type: rawAssetType === null || rawAssetType === undefined ? null : String(rawAssetType).toUpperCase(),

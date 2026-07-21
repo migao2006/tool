@@ -1,5 +1,7 @@
 from pathlib import Path
 
+from scripts.check_github_action_pins import reviewed_action_reference
+
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "build-twse-research-feature-dataset.yml"
@@ -17,7 +19,7 @@ def test_workflow_is_manual_feature_gated_and_private() -> None:
         "SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}"
         in workflow
     )
-    assert "actions/upload-artifact@v7" in workflow
+    assert reviewed_action_reference("actions/upload-artifact") in workflow
     assert "twse-research-features.parquet" in workflow
     assert "twse-research-features-audit.json" in workflow
     assert "RESEARCH_ONLY" in workflow

@@ -155,6 +155,7 @@ export function mapPrediction(
     current_industry_code: currentHistory?.industry_code ?? null,
     industry_classification_effective_from: currentHistory?.effective_from ??
       null,
+    industry_classification_effective_to: currentHistory?.effective_to ?? null,
     industry_classification_available_at: currentHistory?.available_at ?? null,
     industry_classification_basis: currentHistory
       ? CURRENT_INDUSTRY_CLASSIFICATION_BASIS

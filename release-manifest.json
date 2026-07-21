@@ -1,0 +1,269 @@
+{
+  "schema_version": "alpha-lens-release-manifest.v1",
+  "last_verified_date": "2026-07-20",
+  "verification_basis": "UPLOADED_REPOSITORY_AND_RECORDED_WORKFLOW_EVIDENCE",
+  "repository_state": {
+    "migration_file_count": 36,
+    "patch_added_migrations": [
+      "20260720170000_prediction_snapshot_rate_limit.sql",
+      "20260720190000_prediction_snapshot_read_rpc.sql"
+    ],
+    "patch_requires_staging_validation": [
+      "20260720170000_prediction_snapshot_rate_limit.sql",
+      "20260720190000_prediction_snapshot_read_rpc.sql"
+    ],
+    "migrations_after_recorded_remote_latest": [
+      "20260720051630_tpex_price_index_ohlc_queue.sql",
+      "20260720061143_scope_prediction_runs_by_market.sql",
+      "20260720064801_exclude_legacy_prediction_publisher_from_lint.sql",
+      "20260720170000_prediction_snapshot_rate_limit.sql",
+      "20260720190000_prediction_snapshot_read_rpc.sql"
+    ],
+    "environment_migration_history": {
+      "staging": {
+        "recorded_applied_count": 31,
+        "recorded_latest_migration": "20260719152201_publish_research_snapshot_atomically.sql",
+        "evidence_status": "DOCUMENTED_NOT_REVERIFIED_BY_THIS_PATCH"
+      },
+      "production": {
+        "recorded_applied_count": 31,
+        "recorded_latest_migration": "20260719152201_publish_research_snapshot_atomically.sql",
+        "evidence_status": "DOCUMENTED_NOT_REVERIFIED_BY_THIS_PATCH"
+      }
+    }
+  },
+  "model_card": {
+    "model_name": "alpha_lens_five_day_mvp",
+    "status": "RESEARCH_ONLY",
+    "production_horizon": 5,
+    "scope": "TWSE_PRICE_ONLY",
+    "model_version": "twse-price-research-h5-v1",
+    "training_end_date": "2024-06-18",
+    "locked_holdout_executed": false,
+    "ranking_is_only_sort_source": true,
+    "workflow": {
+      "run_id": 29690820942,
+      "url": "https://github.com/migao2006/tool/actions/runs/29690820942",
+      "git_commit": "1c900c6873337606ac197332d6d9c84bdbf3ee08",
+      "conclusion": "success",
+      "generated_at": "2026-07-19T22:34:20.279167+08:00"
+    },
+    "models": {
+      "rank": "LightGBM LGBMRanker lambdarank",
+      "direction": "LightGBM multiclass with time-separated temperature calibration",
+      "quantiles": "LightGBM quantile 0.10/0.50/0.90",
+      "ranking_is_only_sort_source": true,
+      "random_seed": 20260718,
+      "library_versions": {
+        "lightgbm": "4.6.0",
+        "scikit-learn": "1.9.0"
+      }
+    },
+    "research_dataset": {
+      "record_count": 1196162,
+      "input_artifact_sha256": "9ca63d003f082948013545f2755bb0d4dea145d94aaebbcd358cd93f40b480be",
+      "dataset_snapshot_id": "22f6747e395b2a893ea297496558b05bd59e10751ec6a27d7d8ad3560aa88c22",
+      "feature_schema_hash": "8e256243dbe0018a7a96a637b989e2338dcf06a8f2e9a9d42faf888c7f54cd53",
+      "source_hash": "18c6aac3780bea72be2ebdae2803fbe86b8a42436f60101d6412199fc11a6701",
+      "label_version": "twse-research-unadjusted-open-close-5d-v1",
+      "benchmark_id": "TWSE_TAIEX_PRICE_INDEX",
+      "benchmark_version": "rwd.en.TAIEX.MI_5MINS_HIST.v1@snapshot:4c58a09fd1bbccc21416948eff8d31f77c31ba8568e2392493d0050f674c52c9",
+      "cost_profile_version": "tw_stock_swing_v1:base_cost",
+      "production_eligible": false
+    },
+    "latest_feature_dataset": {
+      "workflow_run_id": 29693937930,
+      "workflow_url": "https://github.com/migao2006/tool/actions/runs/29693937930",
+      "git_commit": "be9ca59c4bbae18de88cd95b080ceecb4c60fda3",
+      "dataset_version": "twse-archive-price-volume-5d-v2",
+      "record_count": 1908104,
+      "symbol_count": 1080,
+      "source_archive_count": 2009,
+      "latest_decision_date": "2026-07-17",
+      "decision_close_price_included": true,
+      "parquet_sha256": "24c90589d51de6b0c06f084ca977c4bfb99993f91164d65b3bad33bce3c73aac",
+      "dataset_snapshot_id": "c349a800d40dd73319c27fa39ca42107252230f1c14606919d7b6d90f52a919f",
+      "parquet_schema_sha256": "a53d4976fb779f89054786e2f960d355f4f4426a90eb4a46eadce251c1c22dad",
+      "model_feature_schema_hash": "8e256243dbe0018a7a96a637b989e2338dcf06a8f2e9a9d42faf888c7f54cd53",
+      "source_archive_snapshot_sha256": "5438e7435de331b27ad2723eeee2544641e0e2520a56ebd949bbaac08b259407",
+      "github_artifact_id": 8444804465,
+      "github_artifact_digest": "70143a1cb7f8ecb4905c67787830c991fded7ab89f913d5b1ce46dca3c92b19b",
+      "read_back_verified": true,
+      "production_eligible": false
+    },
+    "validation": {
+      "method": "purged_walk_forward",
+      "fold_count": 5,
+      "evaluated_dates_per_fold": 63,
+      "locked_holdout_executed": false,
+      "locked_holdout_rows": 170032,
+      "locked_holdout_reason": "FROZEN_UNTIL_RESEARCH_DESIGN_IS_LOCKED",
+      "ranking_mean": {
+        "ndcg_at_10": 0.3118559358104792,
+        "ndcg_at_20": 0.3054872920483399,
+        "ndcg_at_50": 0.2877961237694637,
+        "precision_at_10": 0.39746031746031746,
+        "precision_at_20": 0.3914285714285714,
+        "precision_at_50": 0.3784126984126984,
+        "rank_ic_mean": -0.05455249592571441,
+        "rank_icir": -0.3583357717440063
+      },
+      "momentum_20d_baseline_mean": {
+        "ndcg_at_10": 0.33015609766513776,
+        "ndcg_at_20": 0.3174443892862485,
+        "ndcg_at_50": 0.2939938236953087,
+        "precision_at_10": 0.4022222222222222,
+        "precision_at_20": 0.39396825396825397,
+        "precision_at_50": 0.3771428571428571,
+        "rank_ic_mean": -0.023127247869154845,
+        "rank_icir": -0.18106417114739332
+      },
+      "rank_model_beats_momentum_20d": false,
+      "direction_mean": {
+        "log_loss": 1.0371983617119593,
+        "macro_f1": 0.3331015425382762,
+        "ece": 0.03045878221144363,
+        "calibrated_log_loss": 1.042601182868113,
+        "uncalibrated_log_loss": 1.0438519437271512,
+        "brier_down": 0.24038665939798917,
+        "brier_neutral": 0.20462095686524093,
+        "brier_up": 0.1793551988538135
+      },
+      "quantile_mean": {
+        "p10_breach_rate": 0.12125536253581089,
+        "p90_exceedance_rate": 0.09922253778945613,
+        "p10_p90_coverage": 0.779522099674733,
+        "mean_interval_width": 0.12004807752773364,
+        "pinball_q10": 0.00966010485206841,
+        "pinball_q50": 0.02016551586748424,
+        "pinball_q90": 0.010663422339008192,
+        "raw_crossing_rate": 0.0,
+        "final_crossing_rate": 0.0
+      }
+    },
+    "historical_oos_snapshot": {
+      "prediction_run_id": 1,
+      "as_of_date": "2025-05-02",
+      "decision_at": "2025-05-02T17:00:00+08:00",
+      "prediction_count": 672,
+      "candidate_count": 0,
+      "watch_count": 0,
+      "no_trade_count": 672,
+      "hard_fail_count": 0,
+      "snapshot_sha256": "f4fa5a50ebaa3f4820caadaf02c70525a7b6e93fd89d1fa89fbaac21cc7840d9",
+      "github_artifact_id": 8443586850,
+      "github_artifact_digest": "57eb16f26d50e2408020c51a4e1bef2f179e998819baf2f550bfc088c92e6b69"
+    },
+    "published_research_snapshot": {
+      "workflow_run_id": 29701335309,
+      "workflow_url": "https://github.com/migao2006/tool/actions/runs/29701335309",
+      "git_commit": null,
+      "git_commit_evidence_status": "NOT_RECORDED_IN_AVAILABLE_EVIDENCE",
+      "prepared_workflow_run_id": null,
+      "prepared_workflow_run_evidence_status": "NOT_RECORDED_IN_AVAILABLE_EVIDENCE",
+      "feature_workflow_run_id": 29693937930,
+      "prediction_run_id": 4,
+      "as_of_date": "2026-07-17",
+      "decision_at": "2026-07-17T17:00:00+08:00",
+      "evaluation_scope": "RETROSPECTIVE_RESEARCH_INFERENCE",
+      "status": "RESEARCH_ONLY",
+      "prediction_count": 1068,
+      "candidate_count": 0,
+      "watch_count": 0,
+      "no_trade_count": 1068,
+      "hard_fail_count": 0,
+      "data_quality_warn_count": 1068,
+      "industry_non_null_count": 0,
+      "decision_gate_count": 8544,
+      "decision_gates_per_prediction": 8,
+      "formal_decision_policy_executed": false,
+      "feature_artifact_sha256": "24c90589d51de6b0c06f084ca977c4bfb99993f91164d65b3bad33bce3c73aac",
+      "model_bundle_sha256": "c41b76df09decf6be62da3cc59012597c7fd889d4980e43c14eb7cca70de5ca7",
+      "snapshot_sha256": "4581af6f96eb56791a498343784e484a3c604ef7c32f549ffdbbfc7dce60f505",
+      "snapshot_artifact_sha256": "605c19a53b4321e307848e4affa081c4a760601a3a0186a26192036c61395eee",
+      "github_artifact_id": 8446597593,
+      "github_artifact_digest": "b06a8280e9780f19378f682ed4ad55ff9017fb684cbe1dd9abc953d7d9948199"
+    },
+    "entry_rule": "t_plus_1_open_research_path",
+    "exit_rule": "entry_plus_5_trading_days_close",
+    "labels": {
+      "rank": "research_net_open_close_return_minus_same_path_taiex_price_index_return",
+      "direction": "UP_NEUTRAL_DOWN_using_dynamic_no_trade_band",
+      "quantiles": [
+        0.1,
+        0.5,
+        0.9
+      ]
+    },
+    "data_requirements": {
+      "available_at_audit_required": true,
+      "historical_universe_required": true,
+      "corporate_actions_required": true,
+      "unadjusted_ohlc_for_execution": true
+    },
+    "latest_raw_archive_audit": {
+      "as_of_date": "2026-07-19",
+      "integrity_status": "PASS",
+      "object_count": 1971,
+      "row_count": 2183917,
+      "twse_common_stock_symbols": 1080,
+      "tpex_common_stock_symbols": 891,
+      "production_eligible": false
+    },
+    "formal_pass": false,
+    "limitations": [
+      "Historical security identity remains current-universe mapped and is not fully point-in-time verified",
+      "Corporate actions, tradability states, and execution feasibility are not fully point-in-time verified",
+      "The stock and TAIEX price-index research paths are aligned, but the benchmark is not a total-return index",
+      "The research label uses unadjusted open-close returns rather than formal executable total return",
+      "The rank model did not beat the 20-day momentum baseline and mean Rank IC is negative",
+      "Locked holdout and complete execution backtest have not been executed",
+      "The latest snapshot is retrospective research inference rather than a new out-of-sample evaluation",
+      "Industry history and formal decision-policy gates are absent from the latest 1,068-row snapshot"
+    ]
+  },
+  "platform_hardening": {
+    "prediction_snapshot": {
+      "primary_read_path": "market_data.get_prediction_snapshot_rows(integer,text,timestamptz)",
+      "default_mode": "rpc",
+      "emergency_rollback_mode": "legacy",
+      "expected_primary_postgrest_requests": 1,
+      "fallback_condition": "EXPLICIT_LEGACY_MODE_ONLY",
+      "migration": "20260720190000_prediction_snapshot_read_rpc.sql",
+      "remote_status": "REPOSITORY_ONLY_NOT_REMOTELY_VERIFIED",
+      "deployment_guard": "RPC_MIGRATION_VERIFIED_ATTESTATION_REQUIRED"
+    },
+    "continuous_integration": {
+      "quality_job_id": "quality-security",
+      "required_gate_job_id": "test-gate",
+      "branch_protection_status": "NOT_REVERIFIED_BY_THIS_PATCH",
+      "github_actions_pinned_to_full_sha": true,
+      "action_pin_policy": "config/github-actions-pins.json",
+      "tool_version_file": "config/quality-tools.env",
+      "tools": {
+        "ruff": "0.15.22",
+        "basedpyright": "1.39.9",
+        "pre-commit": "4.6.0",
+        "pip-audit": "2.10.1",
+        "sqlfluff": "4.2.2",
+        "biome": "2.4.16",
+        "actionlint": "1.7.12",
+        "gitleaks": "8.30.1",
+        "go": "1.26.5",
+        "deno": "2.8.1"
+      },
+      "required_by_test_gate": true
+    },
+    "vercel": {
+      "config_file": "vercel.json",
+      "csp_enforced": true,
+      "inline_script_allowed": false,
+      "inline_style_allowed": false,
+      "remote_response_headers_verified": false
+    },
+    "documentation": {
+      "generated_state_file": "docs/release-state.md",
+      "source_manifest": "release-manifest.json"
+    }
+  }
+}

@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from scripts import build_tpex_prepared_research_dataset as cli
+from scripts.check_github_action_pins import reviewed_action_reference
 
 
 def test_cli_rejects_unreleased_horizon_before_external_access(tmp_path: Path) -> None:
@@ -92,7 +93,7 @@ def test_workflow_is_manual_bounded_and_has_no_provider_api_secret() -> None:
     assert "cancel-in-progress: false" in workflow
     assert "timeout-minutes: 120" in workflow
     assert "--horizon 5" in workflow
-    assert "actions/github-script@v8" in workflow
+    assert reviewed_action_reference("actions/github-script") in workflow
     assert "getWorkflowRun" in workflow
     assert "build-tpex-research-feature-dataset.yml" in workflow
     assert "run.repository.full_name" in workflow
@@ -105,7 +106,7 @@ def test_workflow_is_manual_bounded_and_has_no_provider_api_secret() -> None:
     assert "listWorkflowRunArtifacts" in workflow
     assert "matches.length !== 1" in workflow
     assert "!digest || !/^sha256:" in workflow
-    assert "actions/download-artifact@v8" in workflow
+    assert reviewed_action_reference("actions/download-artifact") in workflow
     assert "artifact-ids: ${{ steps.feature-source.outputs.artifact_id }}" in workflow
     assert "digest-mismatch: error" in workflow
     assert "--feature-source-run-id" in workflow

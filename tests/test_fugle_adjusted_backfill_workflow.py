@@ -8,6 +8,7 @@ from typing import cast
 import pytest
 
 from scripts.backfill_fugle_adjusted import main
+from scripts.check_github_action_pins import reviewed_action_reference
 from src.data.ingestion.historical_fugle_adjusted_backfill_contracts import (
     FugleAdjustedBackfillSettings,
 )
@@ -89,7 +90,7 @@ def test_workflow_uses_one_key_two_closed_gates_and_compact_artifact() -> None:
     assert "FINMIND_TOKEN" not in workflow
     assert "backfill_fugle_adjusted" in workflow
     assert "fugle-adjusted-summary.json" in workflow
-    assert "actions/upload-artifact@v4" in workflow
+    assert reviewed_action_reference("actions/upload-artifact") in workflow
     assert "R2_SECRET_ACCESS_KEY" in workflow
 
 

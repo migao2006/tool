@@ -1,0 +1,26 @@
+{
+  "include": [
+    "scripts/check_github_action_pins.py",
+    "scripts/check_migration_contracts.py",
+    "scripts/check_python_lock_contract.py",
+    "scripts/check_vercel_headers.py",
+    "scripts/sync_release_manifest.py",
+    "src/core/horizon.py",
+    "src/core/json_value.py",
+    "src/core/research_prediction_contract.py",
+    "src/api/market_output.py",
+    "src/api/prediction_output.py",
+    "src/api/prediction_snapshot.py"
+  ],
+  "exclude": [
+    "**/__pycache__",
+    "artifacts",
+    ".venv"
+  ],
+  "pythonVersion": "3.12",
+  "typeCheckingMode": "basic",
+  "reportMissingImports": "none",
+  "reportMissingTypeStubs": "none",
+  "reportUnusedImport": "error",
+  "reportUnusedVariable": "error"
+}

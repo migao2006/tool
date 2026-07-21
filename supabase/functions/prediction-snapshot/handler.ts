@@ -1,5 +1,17 @@
 import { corsHeaders, type CorsPolicy } from "./cors.ts";
 import { ApiError } from "./errors.ts";
+import {
+  consoleRequestLogger,
+  elapsedMilliseconds,
+  type LogFields,
+  requestId,
+  type RequestLogger,
+} from "./observability.ts";
+import type { RateLimitDecision, RateLimiter } from "./rate-limit.ts";
+import {
+  normalizeTimeoutMs,
+  runWithRequestDeadline,
+} from "./request-deadline.ts";
 import { API_CONTRACT_VERSION, buildSnapshot } from "./snapshot.ts";
 import type { MarketScope, SnapshotRepositoryContract } from "./types.ts";
 
@@ -13,11 +25,15 @@ const RESEARCH_SETTINGS = new Set([
   "max_industry_position",
   "max_market_exposure",
 ]);
+const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
 
 interface HandlerOptions {
   repository: SnapshotRepositoryContract;
   corsPolicy: CorsPolicy;
   staleHours?: number;
+  requestTimeoutMs?: number;
+  rateLimiter?: RateLimiter;
+  logger?: RequestLogger;
   now?: () => Date;
 }
 
@@ -80,20 +96,63 @@ function validateQuery(url: URL): SnapshotQuery {
   return { horizon: 5, marketScope: market };
 }
 
+function applyRateLimitHeaders(
+  headers: Headers,
+  decision: RateLimitDecision,
+): void {
+  headers.set("X-RateLimit-Limit", String(decision.limit));
+  headers.set("X-RateLimit-Remaining", String(decision.remaining));
+  if (!decision.allowed) {
+    headers.set("Retry-After", String(Math.max(1, decision.retryAfterSeconds)));
+  }
+}
+
+function emitLog(
+  logger: RequestLogger,
+  level: "info" | "error",
+  fields: LogFields,
+): void {
+  try {
+    logger[level](fields);
+  } catch {
+    // Observability must never break the API response path.
+  }
+}
+
 export function createHandler(
   options: HandlerOptions,
 ): (request: Request) => Promise<Response> {
+  const requestTimeoutMs = normalizeTimeoutMs(
+    options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    DEFAULT_REQUEST_TIMEOUT_MS,
+  );
+  const logger = options.logger ?? consoleRequestLogger;
+
   return async (request: Request): Promise<Response> => {
+    const startedAt = performance.now();
+    const currentRequestId = requestId(request);
+    let marketScope: MarketScope | null = null;
     let headers = new Headers({
       "Cache-Control": "no-store, max-age=0",
       "Pragma": "no-cache",
       "Vary": "Origin",
       "X-Content-Type-Options": "nosniff",
+      "X-Request-Id": currentRequestId,
     });
     try {
       headers = corsHeaders(request, options.corsPolicy);
+      headers.set("X-Request-Id", currentRequestId);
       if (request.method === "OPTIONS") {
-        return new Response(null, { status: 204, headers });
+        const response = new Response(null, { status: 204, headers });
+        emitLog(logger, "info", {
+          event: "prediction_snapshot_request_completed",
+          request_id: currentRequestId,
+          method: request.method,
+          market_scope: null,
+          status_code: 204,
+          elapsed_ms: elapsedMilliseconds(startedAt),
+        });
+        return response;
       }
       if (request.method !== "GET") {
         throw new ApiError(405, "METHOD_NOT_ALLOWED", "Only GET is supported");
@@ -107,22 +166,67 @@ export function createHandler(
           "Requested API contract is not supported",
         );
       }
-      const { horizon, marketScope } = validateQuery(new URL(request.url));
-      const rows = await options.repository.loadLatest(horizon, marketScope);
-      const snapshot = buildSnapshot(
-        rows,
-        marketScope,
-        options.now?.() ?? new Date(),
-        options.staleHours ?? 72,
+      const query = validateQuery(new URL(request.url));
+      marketScope = query.marketScope;
+      const snapshot = await runWithRequestDeadline(
+        requestTimeoutMs,
+        async (signal) => {
+          if (options.rateLimiter) {
+            const decision = await options.rateLimiter.consume(request, signal);
+            applyRateLimitHeaders(headers, decision);
+            if (!decision.allowed) {
+              throw new ApiError(
+                429,
+                "PREDICTION_API_RATE_LIMITED",
+                "Prediction snapshot request rate exceeded",
+              );
+            }
+          }
+          const observedAt = options.now?.() ?? new Date();
+          const rows = await options.repository.loadLatest(
+            query.horizon,
+            query.marketScope,
+            signal,
+            observedAt,
+          );
+          return buildSnapshot(
+            rows,
+            query.marketScope,
+            observedAt,
+            options.staleHours ?? 72,
+          );
+        },
       );
-      return jsonResponse(snapshot, 200, headers);
+      const response = jsonResponse(snapshot, 200, headers);
+      emitLog(logger, "info", {
+        event: "prediction_snapshot_request_completed",
+        request_id: currentRequestId,
+        method: request.method,
+        market_scope: marketScope,
+        status_code: 200,
+        elapsed_ms: elapsedMilliseconds(startedAt),
+      });
+      return response;
     } catch (error) {
       const apiError = error instanceof ApiError ? error : new ApiError(
         500,
         "PREDICTION_SNAPSHOT_READ_FAILED",
         "Prediction snapshot could not be read",
       );
-      return jsonResponse({ code: apiError.code }, apiError.status, headers);
+      emitLog(logger, apiError.status >= 500 ? "error" : "info", {
+        event: "prediction_snapshot_request_failed",
+        request_id: currentRequestId,
+        method: request.method,
+        market_scope: marketScope,
+        status_code: apiError.status,
+        error_code: apiError.code,
+        elapsed_ms: elapsedMilliseconds(startedAt),
+      });
+      return jsonResponse(
+        { code: apiError.code, request_id: currentRequestId },
+        apiError.status,
+        headers,
+      );
     }
   };
 }

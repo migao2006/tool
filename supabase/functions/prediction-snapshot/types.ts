@@ -156,5 +156,7 @@ export interface SnapshotRepositoryContract {
   loadLatest(
     horizon: number,
     marketScope: MarketScope,
+    signal?: AbortSignal,
+    observedAt?: Date,
   ): Promise<SnapshotRows | null>;
 }

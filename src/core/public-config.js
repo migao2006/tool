@@ -10,6 +10,7 @@ export const publicConfig = Object.freeze({
   predictionApiTimeoutMs: 12_000,
   homeDataStatusTimeoutMs: 12_000,
   predictionApiContractVersion: "prediction-snapshot.v1",
+  watchlistPersistenceEnabled: false,
 });
 
 export function hasSupabaseConfig(config = publicConfig) {

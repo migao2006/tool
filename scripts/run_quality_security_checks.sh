@@ -44,7 +44,7 @@ fi
 go install "github.com/rhysd/actionlint/cmd/actionlint@v${ACTIONLINT_VERSION}"
 "$(go env GOPATH)/bin/actionlint"
 
-go install "github.com/gitleaks/gitleaks/v8@v${GITLEAKS_VERSION}"
+go install "github.com/zricethezav/gitleaks/v8@v${GITLEAKS_VERSION}"
 secret_scan_root="$(mktemp -d)"
 cleanup() {
   rm -rf "$secret_scan_root"

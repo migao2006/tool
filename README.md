@@ -13,6 +13,8 @@
 - 任務、manifest、稽核 metadata 與 UI 摘要：Supabase
 - 排程與發布入口：GitHub Actions；不直接以 Vercel CLI 發布 Production
 
+代理工作規範以根 [`AGENTS.md`](AGENTS.md) 為入口；詳細架構、產品、既定決策與審查規則位於 [`.ai/`](.ai/)，驗證程序位於 [`.agents/skills/repository-verification/SKILL.md`](.agents/skills/repository-verification/SKILL.md)。
+
 ## 文件索引
 
 核心規範：

@@ -80,8 +80,9 @@ test("重設信申請使用通用訊息且不揭露帳號是否存在", async ({
   await page.locator("#recovery-auth-entry [data-auth-open]").click();
   const dialog = page.locator("#recovery-auth-root [data-auth-dialog]");
   await dialog.getByRole("button", { name: "忘記密碼" }).click();
-  await dialog.getByLabel("Email").fill("unknown@example.com");
-  await dialog.getByRole("button", { name: "寄送重設連結" }).click();
+  const resetForm = dialog.locator('[data-auth-form="request-reset"]');
+  await resetForm.getByLabel("Email").fill("unknown@example.com");
+  await resetForm.getByRole("button", { name: "寄送重設連結" }).click();
 
   await expect(dialog.locator("[data-auth-status]")).toContainText(
     "若此 Email 有帳號",
@@ -95,8 +96,9 @@ test("供應商錯誤不會改變重設信的防枚舉回應", async ({ page }) 
   await page.locator("#recovery-auth-entry [data-auth-open]").click();
   const dialog = page.locator("#recovery-auth-root [data-auth-dialog]");
   await dialog.getByRole("button", { name: "忘記密碼" }).click();
-  await dialog.getByLabel("Email").fill("missing@example.com");
-  await dialog.getByRole("button", { name: "寄送重設連結" }).click();
+  const resetForm = dialog.locator('[data-auth-form="request-reset"]');
+  await resetForm.getByLabel("Email").fill("missing@example.com");
+  await resetForm.getByRole("button", { name: "寄送重設連結" }).click();
 
   await expect(dialog.locator("[data-auth-status]")).toContainText(
     "若此 Email 有帳號",

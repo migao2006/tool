@@ -1,6 +1,24 @@
 name: Daily research model
 
 on:
+  # Bootstrap immediately when the daily orchestration itself changes on main.
+  # The resolver is idempotent and exits cleanly when both markets are current.
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/daily-research-model.yml
+      - scripts/resolve_daily_research_date.py
+      - scripts/publish_daily_bar_publication_snapshots.py
+      - scripts/publish_stored_research_snapshot.py
+      - scripts/publish_twse_daily_research_snapshot.py
+      - scripts/publish_tpex_daily_research_snapshot.py
+      - scripts/verify_daily_research_publish.py
+      - scripts/_build_venue_research_feature_dataset.py
+      - src/data/ingestion/daily_bar_publication.py
+      - src/data/research/**
+      - src/pipeline/daily_research_publish_contract.py
+      - config/five_day_mvp.toml
   workflow_run:
     workflows:
       - Import market data

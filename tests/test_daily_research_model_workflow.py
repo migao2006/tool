@@ -10,6 +10,10 @@ WORKFLOW = ROOT / ".github/workflows/daily-research-model.yml"
 def test_daily_model_is_triggered_after_import_with_a_fallback_schedule() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
 
+    assert "push:" in workflow
+    assert "branches:" in workflow
+    assert "- main" in workflow
+    assert "- .github/workflows/daily-research-model.yml" in workflow
     assert "workflow_run:" in workflow
     assert "- Import market data" in workflow
     assert 'cron: "15 13 * * 1-5"' in workflow

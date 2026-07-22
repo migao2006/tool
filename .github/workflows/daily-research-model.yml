@@ -316,10 +316,12 @@ jobs:
             ]]; then
               continue
             fi
-            echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
-            echo "artifact_id=$artifact_id" >> "$GITHUB_OUTPUT"
-            echo "artifact_digest=$artifact_digest" >> "$GITHUB_OUTPUT"
-            echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
+            {
+              echo "run_id=$run_id"
+              echo "artifact_id=$artifact_id"
+              echo "artifact_digest=$artifact_digest"
+              echo "head_sha=$head_sha"
+            } >> "$GITHUB_OUTPUT"
             found="true"
             break
           done < <(

@@ -173,20 +173,6 @@ jobs:
             feature_run_sha feature_artifact_id feature_artifact_digest \
             <<< "$feature_artifact_identity"
 
-          echo "PREPARED_RUN_ID=$prepared_run_id" >> "$GITHUB_ENV"
-          echo "FEATURE_RUN_ID=$feature_run_id" >> "$GITHUB_ENV"
-          echo "PREPARED_ARTIFACT_ID=$prepared_artifact_id" >> "$GITHUB_ENV"
-          echo "PREPARED_ARTIFACT_DIGEST=$prepared_artifact_digest" >> "$GITHUB_ENV"
-          echo "FEATURE_ARTIFACT_ID=$feature_artifact_id" >> "$GITHUB_ENV"
-          echo "FEATURE_ARTIFACT_DIGEST=$feature_artifact_digest" >> "$GITHUB_ENV"
-          echo "TPEX_PREPARED_SOURCE_RUN_ID=$prepared_run_id" >> "$GITHUB_ENV"
-          echo "TPEX_PREPARED_SOURCE_RUN_SHA=$prepared_run_sha" >> "$GITHUB_ENV"
-          echo "TPEX_PREPARED_SOURCE_ARTIFACT_ID=$prepared_artifact_id" >> "$GITHUB_ENV"
-          echo "TPEX_PREPARED_SOURCE_ARTIFACT_DIGEST=$prepared_artifact_digest" >> "$GITHUB_ENV"
-          echo "TPEX_FEATURE_SOURCE_RUN_ID=$feature_run_id" >> "$GITHUB_ENV"
-          echo "TPEX_FEATURE_SOURCE_RUN_SHA=$feature_run_sha" >> "$GITHUB_ENV"
-          echo "TPEX_FEATURE_SOURCE_ARTIFACT_ID=$feature_artifact_id" >> "$GITHUB_ENV"
-          echo "TPEX_FEATURE_SOURCE_ARTIFACT_DIGEST=$feature_artifact_digest" >> "$GITHUB_ENV"
           if [[ -z "$REQUESTED_AS_OF_DATE" ]]; then
             required_as_of_date="$(TZ=Asia/Taipei date +%F)"
           else
@@ -204,7 +190,23 @@ jobs:
             fi
             required_as_of_date="$REQUESTED_AS_OF_DATE"
           fi
-          echo "REQUIRED_AS_OF_DATE=$required_as_of_date" >> "$GITHUB_ENV"
+          {
+            echo "PREPARED_RUN_ID=$prepared_run_id"
+            echo "FEATURE_RUN_ID=$feature_run_id"
+            echo "PREPARED_ARTIFACT_ID=$prepared_artifact_id"
+            echo "PREPARED_ARTIFACT_DIGEST=$prepared_artifact_digest"
+            echo "FEATURE_ARTIFACT_ID=$feature_artifact_id"
+            echo "FEATURE_ARTIFACT_DIGEST=$feature_artifact_digest"
+            echo "TPEX_PREPARED_SOURCE_RUN_ID=$prepared_run_id"
+            echo "TPEX_PREPARED_SOURCE_RUN_SHA=$prepared_run_sha"
+            echo "TPEX_PREPARED_SOURCE_ARTIFACT_ID=$prepared_artifact_id"
+            echo "TPEX_PREPARED_SOURCE_ARTIFACT_DIGEST=$prepared_artifact_digest"
+            echo "TPEX_FEATURE_SOURCE_RUN_ID=$feature_run_id"
+            echo "TPEX_FEATURE_SOURCE_RUN_SHA=$feature_run_sha"
+            echo "TPEX_FEATURE_SOURCE_ARTIFACT_ID=$feature_artifact_id"
+            echo "TPEX_FEATURE_SOURCE_ARTIFACT_DIGEST=$feature_artifact_digest"
+            echo "REQUIRED_AS_OF_DATE=$required_as_of_date"
+          } >> "$GITHUB_ENV"
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:

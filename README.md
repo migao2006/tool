@@ -25,6 +25,7 @@
 - [`docs/data-model.md`](docs/data-model.md)：point-in-time、模型、驗證與回測
 - [`docs/security.md`](docs/security.md)：Supabase Auth、RLS 與機密
 - [`docs/tooling-release.md`](docs/tooling-release.md)：工具、Git、migration 與發布閘門
+- [`docs/local-development-tools.md`](docs/local-development-tools.md)：Windows 本機工具、`just`、`act` 與 `zizmor`
 - [`docs/p1-repair-report-2026-07-20.md`](docs/p1-repair-report-2026-07-20.md)：P1 修復、驗證結果與部署限制
 
 資料來源與匯入：

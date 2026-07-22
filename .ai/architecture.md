@@ -1,10 +1,8 @@
-# 架構與依賴規範
+# Architecture and Dependency Rules
 
-本文件補充根 `AGENTS.md` 的程式邊界。實際現況以 `docs/architecture.md` 與程式碼為準；不得把目標目錄誤稱為已完成實作。
+This file extends root `AGENTS.md`. Treat `docs/architecture.md` and the code as the implementation record; never describe a target layout as completed code.
 
-## 依賴方向
-
-允許的主要方向為：
+## Dependency direction
 
 ```text
 pages
@@ -15,25 +13,25 @@ pages
   -> data contracts / domain types
 ```
 
-- `pages` 不得直接呼叫模型、SQL、R2 或 Supabase。
-- `components` 不得依賴 `pages`，也不得自行建立資料庫或模型 client。
-- `models`、`features`、`labels`、`calibration` 不得依賴 UI、router、瀏覽器狀態或資料庫 SDK。
-- 外部資料必須透過具名 client、adapter 或 repository；domain logic 不得依賴供應商回傳格式。
-- 禁止循環依賴、深層模組修改全域 UI state，或用跨層 import 繞過公開契約。
+- Pages compose UI and must not call models, SQL, R2, or Supabase directly.
+- Components must not depend on pages or construct database/model clients.
+- Models, features, labels, and calibration must not depend on UI, routers, browser state, or database SDKs.
+- External data enters through named clients, adapters, or repositories; domain logic must not depend on provider payloads.
+- Prohibit cycles, cross-layer imports, deep modules mutating global UI state, and duplicated shared logic.
 
-## 模組責任
+## Module responsibilities
 
-- `src/data/`：來源 client、point-in-time 契約、正規化、repository 與 object storage。
-- `src/features/`：只使用當下可得資料產生可稽核特徵。
-- `src/labels/`：統一交易路徑、成本後報酬與標籤。
-- `src/models/`：排名、方向、分位數、市場與風險模型各自獨立。
-- `src/calibration/`：方向機率及分位數區間校準。
-- `src/decision/`：gate、Top-K、容量與部位限制；不得重新排名。
-- `src/validation/`：purged walk-forward、時間切割與統計評估。
-- `src/backtest/`：成交、成本、限制、cohort、現金與持倉模擬。
-- `src/pages/`、`src/components/`、`src/styles/`：顯示與互動，不包含資料或模型業務規則。
+- `src/data/`: provider clients, point-in-time contracts, normalization, repositories, and object storage.
+- `src/features/`: auditable features built only from data available at the decision time.
+- `src/labels/`: shared trading path, net returns, and labels.
+- `src/models/`: separate rank, direction, quantile, market, and risk models.
+- `src/calibration/`: direction probability and quantile interval calibration.
+- `src/decision/`: gates, Top-K, capacity, and position limits; never reranking.
+- `src/validation/`: purged walk-forward, temporal splits, and statistical evaluation.
+- `src/backtest/`: execution, costs, limits, cohorts, cash, and holdings simulation.
+- `src/pages/`, `src/components/`, `src/styles/`: presentation and interaction only.
 
-## 資料流
+## Data flow
 
 ```text
 GitHub Actions / isolated runner
@@ -45,17 +43,17 @@ GitHub Actions / isolated runner
   -> purged walk-forward research output
 ```
 
-前端不得直接讀寫 R2、供應商 API 或 `service_role`。R2 client 只負責 object I/O；Supabase repository 只負責資料庫契約，不得彼此複製。
+The frontend never accesses R2, provider credentials, or `service_role`. R2 clients own object I/O; Supabase repositories own database contracts.
 
-## 拆分準則
+## Splitting criteria
 
-在下列情況優先拆分：兩項以上主要責任、不同原因修改、無法獨立測試、大量共享狀態、UI/API/轉換混寫，或模型同時處理訓練與發布。
+Split when a unit owns multiple primary responsibilities, changes for unrelated reasons, cannot be tested independently, shares excessive state, mixes UI/API/transformation, or combines model training and publication. File length is a warning, not a target. Do not produce tiny import, rename, or forwarding fragments.
 
-不得為符合行數而建立大量只做 import、重新命名或轉傳呼叫的碎片。共用 artifact、metadata、horizon 與 schema 驗證只保留一份。
+Centralize artifact metadata, horizon validation, schema validation, and shared contracts while keeping model business logic separate.
 
-## 跨模組契約
+## Cross-module contracts
 
-- API、資料表、artifact 與 reason code 使用版本化 schema。
-- 時間戳必須帶時區；內部標準為 UTC，台股交易日及 UI 為 `Asia/Taipei`。
-- Horizon、label、feature schema、calibrator、成本與模型 artifact 必須相互綁定。
-- 動態載入、檔名掃描與 workflow 路徑屬隱性依賴，刪檔前必須納入搜尋。
+- Version API, table, artifact, and reason-code schemas.
+- Use timezone-aware timestamps: UTC internally and `Asia/Taipei` for Taiwan trading dates and UI.
+- Bind horizon, label, feature schema, calibrator, cost profile, and model artifact versions.
+- Treat globs, directory scans, dynamic imports, and filename conventions as dependencies during cleanup.

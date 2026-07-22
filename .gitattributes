@@ -1,2 +1,5 @@
 release-manifest.json text eol=lf
 release-manifest.sha256 text eol=lf
+supabase/functions/**/*.ts text eol=lf
+supabase/functions/**/deno.json text eol=lf
+supabase/functions/**/README.md text eol=lf

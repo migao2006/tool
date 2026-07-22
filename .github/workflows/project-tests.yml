@@ -66,7 +66,7 @@ jobs:
                 python=true
                 frontend=true
                 ;;
-              .github/workflows/backfill-historical-daily-bars.yml|pyproject.toml|uv.lock|requirements.lock|config/*|scripts/*.py|scripts/*.ps1|src/*.py|tests/*.py|supabase/*|AGENTS.md|.ai/*|.agents/*)
+              .github/workflows/backfill-historical-daily-bars.yml|pyproject.toml|uv.lock|requirements.lock|config/*|scripts/*.py|scripts/*.ps1|src/*.py|tests/*.py|supabase/*|AGENTS.md|AGENTS.override.md|*/AGENTS.md|*/AGENTS.override.md|.ai/*|.agents/*|.codex/*|tasks/*|justfile|.actrc)
                 python=true
                 ;;
               package.json|pnpm-lock.yaml|biome.json|playwright.config.*|index.html|app.js|styles.css|src/*.js|src/*.css|tests/e2e/*)

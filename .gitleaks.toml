@@ -1,0 +1,16 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Intentionally blank environment template values"
+condition = "AND"
+regexTarget = "line"
+paths = ['''(?:^|/)\.env\.example$''']
+regexes = ['''(?m)^[A-Z][A-Z0-9_]*=\s*$''']
+
+[[allowlists]]
+description = "Supabase publishable browser key"
+condition = "AND"
+regexTarget = "line"
+paths = ['''(?:^|/)src/core/public-config\.js$''']
+regexes = ['''supabasePublishableKey:\s*["']sb_publishable_[A-Za-z0-9_-]+["']''']

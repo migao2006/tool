@@ -66,13 +66,13 @@ jobs:
                 python=true
                 frontend=true
                 ;;
-              .github/workflows/backfill-historical-daily-bars.yml|pyproject.toml|uv.lock|requirements.lock|config/*|scripts/*.py|src/*.py|tests/*.py|supabase/*)
+              .github/workflows/backfill-historical-daily-bars.yml|pyproject.toml|uv.lock|requirements.lock|config/*|scripts/*.py|scripts/*.ps1|src/*.py|tests/*.py|supabase/*|AGENTS.md|.ai/*|.agents/*)
                 python=true
                 ;;
               package.json|pnpm-lock.yaml|biome.json|playwright.config.*|index.html|app.js|styles.css|src/*.js|src/*.css|tests/e2e/*)
                 frontend=true
                 ;;
-              AGENTS.md|*.md|docs/*|artifacts/*|.gitignore)
+              *.md|docs/*|artifacts/*|.gitignore)
                 # Documentation and generated research artifacts do not execute.
                 ;;
               *)
@@ -108,6 +108,9 @@ jobs:
 
       - name: Synchronize locked test environment
         run: uv sync --frozen --extra test
+
+      - name: Enforce repository agent instruction limits
+        run: uv run python scripts/check_agents_length.py
 
       - name: Run Python tests
         run: uv run pytest

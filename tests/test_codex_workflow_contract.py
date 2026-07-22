@@ -92,3 +92,34 @@ def test_required_agent_documents_and_ci_paths_exist() -> None:
         "scripts/*.ps1",
     ):
         assert expected_path in workflow
+
+
+def test_agent_rules_require_proactive_remote_handoff_approval() -> None:
+    rules = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+
+    assert "proactively request approval" in rules
+    assert "create a pull request" in rules
+    assert "merge it into `main`" in rules
+    assert "align any legacy local `main`" in rules
+
+
+def test_local_quality_rules_require_pinned_go() -> None:
+    rules = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+    audit = (ROOT / "scripts" / "check_local_tools.ps1").read_text(encoding="utf-8")
+    docs = (ROOT / "docs" / "local-development-tools.md").read_text(
+        encoding="utf-8"
+    )
+    versions = (ROOT / "config" / "quality-tools.env").read_text(encoding="utf-8")
+
+    assert "Go and Deno are required for `just quality`" in rules
+    assert '@{ Name = "go"; Command = "go"; Arguments = @("version"); Required = $true }' in audit
+    assert "| Go | Required |" in docs
+    assert "GO_VERSION=1.26.5" in versions
+
+
+def test_windows_python_quality_paths_use_lf_stdout() -> None:
+    quality_script = (
+        ROOT / "scripts" / "run_quality_security_checks.sh"
+    ).read_text(encoding="utf-8")
+
+    assert 'sys.stdout.reconfigure(newline="\\n")' in quality_script

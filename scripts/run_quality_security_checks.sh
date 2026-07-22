@@ -66,8 +66,10 @@ uvx --from "pip-audit==${PIP_AUDIT_VERSION}" pip-audit \
 mapfile -t patch_sql < <(
   python - <<'PY'
 import json
+import sys
 from pathlib import Path
 
+sys.stdout.reconfigure(newline="\n")
 manifest = json.loads(Path("release-manifest.json").read_text(encoding="utf-8"))
 for migration in manifest["repository_state"]["patch_added_migrations"]:
     print(Path("supabase/migrations", migration))

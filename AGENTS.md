@@ -49,6 +49,8 @@ Only `tasks/active/TASK.md` may represent active work. Follow `tasks/README.md`;
 
 Run focused tests, `python scripts/check_agents_length.py`, `git diff --check`, and the applicable fast/full verification. Report only commands actually run, including failures, skips, and environmental blockers. Inspect final status, untracked files, accidental deletions, generated output, and possible secrets.
 
+Use versions pinned in `config/quality-tools.env`; Go and Deno are required for `just quality`, and missing required tools are blockers rather than skipped checks.
+
 ## Subagent policy
 
 Without separate Git worktrees, only the primary agent may write. Subagents must use read-only roles from `.codex/agents/`, remain within delegated scope, return evidence-based summaries, and never expose secrets. Use delegation only when the user or an applicable instruction explicitly requests it.
@@ -56,6 +58,8 @@ Without separate Git worktrees, only the primary agent may write. Subagents must
 ## Security and approval boundaries
 
 Never expose or commit secrets, tokens, passwords, private keys, or `service_role`; never disable TLS, RLS, Auth, or other controls. Without explicit task approval, do not commit, push, create or merge PRs, deploy, change production data/schema/settings, modify secrets/DNS/billing/branch protection, or perform destructive operations.
+
+After local validation, proactively request approval to create a pull request; after CI passes, proactively request approval to merge it into `main` and then align any legacy local `main`. Each approval applies only to the named stage.
 
 ## Definition of done
 

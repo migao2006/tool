@@ -20,6 +20,7 @@ $tools = @(
     @{ Name = "pwsh"; Command = "pwsh"; Arguments = @("--version"); Required = $true }
     @{ Name = "node"; Command = "node"; Arguments = @("--version"); Required = $true }
     @{ Name = "pnpm"; Command = "pnpm"; Arguments = @("--version"); Required = $true }
+    @{ Name = "go"; Command = "go"; Arguments = @("version"); Required = $true }
     @{ Name = "docker"; Command = "docker"; Arguments = @("--version"); Required = $false }
     @{ Name = "rg"; Command = "rg"; Arguments = @("--version"); Required = $true }
     @{ Name = "fd"; Command = "fd"; Arguments = @("--version"); Required = $false }

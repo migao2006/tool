@@ -21,6 +21,7 @@ The recipes use the workflow's `workflow_dispatch` event locally. Its scope-sele
 | Python | Required | Python Software Foundation | `python --version` | Run repository scripts, tests, data checks, and model research. |
 | PowerShell 7 | Required | Microsoft | `pwsh --version` | Run Windows verification and tool audit scripts. |
 | Node.js and pnpm | Required | Official distributions | `node --version`; `pnpm --version` | Run frontend dependency and Playwright commands. |
+| Go | Required | Go project / `GoLang.Go` on winget | `go version` | Run the pinned actionlint and Gitleaks quality checks. Match `GO_VERSION` in `config/quality-tools.env`. |
 | Docker Desktop | Optional | Docker | `docker version`; `docker info` | Provides the container engine required by most `act` jobs; not required for ordinary script checks. |
 | ripgrep | Required | BurntSushi / trusted distribution | `rg --version` | Primary repository text search. |
 | fd | Optional | sharkdp / winget | `fd --version` | Fast filename search. |
@@ -37,6 +38,7 @@ Run `pwsh -File scripts/check_local_tools.ps1` or `just tools` for a non-destruc
 
 - Use Windows system certificates. For uv, use `uv ... --system-certs`; never disable TLS validation.
 - winget PATH changes apply to newly opened terminals. The audit script appends registered user and machine PATH entries only for its own process.
+- Go is a required quality-gate dependency. Install only the reviewed `GoLang.Go` package and keep it aligned with `config/quality-tools.env`; do not replace the pinned actionlint or Gitleaks checks with unreviewed binaries.
 - The current-user PowerShell profile may initialize zoxide with `Invoke-Expression (& { (zoxide init powershell | Out-String) })`. Preserve existing profile content and never add the line twice.
 - Do not set `strict-ssl=false`, `NODE_TLS_REJECT_UNAUTHORIZED=0`, or `GIT_SSL_NO_VERIFY=true`.
 

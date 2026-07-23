@@ -5,8 +5,9 @@ and must not replace `tasks/active/TASK.md` or completed reports.
 
 ## Current Work Package
 
-- Status: ACTIVE
-- Outcome: Refactor repository operating rules into a concise layered system.
+- Status: COMPLETE
+- Outcome: Repository operating rules were refactored into a layered system.
+- Record: `tasks/completed/2026-07-23-refactor-repository-operating-rules.md`.
 
 ## Current Branch
 
@@ -15,41 +16,42 @@ and must not replace `tasks/active/TASK.md` or completed reports.
 
 ## Completed Work
 
-- Verified the repository root, clean starting tree, base SHA, and GitHub CLI access.
-- Inventoried root rules, task files, repository Skills, Codex configuration,
-  governance tests, verification scripts, CI scope selection, and direct references.
-- Confirmed executable policy enforcement makes this a HIGH-risk governance change.
-- Refactored stable policy, task/template boundaries, continuity, direct Skills,
-  README navigation, and governance contract coverage without product-code changes.
-- Completed independent diff, authority, safety-boundary, and reference review.
+- Separated stable root policy, actual task state, continuity, specialized rules,
+  and historical reports.
+- Made the empty Work Package template explicitly non-executable.
+- Added contract coverage for autonomy, protected operations, task structure,
+  continuity bounds, and references.
+- Updated direct Skills and README navigation without product or workflow changes.
 
 ## Remaining Work
 
-- Create and push the focused implementation commit, then open the Draft PR.
-- Archive the task, restore active state to `NONE`, and push the record-only commit.
+- GitHub-hosted PR checks and human review.
+- Merge remains a separately authorized protected operation.
 
 ## Key Decisions
 
-- Keep `.ai/` as the authoritative product, architecture, and decision layer.
-- Keep existing specialized Skills; align only those directly governing this flow.
-- Add no speculative policy directory and make no product-code or workflow change.
+- `.ai/` remains authoritative for product, architecture, and stable decisions.
+- Default autonomy ends at a `codex/*` push and Draft PR.
+- Historical task wording remains unchanged as audit evidence.
 
 ## Validation Already Passed
 
-- Instruction limits: 98/100 root lines, 6,882/16 KiB root, 24,343/28 KiB combined.
 - Focused governance suite: 27 passed.
-- Ruff: passed; basedpyright: 0 errors and 0 warnings.
-- Markdown-link, live-reference, authority, and `git diff --check` audits: passed.
-- Fast verification: passed.
-- Full verification: 989 Python and 65 Playwright tests passed.
+- Ruff passed; basedpyright reported 0 errors and 0 warnings.
+- Instruction limits, links, references, authority, scope, whitespace, and staged
+  Gitleaks checks passed.
+- Fast verification passed.
+- Full verification passed: 989 Python and 65 Playwright tests.
 
 ## Known Issues or Blockers
 
-- None.
+- None for this Work Package.
 
 ## Commit and Draft PR References
 
-- No Work Package commit or Draft PR exists yet.
+- Core commit: `1e80fd837e662752682a3480148c778ddbfc572b`.
+- Terminal task record is committed on this branch after the core commit.
+- Draft PR #98: https://github.com/migao2006/tool/pull/98
 
 ## Maintenance
 

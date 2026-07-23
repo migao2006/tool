@@ -5,10 +5,11 @@ and must not replace `tasks/active/TASK.md` or completed reports.
 
 ## Current Work Package
 
-- Status: ACTIVE
-- Outcome: Add persistent failure/misalignment reporting and bounded,
-  current-main-only automatic recovery for daily import and research pipelines.
-- Record: `tasks/active/TASK.md`.
+- Status: COMPLETE
+- Outcome: Production stale-snapshot repair plus persistent
+  failure/misalignment reporting and bounded current-main-only recovery.
+- Record:
+  `tasks/completed/2026-07-24-add-bounded-daily-pipeline-recovery.md`.
 
 ## Current Branch
 
@@ -18,66 +19,68 @@ and must not replace `tasks/active/TASK.md` or completed reports.
 
 ## Verified Production State
 
-- PR #100 is merged at `35bc356`; Project tests, Vercel Production, GitHub
-  Pages, and Edge CORS deployments passed.
-- Scheduled old-SHA Daily run `30020254516` built both feature markets. TWSE
-  Staging passed; TPEx correctly failed closed because old model run 14 was
-  superseded by newer Staging run 15; Production was skipped.
-- Current-main Daily run `30021481019` started automatically after the old
-  concurrency holder completed and is under active observation.
-- Production API remains on validated `2026-07-17` until a complete
-  current-main Production publication passes.
+- Feature-branch Production reconciliation `30033947665` succeeded at exact
+  head `94013ba` without forcing a date.
+- Resolver selected only incomplete TWSE at aligned date `2026-07-20`;
+  current-bars, features, catalog, Staging, Production, and verification passed.
+- Live TWSE/TPEx APIs both return validated `2026-07-20`,
+  `decision_at=2026-07-20T17:00:00+08:00`, horizon 5, `RESEARCH_ONLY`, and
+  `no-store`.
+- Deployed Pages source displays the validated snapshot fields and uses an
+  uncached API request; no service worker is registered.
 
 ## Completed Work
 
-- Original stale-snapshot root cause is fixed and merged through PR #100.
-- Read-only audit proved import mismatch currently retries four times in one job
-  but has no persistent issue or workflow-level recovery.
-- Official GitHub behavior was verified: full rerun uses Actions write,
-  `run_attempt` increments, v4 artifacts are immutable, and a privileged
-  `workflow_run` controller must not execute untrusted code/artifacts.
-- Workflow audit found partial failed-job reruns unsafe for the current
-  cross-job artifact DAG; full rerun with attempt-qualified names is required.
+- Proved repeated TWSE REST reads crossed the fixed 30-second client timeout.
+- Proved partial TWSE run 11 had 1,068 predictions but zero of 8,544 gates; API
+  failed closed, while the old date-only resolver would have skipped repair.
+- Added 60-second, exact-connection-error-only bounded publish/read recovery.
+- Resolver now requires complete rows, counts, venue/status, and all eight gates
+  per prediction before a market is current.
+- Added sanitized deterministic Issues and bounded full reruns for trusted,
+  current-main-only import mismatch or verified transient Daily failures.
+- Attempt-qualified artifacts prevent immutable rerun evidence collisions.
+- Focused (128), Full (1,086 Python + 66 Playwright), lint, type, diff, Fast,
+  actionlint, pin/lock, and independent review all passed.
 
 ## Remaining Work
 
-- Finish current-main Production Daily Research and API/page verification.
-- Implement and test sanitized reports, trust/current-head guards, Issue
-  deduplication, bounded full reruns, and attempt-qualified artifacts.
-- Complete Fast/Full verification and independent review.
-- Commit, push, open a PR, wait for green CI, then stop before updating `main`.
+- Push this terminal task record, wait for latest PR checks, mark PR #101 ready.
+- Stop before protected `main`; a separate final main-update authorization is
+  required after this Work Package.
 
 ## Key Decisions
 
-- Retry only the exact trusted workflows at the current default-branch SHA.
-- Treat an old-SHA failure as superseded: report it, never rerun it.
-- Use full workflow reruns, bounded attempts, and one immutable artifact
-  generation per `run_attempt`; never overwrite or mix prior-attempt evidence.
-- Preserve all point-in-time, venue/asset, horizon, ranking, and fail-closed
-  contracts.
+- Never compare freshness with today's date. Select only the newest valid,
+  aligned, fully published snapshot.
+- Import mismatch: four in-job checks plus at most one full rerun.
+- Daily timeout: at most three total attempts. Other Daily failures rerun only
+  from exact allowlisted artifacts proving sole `SUPABASE_CONNECTION_ERROR`.
+- Stale, untrusted, malformed, mixed, or permanent failures remain report-only.
 
 ## Validation Already Passed
 
-- Pre-implementation repository status and authoritative main SHA verified.
-- Official recovery API, permission, attempt, artifact, and security semantics
-  verified from GitHub documentation.
-- Read-only workflow/retry architecture audit completed.
+- PR implementation-head Project tests, Test gate, frontend/browser,
+  quality/security, Vercel, and Preview checks passed.
+- Final independent review: zero BLOCKER/HIGH/MEDIUM/LOW findings.
+- Production run and live API/deployed-source verification passed.
 
 ## Known Issues or Blockers
 
-- Live 2026-07-23 sources remain misaligned: TPEx reports `2026-07-23`, TWSE
-  reports `2026-07-22`; this is not a valid joint snapshot and must not publish.
-- No implementation blocker.
+- 2026-07-23 was not a valid joint source date (TWSE `2026-07-22`, TPEx
+  `2026-07-23`); serving validated `2026-07-20` is therefore correct.
+- Browser-controller infrastructure could not initialize its local kernel
+  assets; live API/deployed source plus 66 Playwright tests provide verification.
+- No implementation blocker. Protected `main` is intentionally unchanged.
 
 ## Commit and Pull Request References
 
 - Base: `35bc3560359ebbcac85520b93a3120f4a630ca08`.
 - Original Bug PR: https://github.com/migao2006/tool/pull/100
-- Misaligned import: https://github.com/migao2006/tool/actions/runs/30010235104
-- Superseded old-SHA Daily run:
-  https://github.com/migao2006/tool/actions/runs/30020254516
-- Current-main Daily run:
-  https://github.com/migao2006/tool/actions/runs/30021481019
+- Recovery Bug PR: https://github.com/migao2006/tool/pull/101
+- Production reconciliation:
+  https://github.com/migao2006/tool/actions/runs/30033947665
+- Implementation head: `94013baf7880a4ed6334d85c04575b43005e0f1a`.
 
 ## Maintenance
 

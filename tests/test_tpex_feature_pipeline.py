@@ -183,6 +183,25 @@ def test_tpex_manifest_scope_accepts_only_tpex_common_stock() -> None:
     accepted = group_manifests((_manifest(),), market="TPEX")
     assert tuple(accepted) == ("5483",)
 
+    earlier = _manifest()
+    earlier.update(
+        {
+            "archive_id": 2,
+            "requested_end_date": "2025-01-31",
+            "max_trade_date": "2025-01-31",
+        }
+    )
+    later = _manifest()
+    later.update(
+        {
+            "archive_id": 1,
+            "requested_start_date": "2025-02-01",
+            "min_trade_date": "2025-02-01",
+        }
+    )
+    ordered = group_manifests((later, earlier), market="TPEX")
+    assert [row["archive_id"] for row in ordered["5483"]] == [2, 1]
+
     for rejected in (
         _manifest(market="TWSE"),
         _manifest(asset_type="ETF"),

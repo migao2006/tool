@@ -7,7 +7,12 @@ from pathlib import Path
 
 import pytest
 
+import scripts.publish_stored_research_snapshot as stored_publish
 from scripts.publish_stored_research_snapshot import _load_snapshot
+from src.data.ingestion.contracts import IngestionError
+from src.data.research.twse_research_prediction_supabase_contracts import (
+    ResearchSupabasePublishResult,
+)
 
 
 AS_OF_DATE = date(2026, 7, 20)
@@ -93,3 +98,97 @@ def test_load_snapshot_rejects_tampering_and_wrong_release_date(tmp_path: Path) 
     _write(snapshot, _payload())
     with pytest.raises(ValueError, match="RESEARCH_SNAPSHOT_REQUIRED_DATE_MISMATCH"):
         _load_snapshot(snapshot, market="TWSE", as_of_date=date(2026, 7, 21))
+
+
+def test_stored_publisher_allows_one_transient_data_api_stall_to_finish(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeWriter:
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+    monkeypatch.setattr(stored_publish, "SupabaseWriter", FakeWriter)
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "test-secret")
+
+    _ = stored_publish._research_writer()
+
+    assert captured["timeout"] == 60.0
+
+
+def test_stored_publisher_replays_an_immutable_publish_after_connection_errors() -> None:
+    attempts = 0
+    delays: list[float] = []
+    expected = ResearchSupabasePublishResult(
+        prediction_run_id=11,
+        prediction_count=1_068,
+        target_environment="production",
+        decision_gate_count=8_544,
+    )
+
+    def publish_once() -> ResearchSupabasePublishResult:
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            raise IngestionError(
+                "SUPABASE_CONNECTION_ERROR",
+                "Supabase write request could not be completed",
+            )
+        return expected
+
+    result = stored_publish._publish_with_connection_retry(
+        publish_once,
+        sleeper=delays.append,
+    )
+
+    assert result == expected
+    assert attempts == 3
+    assert delays == [1.0, 2.0]
+
+
+def test_stored_publisher_does_not_replay_a_rejected_publish() -> None:
+    attempts = 0
+    delays: list[float] = []
+
+    def publish_once() -> ResearchSupabasePublishResult:
+        nonlocal attempts
+        attempts += 1
+        raise IngestionError(
+            "SUPABASE_WRITE_REJECTED",
+            "Supabase rejected the immutable publish",
+        )
+
+    with pytest.raises(IngestionError) as captured:
+        stored_publish._publish_with_connection_retry(
+            publish_once,
+            sleeper=delays.append,
+        )
+
+    assert captured.value.reason_code == "SUPABASE_WRITE_REJECTED"
+    assert attempts == 1
+    assert delays == []
+
+
+def test_stored_publisher_exhausts_connection_retries() -> None:
+    attempts = 0
+    delays: list[float] = []
+
+    def publish_once() -> ResearchSupabasePublishResult:
+        nonlocal attempts
+        attempts += 1
+        raise IngestionError(
+            "SUPABASE_CONNECTION_ERROR",
+            "Supabase write request could not be completed",
+        )
+
+    with pytest.raises(IngestionError) as captured:
+        stored_publish._publish_with_connection_retry(
+            publish_once,
+            sleeper=delays.append,
+        )
+
+    assert captured.value.reason_code == "SUPABASE_CONNECTION_ERROR"
+    assert attempts == 3
+    assert delays == [1.0, 2.0]

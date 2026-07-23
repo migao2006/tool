@@ -3,9 +3,13 @@ from __future__ import annotations
 from datetime import datetime
 import json
 from pathlib import Path
-from typing import ClassVar
+from typing import cast, ClassVar
+
+import pytest
 
 import scripts.resolve_daily_research_date as resolver
+from src.data.ingestion.contracts import IngestionError
+from src.data.ingestion.supabase_writer import SupabaseWriter
 
 
 class FixedDateTime(datetime):
@@ -20,6 +24,11 @@ class FixedDateTime(datetime):
 class FakeWriter:
     status: ClassVar[dict[str, object]] = {}
     prediction_dates: ClassVar[dict[str, str | None]] = {}
+    prediction_complete: ClassVar[dict[str, bool]] = {}
+    run_markets: ClassVar[dict[int, str]] = {}
+    run_overrides: ClassVar[dict[str, dict[str, object]]] = {}
+    prediction_overrides: ClassVar[dict[str, dict[str, object]]] = {}
+    gate_shortfall: ClassVar[dict[str, int]] = {}
 
     def __init__(
         self,
@@ -49,7 +58,59 @@ class FakeWriter:
         assert table == "prediction_runs"
         market = str((filters or {})["market_scope"]).removeprefix("eq.")
         value = self.prediction_dates[market]
-        return [] if value is None else [{"prediction_run_id": 1, "as_of_date": value}]
+        if value is None:
+            return []
+        run_id = 1 if market == "TWSE" else 2
+        self.run_markets[run_id] = market
+        return [{
+            "prediction_run_id": run_id,
+            "as_of_date": value,
+            "horizon": 5,
+            "market_scope": market,
+            "system_validation_status": "RESEARCH_ONLY",
+            "candidate_count": 0,
+            "watch_count": 0,
+            "no_trade_count": 500,
+            "hard_fail_count": 0,
+            **self.run_overrides.get(market, {}),
+        }]
+
+    def select_all_rows(
+        self,
+        table: str,
+        *,
+        select: str,
+        filters: dict[str, str] | None = None,
+        page_size: int = 1_000,
+        max_rows: int = 10_000,
+    ) -> list[dict[str, object]]:
+        del select, page_size, max_rows
+        assert table == "stock_predictions"
+        run_id = int(str((filters or {})["prediction_run_id"]).removeprefix("eq."))
+        market = self.run_markets[run_id]
+        return [{
+                "stock_prediction_id": run_id * 1_000 + index,
+                "market": market,
+                "decision": "NO_TRADE",
+                "data_quality_status": "PASS",
+                **self.prediction_overrides.get(market, {}),
+            } for index in range(500)]
+
+    def count_rows(
+        self,
+        table: str,
+        *,
+        filters: dict[str, str] | None = None,
+    ) -> int:
+        assert table == "decision_gate_results"
+        raw_ids = str((filters or {})["stock_prediction_id"])
+        first_id = int(raw_ids.removeprefix("in.(").split(",", 1)[0])
+        run_id = first_id // 1_000
+        market = self.run_markets[run_id]
+        batch_size = raw_ids.count(",") + 1
+        if not self.prediction_complete[market]:
+            return 0
+        return max(0, batch_size * 8 - self.gate_shortfall.get(market, 0))
 
 
 def _configure(
@@ -59,6 +120,8 @@ def _configure(
     tpex_count: int = 889,
     twse_prediction: str | None = "2026-07-17",
     tpex_prediction: str | None = "2026-07-17",
+    twse_complete: bool = True,
+    tpex_complete: bool = True,
 ) -> None:
     FakeWriter.status = {
         "status_key": "latest",
@@ -72,6 +135,14 @@ def _configure(
         "TWSE": twse_prediction,
         "TPEX": tpex_prediction,
     }
+    FakeWriter.prediction_complete = {
+        "TWSE": twse_complete,
+        "TPEX": tpex_complete,
+    }
+    FakeWriter.run_markets = {}
+    FakeWriter.run_overrides = {}
+    FakeWriter.prediction_overrides = {}
+    FakeWriter.gate_shortfall = {}
 
 
 def _run(
@@ -120,6 +191,121 @@ def test_resolver_only_publishes_the_market_that_is_behind(
 
     assert status == 0
     assert payload["markets"] == ["TPEX"]
+
+
+def test_resolver_republishes_a_latest_dated_but_incomplete_market(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _configure(
+        twse_prediction="2026-07-20",
+        tpex_prediction="2026-07-20",
+        twse_complete=False,
+    )
+
+    status, payload, _ = _run(tmp_path, monkeypatch)
+
+    assert status == 0
+    assert payload["latest_prediction_dates"] == {
+        "TWSE": None,
+        "TPEX": "2026-07-20",
+    }
+    assert payload["markets"] == ["TWSE"]
+
+
+@pytest.mark.parametrize(
+    ("run_override", "prediction_override", "gate_shortfall"),
+    [
+        ({"no_trade_count": 499}, {}, 0),
+        ({}, {"decision": "WATCH"}, 0),
+        ({}, {}, 1),
+    ],
+)
+def test_latest_prediction_requires_every_production_completion_gate(
+    run_override: dict[str, object],
+    prediction_override: dict[str, object],
+    gate_shortfall: int,
+) -> None:
+    _configure(twse_prediction="2026-07-20")
+    FakeWriter.run_overrides["TWSE"] = run_override
+    FakeWriter.prediction_overrides["TWSE"] = prediction_override
+    FakeWriter.gate_shortfall["TWSE"] = gate_shortfall
+    writer = FakeWriter(
+        url="https://example.supabase.co",
+        server_key="sb_secret_test-value",
+    )
+
+    assert (
+        resolver._latest_prediction_date(cast(SupabaseWriter, writer), "TWSE")
+        is None
+    )
+
+
+def test_resolution_retries_only_transient_connection_errors() -> None:
+    attempts = 0
+    delays: list[float] = []
+    expected = {"status": "PASS", "should_run": False}
+
+    def resolve_once() -> dict[str, object]:
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            raise IngestionError(
+                "SUPABASE_CONNECTION_ERROR",
+                "Supabase read request could not be completed",
+            )
+        return expected
+
+    result = resolver._resolve_with_connection_retry(
+        resolve_once,
+        sleeper=delays.append,
+    )
+
+    assert result == expected
+    assert attempts == 3
+    assert delays == [1.0, 2.0]
+
+
+def test_resolution_connection_retry_exhaustion_preserves_reason_code() -> None:
+    attempts = 0
+    delays: list[float] = []
+
+    def resolve_once() -> dict[str, object]:
+        nonlocal attempts
+        attempts += 1
+        raise IngestionError(
+            "SUPABASE_CONNECTION_ERROR",
+            "Supabase read request could not be completed",
+        )
+
+    with pytest.raises(IngestionError) as captured:
+        resolver._resolve_with_connection_retry(
+            resolve_once,
+            sleeper=delays.append,
+        )
+
+    assert captured.value.reason_code == "SUPABASE_CONNECTION_ERROR"
+    assert attempts == 3
+    assert delays == [1.0, 2.0]
+
+
+def test_resolution_does_not_retry_a_validation_failure() -> None:
+    attempts = 0
+    delays: list[float] = []
+
+    def resolve_once() -> dict[str, object]:
+        nonlocal attempts
+        attempts += 1
+        raise ValueError("HOME_DATA_STATUS_UNAVAILABLE")
+
+    with pytest.raises(ValueError, match="HOME_DATA_STATUS_UNAVAILABLE"):
+        resolver._resolve_with_connection_retry(
+            resolve_once,
+            sleeper=delays.append,
+        )
+
+    assert attempts == 1
+    assert delays == []
 
 
 def test_long_market_closure_is_a_clean_noop_when_snapshots_are_current(

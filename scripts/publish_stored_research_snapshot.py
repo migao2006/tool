@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import argparse
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import date, datetime, timezone
 from hashlib import sha256
 import json
 import os
 from pathlib import Path
 import sys
+import time
 from typing import cast
 
 try:
@@ -20,13 +21,21 @@ except ModuleNotFoundError:
 add_project_root()
 
 from src.data.ingestion.supabase_writer import SupabaseWriter  # noqa: E402
+from src.data.ingestion.contracts import IngestionError  # noqa: E402
 from src.pipeline.daily_research_publish_contract import (  # noqa: E402
     MIN_DAILY_RESEARCH_PREDICTIONS,
+)
+from src.data.research.twse_research_prediction_supabase_contracts import (  # noqa: E402
+    ResearchSupabasePublishResult,
 )
 from src.data.research.twse_research_prediction_supabase import (  # noqa: E402
     TpexResearchPredictionSupabasePublisher,
     TwseResearchPredictionSupabasePublisher,
 )
+
+
+_RESEARCH_PUBLISH_TIMEOUT_SECONDS = 60.0
+_RESEARCH_PUBLISH_RETRY_DELAYS_SECONDS = (1.0, 2.0)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -112,6 +121,40 @@ def _publisher(market: str, writer: SupabaseWriter):
     )
 
 
+def _research_writer() -> SupabaseWriter:
+    return SupabaseWriter(
+        url=os.environ.get("SUPABASE_URL"),
+        server_key=os.environ.get("SUPABASE_SERVICE_ROLE_KEY"),
+        timeout=_RESEARCH_PUBLISH_TIMEOUT_SECONDS,
+    )
+
+
+def _publish_with_connection_retry(
+    publish_once: Callable[[], ResearchSupabasePublishResult],
+    *,
+    sleeper: Callable[[float], None] = time.sleep,
+) -> ResearchSupabasePublishResult:
+    """Replay only this immutable publisher after an ambiguous connection loss."""
+
+    for attempt in range(len(_RESEARCH_PUBLISH_RETRY_DELAYS_SECONDS) + 1):
+        try:
+            return publish_once()
+        except IngestionError as error:
+            if (
+                error.reason_code != "SUPABASE_CONNECTION_ERROR"
+                or attempt == len(_RESEARCH_PUBLISH_RETRY_DELAYS_SECONDS)
+            ):
+                raise
+            delay = _RESEARCH_PUBLISH_RETRY_DELAYS_SECONDS[attempt]
+            print(
+                "Retrying immutable research publish after "
+                f"{error.reason_code} (attempt {attempt + 2}/3)",
+                file=sys.stderr,
+            )
+            sleeper(delay)
+    raise AssertionError("unreachable research publish retry state")
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = _parser().parse_args(argv)
     market = cast(str, arguments.market)
@@ -124,11 +167,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             market=market,
             as_of_date=required_date,
         )
-        writer = SupabaseWriter(
-            url=os.environ.get("SUPABASE_URL"),
-            server_key=os.environ.get("SUPABASE_SERVICE_ROLE_KEY"),
+        result = _publish_with_connection_retry(
+            lambda: _publisher(market, _research_writer()).publish(payload)
         )
-        result = _publisher(market, writer).publish(payload)
         report: dict[str, object] = {
             "status": "RESEARCH_ONLY",
             "market": market,

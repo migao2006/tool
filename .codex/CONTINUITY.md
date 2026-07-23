@@ -6,28 +6,34 @@ and must not replace `tasks/active/TASK.md` or completed reports.
 ## Current Work Package
 
 - Status: COMPLETE
-- Outcome: Production stale-snapshot repair plus persistent
-  failure/misalignment reporting and bounded current-main-only recovery.
+- Outcome: Production stale-snapshot repair and bounded daily recovery are
+  merged, deployed, and verified on `main`.
 - Record:
-  `tasks/completed/2026-07-24-add-bounded-daily-pipeline-recovery.md`.
+  `tasks/completed/2026-07-24-record-daily-pipeline-recovery-main-release.md`.
 
 ## Current Branch
 
-- `codex/add-daily-pipeline-recovery`
-- Authoritative base: merged `origin/main` at
-  `35bc3560359ebbcac85520b93a3120f4a630ca08`.
+- `main`
+- PR #101 release merge:
+  `2525001ad47700682de90bbc0de6246cdb378625`.
+- Implementation head:
+  `d50b60a76e86e234e5d14de9f672e01587d74e0e`.
 
 ## Verified Production State
 
-- Feature-branch Production reconciliation `30033947665` succeeded at exact
-  head `94013ba` without forcing a date.
-- Resolver selected only incomplete TWSE at aligned date `2026-07-20`;
-  current-bars, features, catalog, Staging, Production, and verification passed.
+- PR #101 is merged. Main Project tests `30051830601`, Pages deployment
+  `30051829711`, Daily Research `30051830757`, and recovery controller
+  `30051865693` all completed successfully at the exact release merge.
+- Vercel deployment `dpl_F7idY3QB9zNBfk7wuP2KNNkEGYN5` is READY,
+  Production-targeted, and bound to the exact release merge; the one-hour
+  post-deploy runtime error scan was clean.
+- Main Daily Research resolved aligned `2026-07-20`, found both markets already
+  complete, and correctly no-op'd. The main recovery controller then completed
+  without requesting an unnecessary rerun.
 - Live TWSE/TPEx APIs both return validated `2026-07-20`,
   `decision_at=2026-07-20T17:00:00+08:00`, horizon 5, `RESEARCH_ONLY`, and
   `no-store`.
-- Deployed Pages source displays the validated snapshot fields and uses an
-  uncached API request; no service worker is registered.
+- GitHub Pages and Vercel Production both return HTTP 200.
 
 ## Completed Work
 
@@ -40,14 +46,14 @@ and must not replace `tasks/active/TASK.md` or completed reports.
 - Added sanitized deterministic Issues and bounded full reruns for trusted,
   current-main-only import mismatch or verified transient Daily failures.
 - Attempt-qualified artifacts prevent immutable rerun evidence collisions.
+- Import runs at 19:45 Asia/Taipei on weekdays. A successful import triggers
+  Daily Research, with a weekday 21:15 fallback schedule.
 - Focused (128), Full (1,086 Python + 66 Playwright), lint, type, diff, Fast,
   actionlint, pin/lock, and independent review all passed.
 
 ## Remaining Work
 
-- Push this terminal task record, wait for latest PR checks, mark PR #101 ready.
-- Stop before protected `main`; a separate final main-update authorization is
-  required after this Work Package.
+- None for this release.
 
 ## Key Decisions
 
@@ -63,7 +69,8 @@ and must not replace `tasks/active/TASK.md` or completed reports.
 - PR implementation-head Project tests, Test gate, frontend/browser,
   quality/security, Vercel, and Preview checks passed.
 - Final independent review: zero BLOCKER/HIGH/MEDIUM/LOW findings.
-- Production run and live API/deployed-source verification passed.
+- Post-merge main Project tests, Vercel Production, GitHub Pages, Daily
+  Research, recovery controller, and live API verification passed.
 
 ## Known Issues or Blockers
 
@@ -71,16 +78,19 @@ and must not replace `tasks/active/TASK.md` or completed reports.
   `2026-07-23`); serving validated `2026-07-20` is therefore correct.
 - Browser-controller infrastructure could not initialize its local kernel
   assets; live API/deployed source plus 66 Playwright tests provide verification.
-- No implementation blocker. Protected `main` is intentionally unchanged.
+- No implementation, deployment, migration, or authorization blocker remains.
 
 ## Commit and Pull Request References
 
-- Base: `35bc3560359ebbcac85520b93a3120f4a630ca08`.
+- Release merge: `2525001ad47700682de90bbc0de6246cdb378625`.
 - Original Bug PR: https://github.com/migao2006/tool/pull/100
-- Recovery Bug PR: https://github.com/migao2006/tool/pull/101
+- Merged recovery Bug PR: https://github.com/migao2006/tool/pull/101
 - Production reconciliation:
   https://github.com/migao2006/tool/actions/runs/30033947665
-- Implementation head: `94013baf7880a4ed6334d85c04575b43005e0f1a`.
+- Post-merge main tests:
+  https://github.com/migao2006/tool/actions/runs/30051830601
+- Post-merge Daily Research:
+  https://github.com/migao2006/tool/actions/runs/30051830757
 
 ## Maintenance
 

@@ -31,11 +31,13 @@ and must not replace `tasks/active/TASK.md` or completed reports.
 - Passed Focused, Ruff, basedpyright, diff, Fast, and final Full verification.
 - Pushed code/evidence head `70ba305eb55249e64324b388c92014005e4828aa`;
   its GitHub Project tests, quality/security, gate, and Vercel statuses passed.
+- Archived the terminal task record, restored `tasks/active/TASK.md` to `NONE`,
+  pushed terminal record head `56022766b4ce860f08073260ca10dc1bd06c3833`,
+  and confirmed its current-head PR checks passed.
 
 ## Remaining Work
 
-- Push the terminal records-only commit and confirm its current-head checks.
-- PR #97 is otherwise ready for the final protected-branch authorization.
+- PR #97 is ready for the final protected-branch authorization.
 - Do not merge or otherwise update `main` without that authorization.
 
 ## Key Decisions
@@ -71,6 +73,10 @@ and must not replace `tasks/active/TASK.md` or completed reports.
   `04f4879757826495f1a632a98f5d5c1657825ac6`.
 - Regression evidence:
   `70ba305eb55249e64324b388c92014005e4828aa`.
+- Terminal task record:
+  `56022766b4ce860f08073260ca10dc1bd06c3833`.
+- The final continuity-only handoff is the branch head containing this file;
+  PR #97 and the final response carry its exact SHA and live check state.
 - Existing PR #97: https://github.com/migao2006/tool/pull/97
 
 ## Maintenance

@@ -1,5 +1,7 @@
 from pathlib import Path
+import json
 import re
+import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -7,6 +9,16 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def read(relative_path: str) -> str:
     return (ROOT / relative_path).read_text(encoding="utf-8")
+
+
+def run_node_module(script: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["node", "--input-type=module", "-e", script],
+        cwd=ROOT,
+        capture_output=True,
+        check=False,
+        encoding="utf-8",
+    )
 
 
 def test_index_is_a_shell_and_pages_are_modular() -> None:
@@ -76,6 +88,105 @@ def test_prediction_client_accepts_horizon_fetches_only_when_configured() -> Non
     assert "readSupabaseAccessToken" in client
     assert "accessToken," in client
     assert "PREDICTION_API_CONTRACT_ERROR" in client
+
+
+def test_prediction_client_returns_fail_closed_unsupported_horizons() -> None:
+    result = run_node_module(
+        """
+import { loadPredictionSnapshot } from "./src/data/prediction-api.js";
+
+const config = {
+  predictionApiBaseUrl: "https://frontend-contract.invalid/",
+  predictionApiTimeoutMs: 1_000,
+  predictionApiContractVersion: "prediction-snapshot.v1",
+};
+let fetchCalls = 0;
+globalThis.fetch = async () => {
+  fetchCalls += 1;
+  return new Response(JSON.stringify({
+    horizon: 2,
+    market_scope: "TWSE",
+    system_status: "RESEARCH_ONLY",
+    reason_codes: [],
+    predictions: [],
+    watchlist: [],
+  }), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
+};
+
+const unsupported = [];
+for (const horizon of [2, 3, 10]) {
+  try {
+    const snapshot = await loadPredictionSnapshot({ horizon, market: "TWSE", config });
+    unsupported.push({
+      horizon,
+      threw: false,
+      resultHorizon: snapshot.horizon,
+      systemStatus: snapshot.systemStatus,
+      reasonCodes: snapshot.reasonCodes,
+      predictions: snapshot.predictions.length,
+      candidates: snapshot.candidates.length,
+      excluded: snapshot.excluded.length,
+      watchlist: snapshot.watchlist.length,
+    });
+  } catch (error) {
+    unsupported.push({
+      horizon,
+      threw: true,
+      errorName: error.name,
+      errorCode: error.code ?? null,
+    });
+  }
+}
+
+const unconfigured = await loadPredictionSnapshot({
+  horizon: 5,
+  market: "TWSE",
+  config: {},
+});
+let supportedContractError = null;
+try {
+  await loadPredictionSnapshot({ horizon: 5, market: "TWSE", config });
+} catch (error) {
+  supportedContractError = {
+    name: error.name,
+    code: error.code ?? null,
+    causeName: error.cause?.name ?? null,
+  };
+}
+
+console.log(JSON.stringify({
+  unsupported,
+  fetchCalls,
+  unconfiguredReasonCodes: unconfigured.reasonCodes,
+  supportedContractError,
+}));
+"""
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["fetchCalls"] == 1
+    assert payload["unconfiguredReasonCodes"] == ["PREDICTION_API_NOT_CONFIGURED"]
+    assert payload["supportedContractError"] == {
+        "name": "PredictionApiError",
+        "code": "PREDICTION_API_CONTRACT_ERROR",
+        "causeName": "RangeError",
+    }
+    for expected_horizon, snapshot in zip((2, 3, 10), payload["unsupported"], strict=True):
+        assert snapshot == {
+            "horizon": expected_horizon,
+            "threw": False,
+            "resultHorizon": expected_horizon,
+            "systemStatus": "RESEARCH_ONLY",
+            "reasonCodes": ["UNSUPPORTED_HORIZON"],
+            "predictions": 0,
+            "candidates": 0,
+            "excluded": 0,
+            "watchlist": 0,
+        }
 
 
 def test_watchlist_api_is_capability_gated_until_persistence_exists() -> None:

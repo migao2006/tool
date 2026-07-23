@@ -35,7 +35,7 @@ export async function loadPredictionSnapshot({
     return createUnavailableSnapshot({
       horizon: normalizedHorizon,
       marketScope: normalizedMarket,
-      reasonCode: "MODEL_NOT_RELEASED",
+      reasonCode: "UNSUPPORTED_HORIZON",
     });
   }
   if (!resolvePredictionApiBaseUrl(config)) {

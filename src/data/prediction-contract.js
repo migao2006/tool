@@ -231,13 +231,38 @@ export function createUnavailableSnapshot({
   status = SYSTEM_STATUS.RESEARCH_ONLY,
   reasonCode = "REAL_DATA_NOT_CONNECTED",
 } = {}) {
+  const normalizedHorizon = normalizeHorizon(horizon);
   const normalizedMarketScope = normalizeMarketScope(marketScope);
+  if (normalizedHorizon !== CURRENT_HORIZON) {
+    const emptyRecords = Object.freeze([]);
+    const statusValue = String(status).toUpperCase();
+    return Object.freeze({
+      apiContractVersion: null,
+      horizon: normalizedHorizon,
+      marketScope: normalizedMarketScope,
+      systemStatus: SYSTEM_STATUSES.has(statusValue) ? statusValue : SYSTEM_STATUS.FAIL,
+      asOfDate: null,
+      decisionAt: null,
+      stale: false,
+      dataQualityHardFail: false,
+      reasonCodes: Object.freeze(["UNSUPPORTED_HORIZON"]),
+      market: normalizeMarketSnapshot({ horizon: normalizedHorizon }),
+      predictions: emptyRecords,
+      candidates: emptyRecords,
+      excluded: emptyRecords,
+      watchlist: emptyRecords,
+      modelVersion: null,
+      trainingEndDate: null,
+      costProfileVersion: null,
+      validation: normalizeValidation(),
+    });
+  }
   return normalizePredictionSnapshot({
-    horizon,
+    horizon: normalizedHorizon,
     market_scope: normalizedMarketScope,
     system_status: status,
     reason_codes: [reasonCode],
     predictions: [],
     watchlist: [],
-  }, horizon, normalizedMarketScope);
+  }, normalizedHorizon, normalizedMarketScope);
 }

@@ -13,13 +13,19 @@
 - 任務、manifest、稽核 metadata 與 UI 摘要：Supabase
 - 排程與發布入口：GitHub Actions；不直接以 Vercel CLI 發布 Production
 
-代理工作規範以根 [`AGENTS.md`](AGENTS.md) 為入口；詳細架構、產品、既定決策與審查規則位於 [`.ai/`](.ai/)，驗證程序位於 [`.agents/skills/repository-verification/SKILL.md`](.agents/skills/repository-verification/SKILL.md)。
+代理工作規範以根 [`AGENTS.md`](AGENTS.md) 為入口；目前 Work Package 位於
+[`tasks/active/TASK.md`](tasks/active/TASK.md)，跨 session 精簡狀態位於
+[`.codex/CONTINUITY.md`](.codex/CONTINUITY.md)。詳細架構、產品、既定決策與審查規則
+位於 [`.ai/`](.ai/)，驗證程序位於
+[`.agents/skills/repository-verification/SKILL.md`](.agents/skills/repository-verification/SKILL.md)。
 
 ## 文件索引
 
 核心規範：
 
-- [`AGENTS.md`](AGENTS.md)：代理權限、產品邊界與完成條件
+- [`AGENTS.md`](AGENTS.md)：穩定代理權限、安全邊界與 Work Package 完成條件
+- [`tasks/README.md`](tasks/README.md)：Active、Completed 與 task template 的責任邊界
+- [`.codex/CONTINUITY.md`](.codex/CONTINUITY.md)：精簡跨 session 狀態（不授權）
 - [`docs/product-ui.md`](docs/product-ui.md)：四頁 UI、顯示語意與狀態
 - [`docs/architecture.md`](docs/architecture.md)：目錄、依賴與資料流
 - [`docs/data-model.md`](docs/data-model.md)：point-in-time、模型、驗證與回測

@@ -11,9 +11,14 @@ Use `just tools`, `just agents`, `just fast`, and `just full` as the supported l
 2. Run `python scripts/check_agents_length.py` and require all reported instruction limits to pass.
 3. Run focused checks for affected code. Use `uv run --system-certs --extra test pytest <tests>` for Python and the existing Playwright server/config for frontend work.
 4. Run `pwsh -File scripts/verify-fast.ps1`.
-5. Run `pwsh -File scripts/verify-full.ps1` when risk and environment support require full regression.
+5. Run `pwsh -File scripts/verify-full.ps1` for the Full-verification cases defined
+   by root `AGENTS.md`, including executable governance changes and Draft PR
+   readiness.
 6. Run `git diff --check`; inspect status, stat, name-status, full diff, untracked files, accidental deletions, generated output, and possible secrets.
 
 For migrations, validate local/isolated reset, lint, compatibility, and rollback before any staged or production operation. Never expose secret values.
 
-Report exact commands, exit codes, failures, skipped checks, and environmental blockers. Never substitute a narrower check for a required check without saying so.
+Report exact commands, exit codes, failures, skipped checks, and environmental
+blockers. Never substitute a narrower check for a required check without saying so.
+Do not rerun a successful Full suite after record-only edits that cannot affect its
+coverage; rerun the smallest instruction or state checks instead.

@@ -1,80 +1,98 @@
 # Repository Agent Rules
 
-Keep architecture separated by responsibility. Splitting must reduce coupling and improve testability; do not create giant files or pass-through-only pseudo-layers.
+Build the Taiwan equity research system in coherent, reviewable units. Preserve point-in-time correctness,
+fail-closed behavior, public contracts, and user work. Split only to reduce coupling and improve testability.
 
-## Scope and precedence
+## Instruction precedence
 
-This repository builds a Taiwan equity 2-10 trading-day research system. The only formal product scope is the five-trading-day MVP, and model status remains `RESEARCH_ONLY` until all data and out-of-sample gates pass.
+Apply, in order: safety and protected-operation limits; the user's request and explicit authorization; the
+nearest `AGENTS.md`; the active Work Package; `.ai/` contracts; continuity state. Nested Agent files add
+local rules and cannot weaken higher constraints. Continuity records state only and grants no authority.
 
-Apply rules in this order: safety and point-in-time correctness; the user's current request; product and architecture contracts; preservation of valid unrelated work; speed and convenience.
+## Work Package and task model
 
-## Required reading order
+A Work Package is one natural, complete outcome. It may include analysis, characterization, implementation,
+caller migration, related fixes, tests, verification, documentation, focused commits, a `codex/*` push, and
+a Draft Pull Request. Do not stop after a subtask unless a stop condition is reached. Before edits, create
+one populated `tasks/active/TASK.md` with status `ACTIVE`. An empty prompt, placeholder, example, or
+`tasks/TASK_TEMPLATE.md` is not executable. Never create one active task per subtask.
 
-Read only the minimum relevant material, in this order:
+## Default local authorization
 
-1. Root `AGENTS.md`.
-2. `tasks/active/TASK.md`.
-3. `.ai/product.md`.
-4. `.ai/architecture.md`.
-5. `.ai/decisions.md`.
-6. Relevant code, tests, schemas, workflows, `.ai/known-issues.md`, and applicable Skills.
+Unless the user gives narrower authorization, an actual Work Package has `FULL_LOCAL_AND_DRAFT_PR`
+authority. Without repeated approval, inspect the repository; change in-scope code, callers, tests, fixtures,
+docs, and related non-production CI; make verifiable related low-risk fixes; use frozen dependencies,
+isolated local services, and local Docker; verify; update task/continuity; create focused commits; push only
+to `codex/*`; and create or update a Draft Pull Request.
 
-## Mandatory preflight
+## Protected operations
 
-Before edits, run `git status --short --branch`, `git rev-parse --show-toplevel`, and `git diff --name-status`. Inspect relevant files and distinguish pre-existing changes from task changes. Do not read the entire repository by default.
+Separate explicit user authorization is always required for a protected-branch push; merge or auto-merge;
+release; Preview, Staging, or Production deployment; production workflow; production data, schema,
+infrastructure, DNS, billing, or settings; destructive migration; secret access, output, rotation, or
+modification; destructive remote deletion; repository-wide core dependency upgrade or removal; and real
+trading. Never infer one protected authorization from another.
 
-## Single active task
+## Context, evidence, and scope
 
-Only `tasks/active/TASK.md` may represent active work. Follow `tasks/README.md`; archive completed tasks under `tasks/completed/` and never rewrite historical task records as current status.
+Start with applicable instructions, the active task, continuity, relevant contracts, public entry points,
+existing tests, and direct callers. Verify references with repository search and expand scope only when
+evidence requires it. Avoid broad exploration, rereading unchanged files, and loading generated artifacts
+or large logs. Separate confirmed facts, evidence-based inference, and unresolved uncertainty.
+Before edits verify repository root, branch, worktree status, and diff; isolate unrelated changes. Without
+an isolated worktree only the primary agent writes. Use read-only subagents only when explicitly requested.
+Keep one primary component or tightly connected data flow. Fix related problems autonomously only when they
+preserve unauthorized public contracts, avoid protected operations, remain verifiable, and are necessary
+for the outcome or confidence. Do not combine another major feature or unrelated cleanup. File and line
+counts are review indicators, not excuses to leave a coherent outcome incomplete; explain and organize
+large diffs, run Full verification, and obtain independent review.
 
-## Project invariants
+## Validation and repair
 
-- Only `horizon=5` is formally supported; other values return `UNSUPPORTED_HORIZON`.
-- ETF data stays separate from ordinary stock candidates and training data.
-- The rank model is the only stock-ordering source; direction, quantile, market, and volatility outputs are gates or exposure controls only.
-- `decision_policy` must not create a second weighted ranking.
-- Enforce `available_at <= decision_at`; prevent look-ahead and survivorship bias.
-- Never present fake data, placeholders, exact future prices, guaranteed returns, or unvalidated performance as real.
-- A hard failure cannot produce a formal candidate. Formal output remains traceable to data, labels, features, costs, calibration, model, and Git versions.
+Validate in layers: focused affected tests; relevant lint and type checks; `git diff --check`; Fast
+verification; risk- or scope-required Full verification; then independent final review. Full is required
+for shared contracts, data or point-in-time logic, models, decision policy, authentication, schema or
+migrations, release paths, multiple caller migrations, executable governance changes, and Draft PR
+readiness. Run `python scripts/check_agents_length.py` for instruction changes. Go and Deno are required
+for `just quality`; missing required tools are blockers.
+Never claim an unexecuted check passed or behavioral equivalence without checkable evidence. Do not rerun
+an expensive successful suite after a later change that cannot affect its coverage. On failure, identify
+the first actionable cause, make the smallest justified repair, and rerun the smallest affected check.
+Stop and report `PARTIAL` or `BLOCKED` after three materially different failed attempts at one root cause.
+Never delete valid tests, weaken assertions without contract evidence, add broad ignores or skips, swallow
+errors, fabricate data, or lower quality gates.
 
-## Change discipline
+## Git and Draft PR policy
 
-- Preserve valid behavior and unrelated user changes; make the smallest reversible change.
-- UI must not contain model, SQL, R2, or database logic. External systems use clients, adapters, or repositories.
-- Keep rank, direction, quantile, volatility, market, labels, decision, validation, and backtest modules separate.
-- Avoid cycles, cross-layer shortcuts, duplicate shared logic, and cosmetic file fragmentation.
-- Do not delete uncertain files. Apply the evidence rules in `.ai/code-review.md`.
+Preserve and isolate unrelated changes. Use explicit-path staging; never use `git add .`, `git add -A`, or
+`git commit -am`. Never force-push, push a protected branch, run `git reset --hard` or `git clean -fd`, or
+discard unrelated work. Before commit, require applicable validation and `git diff --check` to pass, no
+secrets or unexplained behavior difference, and accurate task/documentation state. Draft PRs must state
+outcome, contract impact, validation, limitations, risks, and that merge and deployment were not performed.
 
-## Testing and verification
+## Tasks, continuity, and sessions
 
-Run focused tests, `python scripts/check_agents_length.py`, `git diff --check`, and the applicable fast/full verification. Report only commands actually run, including failures, skips, and environmental blockers. Inspect final status, untracked files, accidental deletions, generated output, and possible secrets.
+Follow `tasks/README.md`. Archive only terminal `COMPLETE`, `PARTIAL`, or `BLOCKED` tasks under
+`tasks/completed/`, then restore the active file to its exact `NONE` state. Keep
+`.codex/CONTINUITY.md` concise and current; do not copy logs or task history into it. Archival does not
+require a new session. Continue the same session for the same Work Package; use a new one for a separate
+package or genuinely independent review.
 
-Use versions pinned in `config/quality-tools.env`; Go and Deno are required for `just quality`, and missing required tools are blockers rather than skipped checks.
+## Stop conditions and definition of done
 
-## Subagent policy
+Stop when completion requires an unauthorized contract change, protected operation, unrelated major
+subsystem, unresolved destructive action, unsafe mixing of user changes, unavailable external validation,
+or a material unexplained behavior difference. Also stop for a confirmed security leak, look-ahead bias,
+or survivorship bias. Do not stop for reversible local design choices or in-scope repair.
+Complete the primary outcome and direct callers; preserve contracts; pass required validation; resolve
+independent-review findings; update task, continuity, and direct documentation; commit and push the
+`codex/*` branch; open or update a Draft PR; and report exact results, failures, branch/commit/PR state,
+risks, and prohibited operations not performed. Product status is governed by authoritative contracts.
 
-Without separate Git worktrees, only the primary agent may write. Subagents must use read-only roles from `.codex/agents/`, remain within delegated scope, return evidence-based summaries, and never expose secrets. Use delegation only when the user or an applicable instruction explicitly requests it.
+## References and instruction size
 
-## Security and approval boundaries
-
-Never expose or commit secrets, tokens, passwords, private keys, or `service_role`; never disable TLS, RLS, Auth, or other controls. Without explicit task approval, do not commit, push, create or merge PRs, deploy, change production data/schema/settings, modify secrets/DNS/billing/branch protection, or perform destructive operations.
-
-After local validation, proactively request approval to create a pull request; after CI passes, proactively request approval to merge it into `main` and then align any legacy local `main`. Each approval applies only to the named stage.
-
-## Definition of done
-
-The active task criteria are met; relevant verification has run; references resolve; no unrelated behavior changed; and known risks are reported. Until point-in-time, purged walk-forward, calibration, locked holdout, and full-cost backtest acceptance passes, status stays `RESEARCH_ONLY` or `FAIL`.
-
-## Referenced documents
-
-- Architecture: `.ai/architecture.md`
-- Product: `.ai/product.md`
-- Decisions: `.ai/decisions.md`
-- Review and cleanup: `.ai/code-review.md`
-- Known issues: `.ai/known-issues.md`
-- Verification: `.agents/skills/repository-verification/SKILL.md`
-- Current implementation status: `docs/current-status.md`, `model_card.md`
-
-## Instruction size policy
-
-Root `AGENTS.md` must remain at most 100 physical lines and 16 KiB; combined repository agent instructions must remain at most 28 KiB. Do not evade limits with hidden content, runtime generation, unreadable lines, or duplicated translations.
+Product/display: `.ai/product.md`; architecture: `.ai/architecture.md`; decisions: `.ai/decisions.md`;
+review: `.ai/code-review.md`; known issues: `.ai/known-issues.md`; tasks: `tasks/README.md`; verification:
+`.agents/skills/repository-verification/SKILL.md`; current evidence: `docs/current-status.md`, `model_card.md`.
+Root `AGENTS.md` stays within 100 lines and 16 KiB; all agent instructions stay within 28 KiB. Never evade
+limits with hidden, generated, unreadable, translated, or duplicated content.

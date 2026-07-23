@@ -1,7 +1,6 @@
 # Extract Archive/Current-Publication Row-Adaptation Boundary
 
 ## Status
-
 ACTIVE
 
 ## Primary Outcome

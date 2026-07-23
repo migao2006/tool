@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 from datetime import date, datetime, timedelta, timezone
 from hashlib import sha256
 from io import BytesIO
@@ -21,6 +22,8 @@ from src.data.ingestion.historical_parquet_serializer import (
 )
 from src.data.object_storage.r2_client import R2Client, R2Settings
 from src.data.research.archive_feature_rows import (
+    ArchiveFeatureRowAdapter,
+    ArchiveRowSource,
     SourceProvenance,
     canonical_record,
     output_row,
@@ -386,6 +389,175 @@ def test_public_row_adapters_preserve_canonical_output_and_compatibility_contrac
     assert compatibility_rows.SourceProvenance is SourceProvenance
     assert compatibility_rows.canonical_record is canonical_record
     assert compatibility_rows.output_row is output_row
+
+
+def test_extracted_row_adapter_selects_sources_and_provenance_deterministically() -> None:
+    adapter = ArchiveFeatureRowAdapter(market="TWSE")
+    identity = TwseCurrentSecurityIdentity(
+        security_id=2330,
+        symbol="2330",
+        listing_date=START_DATE,
+    )
+    archive_rows = [_parsed_row(index) for index in range(3)]
+    archive_rows[-1]["parse_status"] = "QUARANTINED"
+    for row in archive_rows:
+        row["reason_codes"] = json.dumps(
+            row["reason_codes"],
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+    source = ArchiveRowSource(
+        archive_id=7,
+        object_key="historical/twse/2330.parquet",
+        source_payload_sha256=SOURCE_PAYLOAD_HASH,
+        parquet_sha256="d" * 64,
+        manifest_reason_codes=("POINT_IN_TIME_UNVERIFIED", "RAW_LANDING_ONLY"),
+        rows=tuple(archive_rows),
+        row_count=3,
+    )
+    publication = _publication_snapshot(START_DATE + timedelta(days=1))
+
+    adapted = adapter.adapt_source_rows(
+        archive_sources=(source,),
+        identity=identity,
+        publication_row=publication.rows[0],
+        publication_manifest=publication.manifest,
+    )
+
+    assert [row["trade_date"] for row in adapted.records] == [
+        START_DATE,
+        START_DATE + timedelta(days=1),
+    ]
+    assert adapted.source_row_count == 4
+    assert adapted.parsed_source_row_count == 3
+    assert adapted.exclusion_reason_counts == {
+        "ARCHIVE_ROW_QUARANTINED": 1,
+        "DAILY_PUBLICATION_OVERLAPS_ARCHIVE": 1,
+    }
+    assert tuple(adapted.provenance_by_date) == (
+        START_DATE,
+        START_DATE + timedelta(days=1),
+    )
+    assert adapted.provenance_by_date[START_DATE].archive_id == 7
+    assert adapted.provenance_by_date[START_DATE + timedelta(days=1)].archive_id == 7
+    assert adapted.provenance_by_date[START_DATE].source_reason_codes[:2] == (
+        "POINT_IN_TIME_UNVERIFIED",
+        "RAW_LANDING_ONLY",
+    )
+    assert adapted.records[0] == adapter.canonical_record(
+        archive_rows[0],
+        identity=identity,
+    )
+    assert adapted.records[0] == canonical_record(
+        archive_rows[0],
+        identity=identity,
+        market="TWSE",
+    )
+    assert adapter.publication_canonical_record(
+        publication.rows[0],
+        identity=identity,
+    ) == publication_canonical_record(
+        publication.rows[0],
+        identity=identity,
+    )
+    assert all(row["point_in_time_status"] == "UNVERIFIED" for row in adapted.records)
+
+    with pytest.raises(TwseArchiveFeatureBuildError) as captured:
+        _ = ArchiveFeatureRowAdapter(market="TPEX").canonical_record(
+            archive_rows[0],
+            identity=identity,
+        )
+    assert captured.value.reason_code == "TPEX_CURRENT_IDENTITY_SCOPE_MISMATCH"
+
+
+def test_extracted_row_adapter_excludes_hard_fail_and_adapts_output_rows() -> None:
+    adapter = ArchiveFeatureRowAdapter(market="TWSE")
+    identity = TwseCurrentSecurityIdentity(
+        security_id=2330,
+        symbol="2330",
+        listing_date=START_DATE,
+    )
+    archive_rows = [_parsed_row(index) for index in range(72)]
+    archive_rows[-1]["high_price"] = "0"
+    for row in archive_rows:
+        row["reason_codes"] = json.dumps(
+            row["reason_codes"],
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+    adapted_sources = adapter.adapt_source_rows(
+        archive_sources=(
+            ArchiveRowSource(
+                archive_id=11,
+                object_key="historical/twse/2330.parquet",
+                source_payload_sha256=SOURCE_PAYLOAD_HASH,
+                parquet_sha256="d" * 64,
+                manifest_reason_codes=(
+                    "POINT_IN_TIME_UNVERIFIED",
+                    "RAW_LANDING_ONLY",
+                ),
+                rows=tuple(archive_rows),
+                row_count=72,
+            ),
+        ),
+        identity=identity,
+    )
+    features = build_price_volume_features(
+        adapted_sources.records,
+        market="TWSE",
+        availability_mode="RESEARCH_SCHEDULING_HINT",
+    )
+
+    adapted_output = adapter.adapt_output_rows(
+        features.rows,
+        identity=identity,
+        provenance_by_date=adapted_sources.provenance_by_date,
+        dataset_snapshot_sha256="e" * 64,
+        source_archive_snapshot_sha256="a" * 64,
+        current_identity_snapshot_sha256="b" * 64,
+    )
+
+    assert len(adapted_output.rows) == 11
+    expected_exclusions = Counter(
+        reason
+        for feature in features.rows
+        if feature.hard_fail
+        for reason in feature.hard_fail_reason_codes
+    )
+    assert adapted_output.exclusion_reason_counts == dict(
+        sorted(expected_exclusions.items())
+    )
+    assert adapted_output.exclusion_reason_counts["FEATURE_INPUT_INVALID:high_price"] == 1
+    decision_dates: list[date] = []
+    for row in adapted_output.rows:
+        decision_date = row["decision_date"]
+        latest_available_at = row["latest_available_at"]
+        decision_at = row["decision_at"]
+        assert type(decision_date) is date
+        assert isinstance(latest_available_at, datetime)
+        assert isinstance(decision_at, datetime)
+        assert latest_available_at <= decision_at
+        decision_dates.append(decision_date)
+    assert decision_dates == sorted(decision_dates)
+    assert all(row["archive_id"] == 11 for row in adapted_output.rows)
+    assert all(row["horizon"] == 5 for row in adapted_output.rows)
+    assert all(row["hard_fail"] is False for row in adapted_output.rows)
+    assert all(row["usage_scope"] == "FEATURE_RESEARCH_ONLY" for row in adapted_output.rows)
+    assert all(row["system_status"] == "RESEARCH_ONLY" for row in adapted_output.rows)
+    assert all(
+        row["latest_observed_available_at"] == OBSERVED_AT
+        for row in adapted_output.rows
+    )
+    first_feature = next(feature for feature in features.rows if not feature.hard_fail)
+    assert adapted_output.rows[0] == output_row(
+        first_feature,
+        identity=identity,
+        provenance=adapted_sources.provenance_by_date[first_feature.decision_date],
+        dataset_snapshot_sha256="e" * 64,
+        source_archive_snapshot_sha256="a" * 64,
+        current_identity_snapshot_sha256="b" * 64,
+        market="TWSE",
+    )
 
 
 def test_builder_streams_eligible_rows_and_preserves_research_limits(

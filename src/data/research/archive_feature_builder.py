@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from datetime import date, datetime, timezone
 from typing import cast
 
@@ -24,13 +24,9 @@ from .archive_feature_contracts import (
 )
 from .archive_feature_parquet import ArchiveFeatureParquetWriter
 from .archive_feature_rows import (
-    SourceProvenance,
+    ArchiveFeatureRowAdapter,
+    ArchiveRowSource,
     archive_id,
-    canonical_record,
-    group_manifests,
-    output_row,
-    publication_canonical_record,
-    source_reason_codes,
 )
 from .daily_bar_publication_snapshot import DailyBarPublicationSnapshot
 
@@ -57,6 +53,7 @@ class ArchiveFeatureDatasetBuilder:
         writer: ArchiveFeatureParquetWriter,
         publication_snapshot: DailyBarPublicationSnapshot | None = None,
     ) -> ArchiveFeatureAudit:
+        row_adapter = ArchiveFeatureRowAdapter(market=self.profile.market)
         try:
             if not manifests.complete:
                 raise ArchiveFeatureBuildError(
@@ -81,10 +78,7 @@ class ArchiveFeatureDatasetBuilder:
                     f"{self.profile.market}_CURRENT_IDENTITY_SCOPE_MISMATCH",
                     "Current identity snapshot is outside the requested scope",
                 )
-            grouped = group_manifests(
-                manifests.rows,
-                market=self.profile.market,
-            )
+            grouped = row_adapter.group_manifests(manifests.rows)
             if (
                 publication_snapshot is not None
                 and publication_snapshot.manifest.market != self.profile.market
@@ -126,131 +120,64 @@ class ArchiveFeatureDatasetBuilder:
             for symbol in symbols:
                 symbol_manifests = grouped.get(symbol, [])
                 identity = identities.by_symbol.get(symbol)
-                records: list[dict[str, object]] = []
-                provenance_by_date: dict[date, SourceProvenance] = {}
+                adapted_sources = row_adapter.adapt_source_rows(
+                    archive_sources=(),
+                    identity=identity,
+                )
                 for raw_manifest in symbol_manifests:
                     archive = self.reader.read(raw_manifest)
                     verified_archive_count += 1
-                    source_row_count += archive.row_count
-                    parsed_archive_id = archive_id(raw_manifest)
-                    for row in archive.rows:
-                        if row.get("parse_status") != "PARSED":
-                            exclusion_reasons["ARCHIVE_ROW_QUARANTINED"] += 1
-                            continue
-                        parsed_source_row_count += 1
-                        trade_date = row.get("trade_date")
-                        if type(trade_date) is not date:
-                            exclusion_reasons["PARSED_ARCHIVE_TRADE_DATE_INVALID"] += 1
-                            continue
-                        if identity is None:
-                            exclusion_reasons["CURRENT_SECURITY_IDENTITY_MISSING"] += 1
-                            continue
-                        if identity.listing_date is None:
-                            exclusion_reasons["CURRENT_IDENTITY_LISTING_DATE_MISSING"] += 1
-                            continue
-                        if trade_date < identity.listing_date:
-                            exclusion_reasons["TRADE_DATE_BEFORE_CURRENT_LISTING_DATE"] += 1
-                            continue
-                        if (
-                            identity.delisting_date is not None
-                            and trade_date > identity.delisting_date
-                        ):
-                            exclusion_reasons["TRADE_DATE_AFTER_CURRENT_DELISTING_DATE"] += 1
-                            continue
-                        source_reasons = tuple(
-                            dict.fromkeys(
-                                (
-                                    *archive.manifest.reason_codes,
-                                    *source_reason_codes(row.get("reason_codes")),
-                                )
-                            )
-                        )
-                        provenance_by_date[trade_date] = SourceProvenance(
-                            archive_id=parsed_archive_id,
-                            object_key=archive.manifest.object_key,
-                            source_payload_sha256=archive.manifest.source_payload_hash,
-                            parquet_sha256=archive.manifest.parquet_sha256,
-                            source_reason_codes=source_reasons,
-                        )
-                        records.append(
-                            canonical_record(
-                                row,
-                                identity=identity,
-                                market=self.profile.market,
-                            )
-                        )
-                publication_row = publication_by_symbol.get(symbol)
-                if publication_row is not None:
-                    source_row_count += 1
-                    parsed_source_row_count += 1
-                    if identity is None:
-                        exclusion_reasons["CURRENT_SECURITY_IDENTITY_MISSING"] += 1
-                    elif identity.listing_date is None:
-                        exclusion_reasons["CURRENT_IDENTITY_LISTING_DATE_MISSING"] += 1
-                    elif publication_row.trade_date < identity.listing_date:
-                        exclusion_reasons["TRADE_DATE_BEFORE_CURRENT_LISTING_DATE"] += 1
-                    elif (
-                        identity.delisting_date is not None
-                        and publication_row.trade_date > identity.delisting_date
-                    ):
-                        exclusion_reasons["TRADE_DATE_AFTER_CURRENT_DELISTING_DATE"] += 1
-                    elif publication_row.trade_date in provenance_by_date:
-                        exclusion_reasons["DAILY_PUBLICATION_OVERLAPS_ARCHIVE"] += 1
-                    elif publication_manifest is not None:
-                        manifest = publication_manifest
-                        provenance_by_date[publication_row.trade_date] = SourceProvenance(
-                            archive_id=manifest.publication_snapshot_id,
-                            object_key=manifest.object_key,
-                            source_payload_sha256=manifest.source_payload_hash,
-                            parquet_sha256=manifest.parquet_sha256,
-                            source_reason_codes=tuple(
-                                dict.fromkeys(
-                                    (
-                                        *manifest.reason_codes,
-                                        "DAILY_BAR_PUBLICATION_RESEARCH_ONLY",
-                                    )
-                                )
+                    adapted_sources = row_adapter.adapt_source_rows(
+                        archive_sources=(
+                            ArchiveRowSource(
+                                archive_id=archive_id(raw_manifest),
+                                object_key=archive.manifest.object_key,
+                                source_payload_sha256=(
+                                    archive.manifest.source_payload_hash
+                                ),
+                                parquet_sha256=archive.manifest.parquet_sha256,
+                                manifest_reason_codes=archive.manifest.reason_codes,
+                                rows=archive.rows,
+                                row_count=archive.row_count,
                             ),
-                        )
-                        records.append(
-                            publication_canonical_record(
-                                publication_row,
-                                identity=identity,
-                            )
-                        )
-                if not records or identity is None:
+                        ),
+                        identity=identity,
+                        previous=adapted_sources,
+                    )
+                publication_row = publication_by_symbol.get(symbol)
+                adapted_sources = row_adapter.adapt_source_rows(
+                    archive_sources=(),
+                    identity=identity,
+                    publication_row=publication_row,
+                    publication_manifest=publication_manifest,
+                    previous=adapted_sources,
+                )
+                source_row_count += adapted_sources.source_row_count
+                parsed_source_row_count += adapted_sources.parsed_source_row_count
+                exclusion_reasons.update(adapted_sources.exclusion_reason_counts)
+                if not adapted_sources.records or identity is None:
                     continue
                 feature_result = build_price_volume_features(
-                    records,
+                    adapted_sources.records,
                     market=self.profile.market,
                     availability_mode="RESEARCH_SCHEDULING_HINT",
                 )
-                output_batch: list[Mapping[str, object]] = []
-                for feature in feature_result.rows:
-                    if feature.hard_fail:
-                        exclusion_reasons.update(feature.hard_fail_reason_codes)
-                        continue
-                    provenance = provenance_by_date.get(feature.decision_date)
-                    if provenance is None:
-                        raise ArchiveFeatureBuildError(
-                            "FEATURE_SOURCE_PROVENANCE_MISSING",
-                            "Feature row cannot be linked to its verified archive",
-                        )
-                    output_batch.append(
-                        output_row(
-                            feature,
-                            identity=identity,
-                            provenance=provenance,
-                            dataset_snapshot_sha256=dataset_hash,
-                            source_archive_snapshot_sha256=source_snapshot_sha256,
-                            current_identity_snapshot_sha256=identities.snapshot_sha256,
-                            market=self.profile.market,
-                        )
+                adapted_output = row_adapter.adapt_output_rows(
+                    feature_result.rows,
+                    identity=identity,
+                    provenance_by_date=adapted_sources.provenance_by_date,
+                    dataset_snapshot_sha256=dataset_hash,
+                    source_archive_snapshot_sha256=source_snapshot_sha256,
+                    current_identity_snapshot_sha256=identities.snapshot_sha256,
+                )
+                exclusion_reasons.update(adapted_output.exclusion_reason_counts)
+                writer.write_rows(adapted_output.rows)
+                output_row_count += len(adapted_output.rows)
+                if adapted_output.rows:
+                    batch_latest = max(
+                        cast(date, row["decision_date"])
+                        for row in adapted_output.rows
                     )
-                writer.write_rows(output_batch)
-                output_row_count += len(output_batch)
-                if output_batch:
-                    batch_latest = max(cast(date, row["decision_date"]) for row in output_batch)
                     latest_decision_date = (
                         batch_latest
                         if latest_decision_date is None

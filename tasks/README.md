@@ -31,9 +31,11 @@ This state is not an executable task.
    work.
 2. Use `tasks/TASK_TEMPLATE.md` only as a checklist. Replace its generic title and
    `TEMPLATE` status; never copy an unfilled template into the active slot.
-3. Set status to `ACTIVE` and populate every required section with actual task facts.
+3. Set status to `ACTIVE`, use `FULL_AUTONOMY_UNTIL_MAIN_UPDATE` unless the user
+   explicitly narrows it, and populate every required section with actual task facts.
 4. Keep one natural outcome across analysis, implementation, directly related fixes,
-   validation, documentation, commits, a `codex/*` push, and Draft PR work.
+   validation, documentation, commits, a non-protected `codex/*` push, and Pull
+   Request readiness.
 
 An active task must include: Status, Authorization, Primary Outcome, Background,
 Subtasks, Allowed Scope, Prohibited Changes, Public Contracts, Risk Classification,
@@ -42,7 +44,7 @@ Validation Plan, Stop Conditions, Definition of Done, and Results.
 ## Maintain task and continuity state
 
 Record verified scope or outcome changes in the active task. Keep progress summaries,
-branch state, decisions, passed validations, blockers, commits, and Draft PR
+branch state, decisions, passed validations, blockers, commits, and Pull Request
 references in `.codex/CONTINUITY.md`. Do not paste command transcripts, full diffs,
 or completed-task history there.
 
@@ -53,7 +55,7 @@ state instead of appending an activity log.
 
 1. Set the task status to exactly `COMPLETE`, `PARTIAL`, or `BLOCKED`.
 2. Fill Results with actual behavior, validation, repair, branch, commit, push, and
-   Draft PR evidence; record failures and unexecuted checks truthfully.
+   Pull Request evidence; record failures and unexecuted checks truthfully.
 3. Save the report as `tasks/completed/YYYY-MM-DD-kebab-case-outcome.md`.
 4. Preserve existing completed reports. Historical `COMPLETED` spellings may remain;
    new reports use the three terminal statuses above.

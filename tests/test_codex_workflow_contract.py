@@ -78,7 +78,7 @@ def test_continuity_is_bounded_state_not_authority() -> None:
         "Key Decisions",
         "Validation Already Passed",
         "Known Issues or Blockers",
-        "Commit and Draft PR References",
+        "Commit and Pull Request References",
         "Maintenance",
     ):
         assert f"## {section}\n" in content
@@ -143,16 +143,18 @@ def test_required_agent_documents_and_ci_paths_exist() -> None:
         assert expected_path in workflow
 
 
-def test_agent_rules_define_work_package_authority_and_protected_operations() -> None:
+def test_agent_rules_define_autonomy_until_protected_branch_update() -> None:
     rules = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
     normalized_rules = " ".join(rules.split())
 
-    assert "`FULL_LOCAL_AND_DRAFT_PR`" in normalized_rules
+    assert "`FULL_AUTONOMY_UNTIL_MAIN_UPDATE`" in normalized_rules
+    assert "FULL_LOCAL_AND_DRAFT_PR" not in normalized_rules
     assert "Without repeated approval" in normalized_rules
-    assert "push only to `codex/*`" in normalized_rules
-    assert "create or update a Draft Pull" in normalized_rules
+    assert "push non-protected feature branches" in normalized_rules
+    assert "create, update, or mark Pull Requests ready" in normalized_rules
     assert (
-        "Separate explicit user authorization is always required" in normalized_rules
+        "The only operation that requires additional user authorization"
+        in normalized_rules
     )
     assert (
         "Before edits verify repository root, branch, worktree status, and diff"
@@ -160,23 +162,43 @@ def test_agent_rules_define_work_package_authority_and_protected_operations() ->
     )
     assert "only the primary agent writes" in normalized_rules
     assert "Use read-only subagents only when explicitly requested" in normalized_rules
-    for protected_operation in (
-        "protected-branch push",
-        "merge or auto-merge",
-        "Preview, Staging, or Production deployment",
-        "production workflow",
-        "production data, schema, infrastructure, DNS, billing, or settings",
-        "destructive migration",
-        "secret access, output, rotation, or modification",
-        "destructive remote deletion",
-        "repository-wide core dependency upgrade or removal",
-        "real trading",
+    for automatic_operation in (
+        "install or synchronize dependencies",
+        "local Docker or isolated services",
+        "migrations, schemas, workflows, deployment configuration, and infrastructure",
+        "existing task-required secrets without displaying or leaking them",
+        "Preview, Staging, or Production workflows",
+        "migrations and deployments and verify their outcomes",
+        "prepare releases",
     ):
-        assert protected_operation in normalized_rules
-    assert (
-        "proactively request approval to create a pull request"
-        not in normalized_rules
+        assert automatic_operation in normalized_rules
+    for final_handoff_detail in (
+        "protected branch",
+        "commit or Pull Request",
+        "validation and CI results",
+        "deployment and migration status",
+        "known risks",
+        "rollback procedure",
+    ):
+        assert final_handoff_detail in normalized_rules
+    assert "Never force-push" in normalized_rules
+    assert "prefer reversible and minimal-impact operations" in normalized_rules
+    assert "Secret values must never be printed" in normalized_rules
+
+
+def test_policy_templates_and_skills_use_the_same_authorization_boundary() -> None:
+    policy_paths = (
+        ROOT / "tasks" / "README.md",
+        ROOT / "tasks" / "TASK_TEMPLATE.md",
+        ROOT / ".agents" / "skills" / "implement-feature" / "SKILL.md",
+        ROOT / ".agents" / "skills" / "safe-db-migration" / "SKILL.md",
     )
+    content = "\n".join(path.read_text(encoding="utf-8") for path in policy_paths)
+
+    assert "FULL_LOCAL_AND_DRAFT_PR" not in content
+    assert "`FULL_AUTONOMY_UNTIL_MAIN_UPDATE`" in content
+    assert "without explicit approval" not in content
+    assert "update a protected branch without final authorization" in content
 
 
 def test_task_workflow_separates_template_active_archive_and_session_state() -> None:

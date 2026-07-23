@@ -6,52 +6,50 @@ and must not replace `tasks/active/TASK.md` or completed reports.
 ## Current Work Package
 
 - Status: COMPLETE
-- Outcome: Repository operating rules were refactored into a layered system.
-- Record: `tasks/completed/2026-07-23-refactor-repository-operating-rules.md`.
+- Outcome: Adopted `FULL_AUTONOMY_UNTIL_MAIN_UPDATE` with one final
+  protected-branch update boundary.
+- Record: `tasks/completed/2026-07-23-update-main-authorization-policy.md`.
 
 ## Current Branch
 
-- `codex/refactor-repository-operating-rules`
-- Based on `origin/main` at `a8b1cedb4cdfb96695d2fad42727b1cc6838a8b9`.
+- `codex/update-main-authorization-policy`
+- Based on `origin/main` at `7a7e431f4086eabbe458a4ad244c940ec8cac9ae`.
 
 ## Completed Work
 
-- Separated stable root policy, actual task state, continuity, specialized rules,
-  and historical reports.
-- Made the empty Work Package template explicitly non-executable.
-- Added contract coverage for autonomy, protected operations, task structure,
-  continuity bounds, and references.
-- Updated direct Skills and README navigation without product or workflow changes.
+- Replaced the prior authorization boundary with one final protected-branch gate.
+- Added regression coverage for automatic operations, safety, and handoff evidence.
+- Completed local Full verification and core GitHub Project tests.
+- Pushed the feature branch and marked PR #99 Ready for review.
 
 ## Remaining Work
 
-- GitHub-hosted PR checks and human review.
-- Merge remains a separately authorized protected operation.
+- Human review and final protected-branch authorization.
+- Do not merge or otherwise update `main` without that authorization.
 
 ## Key Decisions
 
-- `.ai/` remains authoritative for product, architecture, and stable decisions.
-- Default autonomy ends at a `codex/*` push and Draft PR.
-- Historical task wording remains unchanged as audit evidence.
+- Keep the layered instruction architecture and product contracts unchanged.
+- Preserve completed reports as immutable historical evidence.
+- Treat deployment, migration, production workflow, and release preparation as
+  in-scope Work Package actions; only a protected-branch update needs final approval.
 
 ## Validation Already Passed
 
-- Focused governance suite: 27 passed.
-- Ruff passed; basedpyright reported 0 errors and 0 warnings.
-- Instruction limits, links, references, authority, scope, whitespace, and staged
-  Gitleaks checks passed.
+- Focused governance contracts: 11 passed.
+- Ruff and basedpyright passed; instruction limits and changed-file Gitleaks passed.
 - Fast verification passed.
-- Full verification passed: 989 Python and 65 Playwright tests.
+- Full verification passed: 990 Python and 65 Playwright tests.
 
 ## Known Issues or Blockers
 
-- None for this Work Package.
+- None.
 
-## Commit and Draft PR References
+## Commit and Pull Request References
 
-- Core commit: `1e80fd837e662752682a3480148c778ddbfc572b`.
-- Terminal task record is committed on this branch after the core commit.
-- Draft PR #98: https://github.com/migao2006/tool/pull/98
+- Core commit: `3d0f398698b871af218663ad9c0ffbd0aa24e958`.
+- Terminal task record follows the core commit.
+- Ready PR #99: https://github.com/migao2006/tool/pull/99
 
 ## Maintenance
 

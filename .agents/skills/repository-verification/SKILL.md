@@ -12,7 +12,7 @@ Use `just tools`, `just agents`, `just fast`, and `just full` as the supported l
 3. Run focused checks for affected code. Use `uv run --system-certs --extra test pytest <tests>` for Python and the existing Playwright server/config for frontend work.
 4. Run `pwsh -File scripts/verify-fast.ps1`.
 5. Run `pwsh -File scripts/verify-full.ps1` for the Full-verification cases defined
-   by root `AGENTS.md`, including executable governance changes and Draft PR
+   by root `AGENTS.md`, including executable governance changes and Pull Request
    readiness.
 6. Run `git diff --check`; inspect status, stat, name-status, full diff, untracked files, accidental deletions, generated output, and possible secrets.
 

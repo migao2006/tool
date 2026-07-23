@@ -5,9 +5,10 @@ and must not replace `tasks/active/TASK.md` or completed reports.
 
 ## Current Work Package
 
-- Status: ACTIVE
-- Outcome: Adopt `FULL_AUTONOMY_UNTIL_MAIN_UPDATE` as the repository authorization
-  model with one final protected-branch update boundary.
+- Status: COMPLETE
+- Outcome: Adopted `FULL_AUTONOMY_UNTIL_MAIN_UPDATE` with one final
+  protected-branch update boundary.
+- Record: `tasks/completed/2026-07-23-update-main-authorization-policy.md`.
 
 ## Current Branch
 
@@ -16,15 +17,15 @@ and must not replace `tasks/active/TASK.md` or completed reports.
 
 ## Completed Work
 
-- Verified a clean checkout and isolated a new feature branch.
-- Identified the direct policy, task, Skill, continuity, and contract-test surfaces.
 - Replaced the prior authorization boundary with one final protected-branch gate.
 - Added regression coverage for automatic operations, safety, and handoff evidence.
+- Completed local Full verification and core GitHub Project tests.
+- Pushed the feature branch and marked PR #99 Ready for review.
 
 ## Remaining Work
 
-- Complete final diff review, commits, push, and Pull Request readiness.
-- Stop before updating `main` or another protected branch.
+- Human review and final protected-branch authorization.
+- Do not merge or otherwise update `main` without that authorization.
 
 ## Key Decisions
 
@@ -46,7 +47,9 @@ and must not replace `tasks/active/TASK.md` or completed reports.
 
 ## Commit and Pull Request References
 
-- No commit or PR yet for this Work Package.
+- Core commit: `3d0f398698b871af218663ad9c0ffbd0aa24e958`.
+- Terminal task record follows the core commit.
+- Ready PR #99: https://github.com/migao2006/tool/pull/99
 
 ## Maintenance
 

@@ -32,7 +32,11 @@ def test_daily_model_publishes_current_bars_and_requires_one_exact_date() -> Non
     assert "scripts.publish_daily_bar_publication_snapshots" in workflow
     assert "--include-current-publication" in workflow
     assert '--required-as-of-date "$TARGET_DATE"' in workflow
-    assert "daily-research-features-${{ matrix.market }}-${{ github.run_id }}" in workflow
+    assert (
+        "daily-research-features-${{ matrix.market }}-${{ github.run_id }}"
+        "-${{ github.run_attempt }}"
+        in workflow
+    )
     assert "fromJSON(needs.resolve.outputs.markets)" in workflow
 
 

@@ -5,86 +5,79 @@ and must not replace `tasks/active/TASK.md` or completed reports.
 
 ## Current Work Package
 
-- Status: COMPLETE
-- Outcome: Fix the first production boundary preventing automatic publication
-  and display of the newest valid research snapshot.
-- Record:
-  `tasks/completed/2026-07-23-fix-stale-latest-research-snapshot.md`.
+- Status: ACTIVE
+- Outcome: Add persistent failure/misalignment reporting and bounded,
+  current-main-only automatic recovery for daily import and research pipelines.
+- Record: `tasks/active/TASK.md`.
 
 ## Current Branch
 
-- `codex/fix-stale-research-snapshot`
-- Authoritative base: `origin/main` at
-  `efa71b56b65d937f0063f4100606f164d274e4ae`.
+- `codex/add-daily-pipeline-recovery`
+- Authoritative base: merged `origin/main` at
+  `35bc3560359ebbcac85520b93a3120f4a630ca08`.
 
 ## Verified Production State
 
-- PR #97 is merged; Project tests, Vercel Production, and GitHub Pages passed.
-- Daily Research run `30009209231` resolved and published current bars for
-  `2026-07-20`.
-- TWSE and TPEx feature artifacts passed; TPEx staging publication passed.
-- TWSE staging publication failed; Production publication was skipped.
-- Production API still returns `2026-07-17` for both venues with no-store
-  caching; static deployments contain the current frontend.
+- PR #100 is merged at `35bc356`; Project tests, Vercel Production, GitHub
+  Pages, and Edge CORS deployments passed.
+- Scheduled old-SHA Daily run `30020254516` built both feature markets. TWSE
+  Staging passed; TPEx correctly failed closed because old model run 14 was
+  superseded by newer Staging run 15; Production was skipped.
+- Current-main Daily run `30021481019` started automatically after the old
+  concurrency holder completed and is under active observation.
+- Production API remains on validated `2026-07-17` until a complete
+  current-main Production publication passes.
 
 ## Completed Work
 
-- Proved the first stale boundary is TWSE staging publication: all 1,068
-  production-symbol identities were unresolved in the isolated staging project.
-- Added a validated, ID-free production security catalog and staging-local
-  identity synchronization before inference publication.
-- Added frontend background revalidation and GitHub Pages CORS coverage.
-- Focused tests, lint, type checks, Edge tests, quality, diff checks, and Fast
-  verification pass.
-- Full verification passes with 1,011 Python and 66 Playwright tests.
-- Independent read-only review found zero blockers.
-- Production Edge deployment run `30015976124` succeeded on retry; GitHub Pages
-  GET/OPTIONS now pass exact-origin CORS with no-store.
-- Branch Daily Research run `30016458227` passed through both market catalog
-  syncs, publications, manifests, and Staging verification.
-- Staging API serves validated `2026-07-20` snapshots for both venues; Production
-  publication was intentionally disabled.
-- Implementation head `eb0854fdf1d948204267550243ebfe98fa7c742a` is pushed;
-  PR #100 implementation-head CI and Vercel Preview are green.
+- Original stale-snapshot root cause is fixed and merged through PR #100.
+- Read-only audit proved import mismatch currently retries four times in one job
+  but has no persistent issue or workflow-level recovery.
+- Official GitHub behavior was verified: full rerun uses Actions write,
+  `run_attempt` increments, v4 artifacts are immutable, and a privileged
+  `workflow_run` controller must not execute untrusted code/artifacts.
+- Workflow audit found partial failed-job reruns unsafe for the current
+  cross-job artifact DAG; full rerun with attempt-qualified names is required.
 
 ## Remaining Work
 
-- Push the terminal task/continuity record and confirm its PR checks.
-- Stop before updating `main`.
+- Finish current-main Production Daily Research and API/page verification.
+- Implement and test sanitized reports, trust/current-head guards, Issue
+  deduplication, bounded full reruns, and attempt-qualified artifacts.
+- Complete Fast/Full verification and independent review.
+- Commit, push, open a PR, wait for green CI, then stop before updating `main`.
 
 ## Key Decisions
 
-- Transfer semantic identity fields only; never copy production surrogate IDs.
-- Preserve market and common-stock isolation, point-in-time rules, horizon 5,
-  ranking semantics, `RESEARCH_ONLY`, and all fail-closed publication gates.
-- Treat frontend revalidation and GitHub Pages CORS as directly related
-  end-to-end freshness defects, not as the primary stale boundary.
+- Retry only the exact trusted workflows at the current default-branch SHA.
+- Treat an old-SHA failure as superseded: report it, never rerun it.
+- Use full workflow reruns, bounded attempts, and one immutable artifact
+  generation per `run_attempt`; never overwrite or mix prior-attempt evidence.
+- Preserve all point-in-time, venue/asset, horizon, ranking, and fail-closed
+  contracts.
 
 ## Validation Already Passed
 
-- Focused backend/frontend/workflow/publication/snapshot tests: passed.
-- Playwright characterization and regression tests: 20 passed.
-- Edge Function checks and tests: 47 passed.
-- Repository quality suite and Fast verification: passed.
-- Final Full verification: 1,011 Python and 66 Playwright tests passed.
-- Staging end-to-end run: success; TWSE 1,068 and TPEx 863 predictions verified
-  for `2026-07-20`.
+- Pre-implementation repository status and authoritative main SHA verified.
+- Official recovery API, permission, attempt, artifact, and security semantics
+  verified from GitHub documentation.
+- Read-only workflow/retry architecture audit completed.
 
 ## Known Issues or Blockers
 
-- No code blocker.
-- On 2026-07-23, live TPEx/TWSE sources reported `2026-07-23`/`2026-07-22`;
-  imports correctly deferred rather than manufacturing current-date freshness.
-- Production API remains at validated `2026-07-17` until PR #100 may update
-  `main`.
+- Live 2026-07-23 sources remain misaligned: TPEx reports `2026-07-23`, TWSE
+  reports `2026-07-22`; this is not a valid joint snapshot and must not publish.
+- No implementation blocker.
 
 ## Commit and Pull Request References
 
-- Base: `efa71b56b65d937f0063f4100606f164d274e4ae`.
-- Implementation: `eb0854fdf1d948204267550243ebfe98fa7c742a`.
-- Production failure: https://github.com/migao2006/tool/actions/runs/30009209231
-- Staging proof: https://github.com/migao2006/tool/actions/runs/30016458227
-- Bug PR: https://github.com/migao2006/tool/pull/100
+- Base: `35bc3560359ebbcac85520b93a3120f4a630ca08`.
+- Original Bug PR: https://github.com/migao2006/tool/pull/100
+- Misaligned import: https://github.com/migao2006/tool/actions/runs/30010235104
+- Superseded old-SHA Daily run:
+  https://github.com/migao2006/tool/actions/runs/30020254516
+- Current-main Daily run:
+  https://github.com/migao2006/tool/actions/runs/30021481019
 
 ## Maintenance
 

@@ -42,11 +42,15 @@ jobs:
           max_attempts=4
           attempt=1
           while (( attempt <= max_attempts )); do
+            rm -f import-market-data-result.json
             set +e
             if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.dry_run }}" == "true" ]]; then
-              python -m scripts.import_market_data --dry-run
+              python -m scripts.import_market_data \
+                --dry-run \
+                --result-output import-market-data-result.json
             else
-              python -m scripts.import_market_data
+              python -m scripts.import_market_data \
+                --result-output import-market-data-result.json
             fi
             status=$?
             set -e
@@ -63,3 +67,11 @@ jobs:
             sleep "$delay_seconds"
             attempt=$((attempt + 1))
           done
+      - name: Preserve sanitized import result
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: import-market-data-result-${{ github.run_id }}-${{ github.run_attempt }}
+          path: import-market-data-result.json
+          if-no-files-found: warn
+          retention-days: 30

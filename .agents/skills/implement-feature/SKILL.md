@@ -1,6 +1,6 @@
 ---
 name: implement-feature
-description: Implement a scoped repository feature after its outcome and contracts are defined; do not use for diagnosis-only requests, broad cleanup, or production operations.
+description: Implement a scoped repository feature after its outcome and contracts are defined; do not use for diagnosis-only requests, broad cleanup, or work outside the active Work Package.
 ---
 
 # Implement Feature
@@ -16,8 +16,9 @@ implementation phase and does not grant additional authority.
 4. Implement the outcome, migrate direct callers, and add or update tests.
 5. Run focused checks during development, then the repository's required Fast, Full,
    and independent review gates.
-6. Continue through task/continuity updates, focused commits, an authorized
-   `codex/*` push, and Draft PR creation; do not stop merely because code is complete.
+6. Continue through task/continuity updates, focused commits, a non-protected
+   `codex/*` push, and Pull Request readiness; do not stop merely because code is complete.
 7. Report contract impact, compatibility evidence, rollback, validation, and risks.
 
-Never use this Skill for a protected operation or to broaden the active Work Package.
+Use `FULL_AUTONOMY_UNTIL_MAIN_UPDATE` from root `AGENTS.md`; never use this Skill to
+broaden the active Work Package or update a protected branch without final authorization.

@@ -2,7 +2,7 @@
 ## Status
 TEMPLATE
 ## Authorization
-Record the actual authorization granted for this Work Package.
+Default to `FULL_AUTONOMY_UNTIL_MAIN_UPDATE`; record any explicit narrower grant.
 ## Primary Outcome
 State one natural, complete, reviewable outcome.
 ## Background
@@ -12,7 +12,7 @@ List the tightly related work required to finish the outcome.
 ## Allowed Scope
 Name responsible modules and evidence-based direct callers or support files.
 ## Prohibited Changes
-Record task-specific exclusions and protected operations.
+Record task-specific exclusions and the final protected-branch update boundary.
 ## Public Contracts
 Reference authoritative contracts and list any explicitly authorized change.
 ## Risk Classification

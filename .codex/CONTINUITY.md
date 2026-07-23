@@ -5,10 +5,11 @@ and must not replace `tasks/active/TASK.md` or completed reports.
 
 ## Current Work Package
 
-- Status: ACTIVE
-- Outcome: Refresh and complete the archive/current-publication row-adaptation
-  extraction in existing PR #97.
-- Task: `tasks/active/TASK.md`.
+- Status: COMPLETE
+- Outcome: Refreshed and completed the archive/current-publication
+  row-adaptation extraction in existing PR #97.
+- Record:
+  `tasks/completed/2026-07-23-complete-archive-row-adaptation-refresh.md`.
 
 ## Current Branch
 
@@ -28,14 +29,14 @@ and must not replace `tasks/active/TASK.md` or completed reports.
   `previous=` accumulation, cross-source duplicates, publication precedence,
   provenance association, and writer success/abort ordering.
 - Passed Focused, Ruff, basedpyright, diff, Fast, and final Full verification.
+- Pushed code/evidence head `70ba305eb55249e64324b388c92014005e4828aa`;
+  its GitHub Project tests, quality/security, gate, and Vercel statuses passed.
 
 ## Remaining Work
 
-- Commit and push the refreshed evidence.
-- Observe current-head PR #97 checks, repair only directly related failures,
-  archive the task, restore the active task to `NONE`, and confirm merge
-  readiness.
-- Stop before updating `main` and request final protected-branch authorization.
+- Push the terminal records-only commit and confirm its current-head checks.
+- PR #97 is otherwise ready for the final protected-branch authorization.
+- Do not merge or otherwise update `main` without that authorization.
 
 ## Key Decisions
 
@@ -68,6 +69,8 @@ and must not replace `tasks/active/TASK.md` or completed reports.
   `06356f03b2d7106d501d377054ae0cceb8c78821`.
 - Refresh merge:
   `04f4879757826495f1a632a98f5d5c1657825ac6`.
+- Regression evidence:
+  `70ba305eb55249e64324b388c92014005e4828aa`.
 - Existing PR #97: https://github.com/migao2006/tool/pull/97
 
 ## Maintenance

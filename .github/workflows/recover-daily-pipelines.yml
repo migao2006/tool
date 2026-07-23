@@ -1,0 +1,42 @@
+name: Recover daily pipelines
+
+on:
+  workflow_run:
+    workflows:
+      - Import market data
+      - Daily research model
+    types:
+      - completed
+
+permissions:
+  actions: write
+  contents: read
+  issues: write
+
+concurrency:
+  group: daily-pipeline-recovery-${{ github.event.workflow_run.id }}
+  cancel-in-progress: false
+
+jobs:
+  recover:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      # workflow_run is privileged. Check out only the current default branch;
+      # never execute the source SHA or downloaded content. The controller may
+      # parse only strict, bounded import and Daily failure-result schemas.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Report and recover one trusted daily pipeline run
+        env:
+          GITHUB_API_URL: ${{ github.api_url }}
+          GITHUB_EVENT_PATH: ${{ github.event_path }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python -m scripts.recover_daily_pipeline

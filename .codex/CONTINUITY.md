@@ -6,85 +6,81 @@ and must not replace `tasks/active/TASK.md` or completed reports.
 ## Current Work Package
 
 - Status: COMPLETE
-- Outcome: Fix the first production boundary preventing automatic publication
-  and display of the newest valid research snapshot.
+- Outcome: Production stale-snapshot repair plus persistent
+  failure/misalignment reporting and bounded current-main-only recovery.
 - Record:
-  `tasks/completed/2026-07-23-fix-stale-latest-research-snapshot.md`.
+  `tasks/completed/2026-07-24-add-bounded-daily-pipeline-recovery.md`.
 
 ## Current Branch
 
-- `codex/fix-stale-research-snapshot`
-- Authoritative base: `origin/main` at
-  `efa71b56b65d937f0063f4100606f164d274e4ae`.
+- `codex/add-daily-pipeline-recovery`
+- Authoritative base: merged `origin/main` at
+  `35bc3560359ebbcac85520b93a3120f4a630ca08`.
 
 ## Verified Production State
 
-- PR #97 is merged; Project tests, Vercel Production, and GitHub Pages passed.
-- Daily Research run `30009209231` resolved and published current bars for
-  `2026-07-20`.
-- TWSE and TPEx feature artifacts passed; TPEx staging publication passed.
-- TWSE staging publication failed; Production publication was skipped.
-- Production API still returns `2026-07-17` for both venues with no-store
-  caching; static deployments contain the current frontend.
+- Feature-branch Production reconciliation `30033947665` succeeded at exact
+  head `94013ba` without forcing a date.
+- Resolver selected only incomplete TWSE at aligned date `2026-07-20`;
+  current-bars, features, catalog, Staging, Production, and verification passed.
+- Live TWSE/TPEx APIs both return validated `2026-07-20`,
+  `decision_at=2026-07-20T17:00:00+08:00`, horizon 5, `RESEARCH_ONLY`, and
+  `no-store`.
+- Deployed Pages source displays the validated snapshot fields and uses an
+  uncached API request; no service worker is registered.
 
 ## Completed Work
 
-- Proved the first stale boundary is TWSE staging publication: all 1,068
-  production-symbol identities were unresolved in the isolated staging project.
-- Added a validated, ID-free production security catalog and staging-local
-  identity synchronization before inference publication.
-- Added frontend background revalidation and GitHub Pages CORS coverage.
-- Focused tests, lint, type checks, Edge tests, quality, diff checks, and Fast
-  verification pass.
-- Full verification passes with 1,011 Python and 66 Playwright tests.
-- Independent read-only review found zero blockers.
-- Production Edge deployment run `30015976124` succeeded on retry; GitHub Pages
-  GET/OPTIONS now pass exact-origin CORS with no-store.
-- Branch Daily Research run `30016458227` passed through both market catalog
-  syncs, publications, manifests, and Staging verification.
-- Staging API serves validated `2026-07-20` snapshots for both venues; Production
-  publication was intentionally disabled.
-- Implementation head `eb0854fdf1d948204267550243ebfe98fa7c742a` is pushed;
-  PR #100 implementation-head CI and Vercel Preview are green.
+- Proved repeated TWSE REST reads crossed the fixed 30-second client timeout.
+- Proved partial TWSE run 11 had 1,068 predictions but zero of 8,544 gates; API
+  failed closed, while the old date-only resolver would have skipped repair.
+- Added 60-second, exact-connection-error-only bounded publish/read recovery.
+- Resolver now requires complete rows, counts, venue/status, and all eight gates
+  per prediction before a market is current.
+- Added sanitized deterministic Issues and bounded full reruns for trusted,
+  current-main-only import mismatch or verified transient Daily failures.
+- Attempt-qualified artifacts prevent immutable rerun evidence collisions.
+- Focused (128), Full (1,086 Python + 66 Playwright), lint, type, diff, Fast,
+  actionlint, pin/lock, and independent review all passed.
 
 ## Remaining Work
 
-- Push the terminal task/continuity record and confirm its PR checks.
-- Stop before updating `main`.
+- Push this terminal task record, wait for latest PR checks, mark PR #101 ready.
+- Stop before protected `main`; a separate final main-update authorization is
+  required after this Work Package.
 
 ## Key Decisions
 
-- Transfer semantic identity fields only; never copy production surrogate IDs.
-- Preserve market and common-stock isolation, point-in-time rules, horizon 5,
-  ranking semantics, `RESEARCH_ONLY`, and all fail-closed publication gates.
-- Treat frontend revalidation and GitHub Pages CORS as directly related
-  end-to-end freshness defects, not as the primary stale boundary.
+- Never compare freshness with today's date. Select only the newest valid,
+  aligned, fully published snapshot.
+- Import mismatch: four in-job checks plus at most one full rerun.
+- Daily timeout: at most three total attempts. Other Daily failures rerun only
+  from exact allowlisted artifacts proving sole `SUPABASE_CONNECTION_ERROR`.
+- Stale, untrusted, malformed, mixed, or permanent failures remain report-only.
 
 ## Validation Already Passed
 
-- Focused backend/frontend/workflow/publication/snapshot tests: passed.
-- Playwright characterization and regression tests: 20 passed.
-- Edge Function checks and tests: 47 passed.
-- Repository quality suite and Fast verification: passed.
-- Final Full verification: 1,011 Python and 66 Playwright tests passed.
-- Staging end-to-end run: success; TWSE 1,068 and TPEx 863 predictions verified
-  for `2026-07-20`.
+- PR implementation-head Project tests, Test gate, frontend/browser,
+  quality/security, Vercel, and Preview checks passed.
+- Final independent review: zero BLOCKER/HIGH/MEDIUM/LOW findings.
+- Production run and live API/deployed-source verification passed.
 
 ## Known Issues or Blockers
 
-- No code blocker.
-- On 2026-07-23, live TPEx/TWSE sources reported `2026-07-23`/`2026-07-22`;
-  imports correctly deferred rather than manufacturing current-date freshness.
-- Production API remains at validated `2026-07-17` until PR #100 may update
-  `main`.
+- 2026-07-23 was not a valid joint source date (TWSE `2026-07-22`, TPEx
+  `2026-07-23`); serving validated `2026-07-20` is therefore correct.
+- Browser-controller infrastructure could not initialize its local kernel
+  assets; live API/deployed source plus 66 Playwright tests provide verification.
+- No implementation blocker. Protected `main` is intentionally unchanged.
 
 ## Commit and Pull Request References
 
-- Base: `efa71b56b65d937f0063f4100606f164d274e4ae`.
-- Implementation: `eb0854fdf1d948204267550243ebfe98fa7c742a`.
-- Production failure: https://github.com/migao2006/tool/actions/runs/30009209231
-- Staging proof: https://github.com/migao2006/tool/actions/runs/30016458227
-- Bug PR: https://github.com/migao2006/tool/pull/100
+- Base: `35bc3560359ebbcac85520b93a3120f4a630ca08`.
+- Original Bug PR: https://github.com/migao2006/tool/pull/100
+- Recovery Bug PR: https://github.com/migao2006/tool/pull/101
+- Production reconciliation:
+  https://github.com/migao2006/tool/actions/runs/30033947665
+- Implementation head: `94013baf7880a4ed6334d85c04575b43005e0f1a`.
 
 ## Maintenance
 

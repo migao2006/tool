@@ -1,24 +1,65 @@
-# Repository Task Workflow
+# Repository Work Package Workflow
 
-The task system gives Codex one explicit source of truth for the current repository change. It supplements, but never overrides, `AGENTS.md`, `.ai/` contracts, or the user's current request.
+This directory records one current Work Package and auditable terminal reports. It
+does not override root `AGENTS.md`, the user's current request, or `.ai/` contracts.
 
-## Single active task
+## Responsibility boundaries
 
-Only `tasks/active/TASK.md` may represent active work. Do not create competing files such as `current-task.md`, `todo-now.md`, or numbered active task files.
+- `tasks/active/TASK.md`: exactly one actual current Work Package, or the canonical
+  `NONE` state.
+- `tasks/TASK_TEMPLATE.md`: a non-executable checklist with status `TEMPLATE`.
+- `tasks/completed/`: immutable historical reports for terminal Work Packages.
+- `.codex/CONTINUITY.md`: concise cross-session state, not authority or task history.
 
-## Start a task
+Do not create competing current-task, TODO, handoff, or per-subtask task files.
 
-1. Confirm that `tasks/active/TASK.md` has status `NONE`.
-2. Copy the structure from `tasks/TASK_TEMPLATE.md` into `tasks/active/TASK.md`.
-3. Record verified context, scope, constraints, exact validation commands, and objective completion criteria.
-4. Keep the active task narrower than the repository-wide rules in `AGENTS.md` and the contracts in `.ai/`.
+## Canonical no-task state
 
-## Complete and archive a task
+When no Work Package is active, `tasks/active/TASK.md` must contain exactly:
 
-1. Run the declared validation and record actual results, including failures or skipped commands.
-2. Complete the `Results` section without inventing outcomes.
-3. Move the completed content to `tasks/completed/YYYY-MM-DD-kebab-case-title.md`.
-4. Preserve historical completed tasks; do not rewrite them to match current status.
-5. Reset `tasks/active/TASK.md` to the standard `No active task` state.
+```text
+# No active task
+## Status
+NONE
+```
 
-Completed task names use an ISO date followed by a concise kebab-case outcome. Existing reports remain in place unless their references and historical purpose make a move demonstrably safe.
+This state is not an executable task.
+
+## Start one Work Package
+
+1. Confirm the active file is in the canonical `NONE` state and preserve unrelated
+   work.
+2. Use `tasks/TASK_TEMPLATE.md` only as a checklist. Replace its generic title and
+   `TEMPLATE` status; never copy an unfilled template into the active slot.
+3. Set status to `ACTIVE`, use `FULL_AUTONOMY_UNTIL_MAIN_UPDATE` unless the user
+   explicitly narrows it, and populate every required section with actual task facts.
+4. Keep one natural outcome across analysis, implementation, directly related fixes,
+   validation, documentation, commits, a non-protected `codex/*` push, and Pull
+   Request readiness.
+
+An active task must include: Status, Authorization, Primary Outcome, Background,
+Subtasks, Allowed Scope, Prohibited Changes, Public Contracts, Risk Classification,
+Validation Plan, Stop Conditions, Definition of Done, and Results.
+
+## Maintain task and continuity state
+
+Record verified scope or outcome changes in the active task. Keep progress summaries,
+branch state, decisions, passed validations, blockers, commits, and Pull Request
+references in `.codex/CONTINUITY.md`. Do not paste command transcripts, full diffs,
+or completed-task history there.
+
+The continuity file should remain below 100 physical lines and 12 KiB. Replace stale
+state instead of appending an activity log.
+
+## Complete and archive
+
+1. Set the task status to exactly `COMPLETE`, `PARTIAL`, or `BLOCKED`.
+2. Fill Results with actual behavior, validation, repair, branch, commit, push, and
+   Pull Request evidence; record failures and unexecuted checks truthfully.
+3. Save the report as `tasks/completed/YYYY-MM-DD-kebab-case-outcome.md`.
+4. Preserve existing completed reports. Historical `COMPLETED` spellings may remain;
+   new reports use the three terminal statuses above.
+5. Restore `tasks/active/TASK.md` to the canonical `NONE` state.
+6. Update continuity to the latest concise handoff.
+
+Task archival ends the Work Package record; it does not require a new Codex session.

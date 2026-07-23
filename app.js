@@ -141,12 +141,17 @@ if (appRoot && navigationRoot) {
     }
   }
 
-  async function refreshSnapshot(market = marketSwitch?.getActive() ?? DEFAULT_MARKET_SCOPE) {
+  async function refreshSnapshot(
+    market = marketSwitch?.getActive() ?? DEFAULT_MARKET_SCOPE,
+    { preserveExisting = false } = {},
+  ) {
     requestControllers.get(market)?.abort();
     const requestController = new AbortController();
     requestControllers.set(market, requestController);
-    snapshotStates.set(market, UI_STATE.LOADING);
-    if (marketSwitch?.getActive() === market) renderActiveMarket();
+    if (!preserveExisting || !snapshots.has(market)) {
+      snapshotStates.set(market, UI_STATE.LOADING);
+      if (marketSwitch?.getActive() === market) renderActiveMarket();
+    }
     try {
       const snapshot = await loadPredictionSnapshot({
         horizon: CURRENT_HORIZON,
@@ -180,7 +185,7 @@ if (appRoot && navigationRoot) {
     onChange: (market) => {
       candidatePagination.reset();
       if (snapshots.has(market)) renderActiveMarket();
-      else refreshSnapshot(market);
+      refreshSnapshot(market, { preserveExisting: snapshots.has(market) });
     },
   });
   initializeResearchSettings({ onChange: () => refreshSnapshot() });
@@ -224,6 +229,11 @@ if (appRoot && navigationRoot) {
     }
   });
   globalThis.addEventListener("alpha-lens:auth-change", () => refreshSnapshot());
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState !== "visible") return;
+    const market = marketSwitch?.getActive() ?? DEFAULT_MARKET_SCOPE;
+    refreshSnapshot(market, { preserveExisting: true });
+  });
   refreshHomeDataStatus();
   refreshSnapshot(DEFAULT_MARKET_SCOPE);
 }

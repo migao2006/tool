@@ -90,6 +90,16 @@ def test_prediction_client_accepts_horizon_fetches_only_when_configured() -> Non
     assert "PREDICTION_API_CONTRACT_ERROR" in client
 
 
+def test_cached_snapshot_revalidates_on_market_return_and_page_visibility() -> None:
+    app = read("app.js")
+
+    assert "preserveExisting = false" in app
+    assert "refreshSnapshot(market, { preserveExisting: snapshots.has(market) })" in app
+    assert 'document.addEventListener("visibilitychange"' in app
+    assert 'document.visibilityState !== "visible"' in app
+    assert "refreshSnapshot(market, { preserveExisting: true })" in app
+
+
 def test_prediction_client_returns_fail_closed_unsupported_horizons() -> None:
     result = run_node_module(
         """

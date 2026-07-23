@@ -52,6 +52,42 @@ def test_daily_model_uses_staging_first_then_identical_production_snapshot() -> 
     assert 'RESEARCH_PREDICTION_PRODUCTION_PUBLISH_ENABLED: "true"' in workflow
 
 
+def test_daily_model_syncs_sanitized_market_identity_before_staging_inference() -> None:
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+
+    build = workflow.index("build-features:")
+    feature_upload = workflow.index("Preserve exact-date feature artifact", build)
+    catalog_job = workflow.index("export-security-catalog:")
+    export = workflow.index("scripts.export_research_security_catalog", catalog_job)
+    catalog_upload = workflow.index("Preserve immutable security catalog", catalog_job)
+    staging = workflow.index("publish-staging:")
+    feature_download = workflow.index(
+        "Download exact-date feature artifact from this workflow", staging
+    )
+    catalog_download = workflow.index(
+        "Download immutable Production security catalog", staging
+    )
+    sync = workflow.index("scripts.sync_research_security_catalog", staging)
+    inference = workflow.index(
+        "Train and publish exact-date snapshot to Staging", staging
+    )
+
+    assert build < feature_upload < catalog_job < export < catalog_upload < staging
+    assert staging < feature_download < catalog_download < sync < inference
+    assert "environment: production" in workflow[catalog_job:staging]
+    assert "- export-security-catalog" in workflow[staging:inference]
+    assert "Supabase URL does not match Production project ref" in workflow
+    assert "--market \"$MARKET\"" in workflow
+    assert (
+        "--output \"research-security-catalog/${slug}-research-security-catalog.json\""
+        in workflow
+    )
+    assert (
+        "--catalog \"inputs/security-catalog/${slug}-research-security-catalog.json\""
+        in workflow
+    )
+
+
 def test_daily_model_authenticates_prepared_artifacts_and_pins_actions() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
 

@@ -140,6 +140,45 @@ test("裝置研究偏好不會破壞已發布的固定快照請求", async ({ pa
   });
 });
 
+test("頁面重新可見時會重新驗證並顯示 API 最新快照日期", async ({ page }) => {
+  let predictionRequests = 0;
+  await page.route("**/api/prediction-snapshot**", async (route) => {
+    predictionRequests += 1;
+    const response = await route.fetch();
+    const payload = await response.json();
+    if (predictionRequests > 1) {
+      const updateSnapshotDate = (value) => {
+        if (Array.isArray(value)) {
+          value.forEach(updateSnapshotDate);
+          return;
+        }
+        if (!value || typeof value !== "object") return;
+        for (const [key, nested] of Object.entries(value)) {
+          if (key === "as_of_date") value[key] = "2026-07-20";
+          else if (key === "decision_at") value[key] = "2026-07-20T09:00:00+00:00";
+          else updateSnapshotDate(nested);
+        }
+      };
+      updateSnapshotDate(payload);
+    }
+    await route.fulfill({ response, json: payload });
+  });
+
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+  await expect(page.locator('[data-overview-field="as_of_date"]')).toHaveText("2026-07-17");
+  await expect(page.locator('[data-overview-field="decision_at"]')).toHaveText(
+    "2026/07/17 16:00",
+  );
+
+  await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+
+  await expect.poll(() => predictionRequests).toBeGreaterThan(1);
+  await expect(page.locator('[data-overview-field="as_of_date"]')).toHaveText("2026-07-20");
+  await expect(page.locator('[data-overview-field="decision_at"]')).toHaveText(
+    "2026/07/20 17:00",
+  );
+});
+
 test("API 契約錯誤時顯示 FAIL，且不把 fixture 當成候選", async ({ page }) => {
   await page.goto("/?api_mode=contract-error", { waitUntil: "domcontentloaded" });
 

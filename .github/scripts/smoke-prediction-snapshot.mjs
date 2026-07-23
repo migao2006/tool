@@ -2,6 +2,7 @@ const required = [
 	"SUPABASE_PROJECT_REF",
 	"SUPABASE_URL",
 	"PREDICTION_ALLOWED_ORIGINS",
+	"GITHUB_REPOSITORY_OWNER",
 ];
 
 for (const name of required) {
@@ -29,27 +30,35 @@ for (const origin of allowedOrigins) {
 		throw new Error("Every allowed UI origin must be an exact origin");
 	}
 }
+const requiredPagesOrigin = `https://${process.env.GITHUB_REPOSITORY_OWNER.trim()}.github.io`;
+if (!allowedOrigins.includes(requiredPagesOrigin)) {
+	throw new Error(
+		"GitHub Pages origin is missing from PREDICTION_ALLOWED_ORIGINS",
+	);
+}
 
 const uiOrigin = allowedOrigins[0];
 const smokeRequestId = `deployment-smoke-${process.env.GITHUB_RUN_ID ?? "local"}`;
-const requestHeaders = {
-	Accept: "application/json",
-	Origin: uiOrigin,
-	"X-Alpha-Lens-Contract": "prediction-snapshot.v1",
-	"X-Request-Id": smokeRequestId,
-};
+function requestHeaders(origin = uiOrigin) {
+	return {
+		Accept: "application/json",
+		Origin: origin,
+		"X-Alpha-Lens-Contract": "prediction-snapshot.v1",
+		"X-Request-Id": smokeRequestId,
+	};
+}
 
-async function readSnapshot(query, expectedMarket) {
+async function readSnapshot(query, expectedMarket, origin = uiOrigin) {
 	const response = await fetch(
 		`${expectedOrigin}/functions/v1/prediction-snapshot?${query}`,
-		{ headers: requestHeaders },
+		{ headers: requestHeaders(origin) },
 	);
 	if (!response.ok) {
 		throw new Error(
 			`Prediction snapshot smoke test returned ${response.status}`,
 		);
 	}
-	if (response.headers.get("access-control-allow-origin") !== uiOrigin) {
+	if (response.headers.get("access-control-allow-origin") !== origin) {
 		throw new Error(
 			"Prediction snapshot CORS allowlist did not accept the UI origin",
 		);
@@ -83,7 +92,7 @@ async function readSnapshot(query, expectedMarket) {
 async function expectUnsupportedMarket(query) {
 	const response = await fetch(
 		`${expectedOrigin}/functions/v1/prediction-snapshot?${query}`,
-		{ headers: requestHeaders },
+		{ headers: requestHeaders() },
 	);
 	const payload = await response.json();
 	if (
@@ -97,8 +106,10 @@ async function expectUnsupportedMarket(query) {
 	}
 }
 
+for (const uiOrigin of allowedOrigins) {
+	await readSnapshot("horizon=5&market=TWSE", "TWSE", uiOrigin);
+}
 await readSnapshot("horizon=5", "TWSE");
-await readSnapshot("horizon=5&market=TWSE", "TWSE");
 await readSnapshot("horizon=5&market=TPEX", "TPEX");
 await expectUnsupportedMarket("horizon=5&market=ALL");
 await expectUnsupportedMarket("horizon=5&market=TWSE&market=TPEX");

@@ -88,11 +88,79 @@ def _artifact_payload(
     return payload
 
 
-def _artifact_zip(payload: dict[str, Any], *, filename: str = "import-market-data-result.json") -> bytes:
+def _artifact_zip(
+    payload: dict[str, Any],
+    *,
+    filename: str = "import-market-data-result.json",
+    extra_files: dict[str, dict[str, Any]] | None = None,
+) -> bytes:
     buffer = io.BytesIO()
     with ZipFile(buffer, "w", ZIP_DEFLATED) as archive:
         archive.writestr(filename, json.dumps(payload))
+        for extra_filename, extra_payload in (extra_files or {}).items():
+            archive.writestr(extra_filename, json.dumps(extra_payload))
     return buffer.getvalue()
+
+
+def _daily_failure_artifact(
+    stage: str,
+    *,
+    attempt: int = 1,
+    reason_code: str = "SUPABASE_CONNECTION_ERROR",
+) -> dict[str, Any]:
+    if stage == "BUILD_FEATURES_TWSE":
+        return {
+            "artifact_name": f"daily-research-features-TWSE-{RUN_ID}-{attempt}",
+            "artifact_filename": "twse-research-features-audit.json",
+            "artifact_payload": {
+                "build_status": "FAIL",
+                "generated_at": "2026-07-23T17:10:18.820589+00:00",
+                "label_status": "LABELS_NOT_ASSEMBLED",
+                "reason_codes": [reason_code],
+                "system_status": "FAIL",
+                "usage_scope": "FEATURE_RESEARCH_ONLY",
+            },
+        }
+    if stage == "BUILD_FEATURES_TPEX":
+        return {
+            "artifact_name": f"daily-research-features-TPEX-{RUN_ID}-{attempt}",
+            "artifact_filename": "tpex-research-features-audit.json",
+            "artifact_payload": {
+                "build_status": "FAIL",
+                "generated_at": "2026-07-23T17:10:18.820589+00:00",
+                "label_status": "LABELS_NOT_ASSEMBLED",
+                "reason_codes": [reason_code],
+                "system_status": "FAIL",
+                "usage_scope": "FEATURE_RESEARCH_ONLY",
+            },
+        }
+    if stage == "PUBLISH_PRODUCTION_TWSE":
+        return {
+            "artifact_name": f"daily-research-production-TWSE-{RUN_ID}-{attempt}",
+            "artifact_filename": "twse-production-publish-report.json",
+            "artifact_payload": {
+                "as_of_date": "2026-07-20",
+                "generated_at": "2026-07-23T17:06:46.534013+00:00",
+                "market": "TWSE",
+                "message": "untrusted detail must not be reported",
+                "reason_codes": [reason_code],
+                "status": "FAIL",
+            },
+        }
+    if stage == "PUBLISH_PRODUCTION_TPEX":
+        return {
+            "artifact_name": f"daily-research-production-TPEX-{RUN_ID}-{attempt}",
+            "artifact_filename": "tpex-production-publish-report.json",
+            "artifact_payload": {
+                "as_of_date": "2026-07-20",
+                "generated_at": "2026-07-23T17:06:46.534013+00:00",
+                "market": "TPEX",
+                "message": "untrusted detail must not be reported",
+                "reason_codes": [reason_code],
+                "status": "FAIL",
+            },
+        }
+    raise AssertionError(f"unsupported test stage: {stage}")
 
 
 class FakeGitHubClient:
@@ -101,15 +169,31 @@ class FakeGitHubClient:
         *,
         run: dict[str, Any],
         branch_sha: str = CURRENT_SHA,
-        jobs: list[dict[str, Any]] | None = None,
+        jobs: list[Any] | None = None,
         issues: list[dict[str, Any]] | None = None,
         artifact_payload: dict[str, Any] | None = None,
+        artifact_name: str | None = None,
+        artifact_filename: str = "import-market-data-result.json",
+        artifact_fixtures: list[tuple[str, str, dict[str, Any]]] | None = None,
+        artifact_extra_files: dict[str, dict[str, Any]] | None = None,
     ) -> None:
         self.run_reads: deque[dict[str, Any]] = deque([run])
         self.branch_reads: deque[str] = deque([branch_sha])
         self.jobs = jobs or [{"name": "import", "conclusion": "failure"}]
         self.issues = issues or []
         self.artifact_payload = artifact_payload
+        self.artifact_name = artifact_name
+        self.artifact_filename = artifact_filename
+        default_artifact_name = (
+            artifact_name
+            or f"import-market-data-result-{RUN_ID}-{run['run_attempt']}"
+        )
+        self.artifact_fixtures = list(artifact_fixtures or [])
+        self.artifact_extra_files = artifact_extra_files
+        if artifact_payload is not None and not self.artifact_fixtures:
+            self.artifact_fixtures.append(
+                (default_artifact_name, artifact_filename, artifact_payload)
+            )
         self.calls: list[tuple[str, str, dict[str, Any] | None]] = []
         self.fail_issue_write = False
         self.rerun_status = 201
@@ -154,16 +238,16 @@ class FakeGitHubClient:
         if method == "GET" and path.startswith(
             f"/repos/{REPOSITORY}/actions/runs/{RUN_ID}/artifacts?"
         ):
-            if self.artifact_payload is None:
+            if not self.artifact_fixtures:
                 return {"artifacts": []}
-            attempt = self.run_reads[0]["run_attempt"]
             return {
                 "artifacts": [
                     {
-                        "id": 701,
-                        "name": f"import-market-data-result-{RUN_ID}-{attempt}",
+                        "id": 701 + index,
+                        "name": name,
                         "expired": False,
                     }
+                    for index, (name, _, _) in enumerate(self.artifact_fixtures)
                 ]
             }
         if method == "POST" and path == f"/repos/{REPOSITORY}/issues":
@@ -192,18 +276,28 @@ class FakeGitHubClient:
         self.calls.append((method, path, None))
         assert maximum_bytes <= 65536
         assert method == "GET"
-        assert path == f"/repos/{REPOSITORY}/actions/artifacts/701/zip"
-        assert self.artifact_payload is not None
-        return _artifact_zip(self.artifact_payload)
+        artifact_id = int(path.rsplit("/", 2)[1])
+        index = artifact_id - 701
+        assert 0 <= index < len(self.artifact_fixtures)
+        _, filename, payload = self.artifact_fixtures[index]
+        return _artifact_zip(
+            payload,
+            filename=filename,
+            extra_files=self.artifact_extra_files,
+        )
 
 
 def _client_for(
     event: dict[str, Any],
     *,
     branch_sha: str = CURRENT_SHA,
-    jobs: list[dict[str, Any]] | None = None,
+    jobs: list[Any] | None = None,
     issues: list[dict[str, Any]] | None = None,
     artifact_payload: dict[str, Any] | None = None,
+    artifact_name: str | None = None,
+    artifact_filename: str = "import-market-data-result.json",
+    artifact_fixtures: list[tuple[str, str, dict[str, Any]]] | None = None,
+    artifact_extra_files: dict[str, dict[str, Any]] | None = None,
 ) -> FakeGitHubClient:
     return FakeGitHubClient(
         run=dict(event["workflow_run"]),
@@ -211,6 +305,10 @@ def _client_for(
         jobs=jobs,
         issues=issues,
         artifact_payload=artifact_payload,
+        artifact_name=artifact_name,
+        artifact_filename=artifact_filename,
+        artifact_fixtures=artifact_fixtures,
+        artifact_extra_files=artifact_extra_files,
     )
 
 
@@ -458,9 +556,19 @@ def test_retry_limits_and_delays(
     decision: str,
 ) -> None:
     event = _event(name=name, path=path, attempt=attempt, conclusion=conclusion)
-    jobs = [{"name": "resolve", "conclusion": conclusion}] if name == DAILY_NAME else None
-    artifact = _artifact_payload() if name == IMPORT_NAME else None
-    client = _client_for(event, jobs=jobs, artifact_payload=artifact)
+    artifact_options: dict[str, Any] = {}
+    if name == DAILY_NAME and conclusion == "failure":
+        jobs = [{"name": "build-features (TWSE)", "conclusion": conclusion}]
+        artifact_options = _daily_failure_artifact(
+            "BUILD_FEATURES_TWSE",
+            attempt=attempt,
+        )
+    elif name == DAILY_NAME:
+        jobs = [{"name": "resolve", "conclusion": conclusion}]
+    else:
+        jobs = None
+        artifact_options = {"artifact_payload": _artifact_payload()}
+    client = _client_for(event, jobs=jobs, **artifact_options)
     delays: list[int] = []
 
     result = process_workflow_run(
@@ -473,6 +581,311 @@ def test_retry_limits_and_delays(
     assert result.decision == decision
     assert delays == ([] if expected_delay is None else [expected_delay])
     assert result.rerun_requested is (expected_delay is not None)
+
+
+@pytest.mark.parametrize(
+    ("stage", "job_name"),
+    [
+        ("BUILD_FEATURES_TWSE", "build-features (TWSE)"),
+        ("BUILD_FEATURES_TPEX", "build-features (TPEX)"),
+        ("PUBLISH_PRODUCTION_TWSE", "publish-production (TWSE)"),
+        ("PUBLISH_PRODUCTION_TPEX", "publish-production (TPEX)"),
+    ],
+)
+def test_daily_failure_retries_only_with_strict_transient_artifact(
+    stage: str,
+    job_name: str,
+) -> None:
+    event = _event(name=DAILY_NAME, path=DAILY_PATH)
+    client = _client_for(
+        event,
+        jobs=[{"name": job_name, "conclusion": "failure"}],
+        **_daily_failure_artifact(stage),
+    )
+    delays: list[int] = []
+
+    result = process_workflow_run(
+        event,
+        client=client,
+        repository=REPOSITORY,
+        sleep=delays.append,
+    )
+
+    assert result.decision == "RERUN_REQUESTED"
+    assert delays == [300]
+    assert result.rerun_requested is True
+
+
+def test_daily_failure_requires_transient_evidence_for_every_failed_job() -> None:
+    event = _event(name=DAILY_NAME, path=DAILY_PATH)
+    only_twse = _daily_failure_artifact("BUILD_FEATURES_TWSE")
+    client = _client_for(
+        event,
+        jobs=[
+            {"name": "build-features (TWSE)", "conclusion": "failure"},
+            {"name": "build-features (TPEX)", "conclusion": "failure"},
+        ],
+        **only_twse,
+    )
+
+    result = process_workflow_run(
+        event,
+        client=client,
+        repository=REPOSITORY,
+        sleep=lambda _: pytest.fail("partially verified failure set must not sleep"),
+    )
+
+    assert result.decision == "UNVERIFIED_DAILY_RESULT"
+    assert result.rerun_requested is False
+    assert not any(path.endswith("/rerun") for _, path, _ in client.calls)
+
+
+def test_daily_failure_retries_when_every_failed_job_has_transient_evidence() -> None:
+    event = _event(name=DAILY_NAME, path=DAILY_PATH)
+    twse = _daily_failure_artifact("BUILD_FEATURES_TWSE")
+    tpex = _daily_failure_artifact("BUILD_FEATURES_TPEX")
+    fixtures = [
+        (
+            options["artifact_name"],
+            options["artifact_filename"],
+            options["artifact_payload"],
+        )
+        for options in (twse, tpex)
+    ]
+    client = _client_for(
+        event,
+        jobs=[
+            {"name": "build-features (TWSE)", "conclusion": "failure"},
+            {"name": "build-features (TPEX)", "conclusion": "failure"},
+        ],
+        artifact_fixtures=fixtures,
+    )
+    delays: list[int] = []
+
+    result = process_workflow_run(
+        event,
+        client=client,
+        repository=REPOSITORY,
+        sleep=delays.append,
+    )
+
+    assert result.decision == "RERUN_REQUESTED"
+    assert delays == [300]
+    assert result.rerun_requested is True
+
+
+def test_daily_mixed_transient_and_permanent_failure_set_never_reruns() -> None:
+    event = _event(name=DAILY_NAME, path=DAILY_PATH)
+    transient = _daily_failure_artifact("BUILD_FEATURES_TWSE")
+    permanent = _daily_failure_artifact(
+        "PUBLISH_PRODUCTION_TPEX",
+        reason_code="IMMUTABLE_SNAPSHOT_CONFLICT",
+    )
+    fixtures = [
+        (
+            options["artifact_name"],
+            options["artifact_filename"],
+            options["artifact_payload"],
+        )
+        for options in (transient, permanent)
+    ]
+    client = _client_for(
+        event,
+        jobs=[
+            {"name": "build-features (TWSE)", "conclusion": "failure"},
+            {"name": "publish-production (TPEX)", "conclusion": "failure"},
+        ],
+        artifact_fixtures=fixtures,
+    )
+
+    result = process_workflow_run(
+        event,
+        client=client,
+        repository=REPOSITORY,
+        sleep=lambda _: pytest.fail("mixed failure set must not sleep"),
+    )
+
+    assert result.decision == "NON_RETRYABLE"
+    assert result.rerun_requested is False
+    assert not any(path.endswith("/rerun") for _, path, _ in client.calls)
+
+
+def test_daily_failure_without_verified_transient_artifact_never_reruns() -> None:
+    event = _event(name=DAILY_NAME, path=DAILY_PATH)
+    client = _client_for(
+        event,
+        jobs=[{"name": "resolve", "conclusion": "failure"}],
+    )
+
+    result = process_workflow_run(
+        event,
+        client=client,
+        repository=REPOSITORY,
+        sleep=lambda _: pytest.fail("unverified Daily failure must not sleep"),
+    )
+
+    assert result.decision == "UNVERIFIED_DAILY_RESULT"
+    assert result.rerun_requested is False
+    assert not any(path.endswith("/rerun") for _, path, _ in client.calls)
+
+
+def test_daily_failure_with_unknown_failed_job_never_reruns() -> None:
+    event = _event(name=DAILY_NAME, path=DAILY_PATH)
+    client = _client_for(
+        event,
+        jobs=[
+            {"name": "build-features (TWSE)", "conclusion": "failure"},
+            {"name": "unrecognized-job", "conclusion": "failure"},
+        ],
+        **_daily_failure_artifact("BUILD_FEATURES_TWSE"),
+    )
+
+    result = process_workflow_run(
+        event,
+        client=client,
+        repository=REPOSITORY,
+        sleep=lambda _: pytest.fail("unknown failed job must not sleep"),
+    )
+
+    assert result.decision == "UNVERIFIED_DAILY_RESULT"
+    assert result.rerun_requested is False
+    assert not any(path.endswith("/rerun") for _, path, _ in client.calls)
+
+
+def test_daily_failure_with_malformed_job_entry_never_reruns() -> None:
+    event = _event(name=DAILY_NAME, path=DAILY_PATH)
+    client = _client_for(
+        event,
+        jobs=[
+            {"name": "build-features (TWSE)", "conclusion": "failure"},
+            "malformed-job-entry",
+        ],
+        **_daily_failure_artifact("BUILD_FEATURES_TWSE"),
+    )
+
+    result = process_workflow_run(
+        event,
+        client=client,
+        repository=REPOSITORY,
+        sleep=lambda _: pytest.fail("malformed failed-job scope must not sleep"),
+    )
+
+    assert result.decision == "UNVERIFIED_DAILY_RESULT"
+    assert result.rerun_requested is False
+    assert not any(path.endswith("/rerun") for _, path, _ in client.calls)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["extra_key", "multiple_reasons", "wrong_filename"],
+)
+def test_invalid_daily_failure_artifact_is_report_only(mutation: str) -> None:
+    event = _event(name=DAILY_NAME, path=DAILY_PATH)
+    options = _daily_failure_artifact("BUILD_FEATURES_TWSE")
+    if mutation == "extra_key":
+        options["artifact_payload"]["unexpected"] = "data"
+    elif mutation == "multiple_reasons":
+        options["artifact_payload"]["reason_codes"] = [
+            "SUPABASE_CONNECTION_ERROR",
+            "ANOTHER_REASON",
+        ]
+    else:
+        options["artifact_filename"] = "unexpected.json"
+    client = _client_for(
+        event,
+        jobs=[{"name": "build-features (TWSE)", "conclusion": "failure"}],
+        **options,
+    )
+
+    result = process_workflow_run(
+        event,
+        client=client,
+        repository=REPOSITORY,
+        sleep=lambda _: pytest.fail("invalid Daily artifact must not sleep"),
+    )
+
+    assert result.decision == "UNVERIFIED_DAILY_RESULT"
+    assert result.rerun_requested is False
+    assert not any(path.endswith("/rerun") for _, path, _ in client.calls)
+
+
+def test_production_publish_and_verification_files_are_not_ambiguously_parsed() -> None:
+    event = _event(name=DAILY_NAME, path=DAILY_PATH)
+    client = _client_for(
+        event,
+        jobs=[{"name": "publish-production (TWSE)", "conclusion": "failure"}],
+        artifact_extra_files={
+            "twse-production-verification.json": {
+                "status": "FAIL",
+                "reason_codes": ["SUPABASE_CONNECTION_ERROR"],
+            }
+        },
+        **_daily_failure_artifact("PUBLISH_PRODUCTION_TWSE"),
+    )
+
+    result = process_workflow_run(
+        event,
+        client=client,
+        repository=REPOSITORY,
+        sleep=lambda _: pytest.fail("ambiguous two-file artifact must not sleep"),
+    )
+
+    assert result.decision == "UNVERIFIED_DAILY_RESULT"
+    assert result.rerun_requested is False
+    assert not any(path.endswith("/rerun") for _, path, _ in client.calls)
+
+
+def test_daily_verified_permanent_failure_is_reported_without_rerun() -> None:
+    event = _event(name=DAILY_NAME, path=DAILY_PATH)
+    client = _client_for(
+        event,
+        jobs=[{"name": "publish-production (TWSE)", "conclusion": "failure"}],
+        **_daily_failure_artifact(
+            "PUBLISH_PRODUCTION_TWSE",
+            reason_code="IMMUTABLE_SNAPSHOT_CONFLICT",
+        ),
+    )
+
+    result = process_workflow_run(
+        event,
+        client=client,
+        repository=REPOSITORY,
+        sleep=lambda _: pytest.fail("permanent Daily failure must not sleep"),
+    )
+
+    assert result.decision == "NON_RETRYABLE"
+    assert result.rerun_requested is False
+    assert not any(path.endswith("/rerun") for _, path, _ in client.calls)
+
+
+def test_daily_artifact_untrusted_message_never_reaches_report(tmp_path: Path) -> None:
+    secret = "TOP_SECRET_DAILY_DETAIL"
+    event = _event(name=DAILY_NAME, path=DAILY_PATH)
+    options = _daily_failure_artifact("PUBLISH_PRODUCTION_TWSE")
+    options["artifact_payload"]["message"] = secret
+    client = _client_for(
+        event,
+        jobs=[{"name": "publish-production (TWSE)", "conclusion": "failure"}],
+        **options,
+    )
+    summary = tmp_path / "summary.md"
+
+    result = process_workflow_run(
+        event,
+        client=client,
+        repository=REPOSITORY,
+        summary_path=summary,
+        sleep=lambda _: None,
+    )
+
+    assert result.decision == "RERUN_REQUESTED"
+    written = summary.read_text(encoding="utf-8")
+    assert secret not in written
+    assert all(
+        secret not in json.dumps(body)
+        for method, _, body in client.calls
+        if method in {"POST", "PATCH"} and body is not None
+    )
 
 
 @pytest.mark.parametrize(
@@ -498,9 +911,9 @@ def test_daily_non_failure_conclusions_never_rerun(conclusion: str) -> None:
 
 
 def test_issue_lookup_paginates_skips_pull_requests_and_reopens_deduplicated_issue() -> None:
-    event = _event(name=DAILY_NAME, path=DAILY_PATH)
+    event = _event(name=DAILY_NAME, path=DAILY_PATH, conclusion="timed_out")
     marker = f"<!-- daily-pipeline-recovery:run-id={RUN_ID} -->"
-    client = _client_for(event, jobs=[{"name": "resolve", "conclusion": "failure"}])
+    client = _client_for(event, jobs=[{"name": "resolve", "conclusion": "timed_out"}])
     client.set_issue_pages(
         **{
             "1": [
@@ -560,11 +973,11 @@ def test_success_updates_and_closes_existing_issue() -> None:
 
 
 def test_forged_or_nonleading_markers_cannot_hijack_recovery_issue() -> None:
-    event = _event(name=DAILY_NAME, path=DAILY_PATH)
+    event = _event(name=DAILY_NAME, path=DAILY_PATH, conclusion="timed_out")
     marker = f"<!-- daily-pipeline-recovery:run-id={RUN_ID} -->"
     client = _client_for(
         event,
-        jobs=[{"name": "resolve", "conclusion": "failure"}],
+        jobs=[{"name": "resolve", "conclusion": "timed_out"}],
         issues=[
             {
                 "number": 1,
@@ -629,8 +1042,8 @@ def test_multiple_trusted_recovery_issues_fail_closed() -> None:
 
 
 def test_issue_write_failure_prevents_sleep_and_rerun() -> None:
-    event = _event(name=DAILY_NAME, path=DAILY_PATH)
-    client = _client_for(event, jobs=[{"name": "resolve", "conclusion": "failure"}])
+    event = _event(name=DAILY_NAME, path=DAILY_PATH, conclusion="timed_out")
+    client = _client_for(event, jobs=[{"name": "resolve", "conclusion": "timed_out"}])
     client.fail_issue_write = True
     delays: list[int] = []
 
@@ -647,10 +1060,10 @@ def test_issue_write_failure_prevents_sleep_and_rerun() -> None:
 
 
 def test_state_change_after_delay_is_reported_without_rerun() -> None:
-    event = _event(name=DAILY_NAME, path=DAILY_PATH)
+    event = _event(name=DAILY_NAME, path=DAILY_PATH, conclusion="timed_out")
     initial = dict(event["workflow_run"])
     changed = dict(initial, status="queued", conclusion=None, run_attempt=2)
-    client = _client_for(event, jobs=[{"name": "resolve", "conclusion": "failure"}])
+    client = _client_for(event, jobs=[{"name": "resolve", "conclusion": "timed_out"}])
     client.set_run_reads(initial, changed)
     delays: list[int] = []
 
@@ -667,8 +1080,8 @@ def test_state_change_after_delay_is_reported_without_rerun() -> None:
 
 
 def test_main_sha_change_after_delay_marks_superseded_without_rerun() -> None:
-    event = _event(name=DAILY_NAME, path=DAILY_PATH)
-    client = _client_for(event, jobs=[{"name": "resolve", "conclusion": "failure"}])
+    event = _event(name=DAILY_NAME, path=DAILY_PATH, conclusion="timed_out")
+    client = _client_for(event, jobs=[{"name": "resolve", "conclusion": "timed_out"}])
     client.set_branch_reads(CURRENT_SHA, NEW_SHA)
 
     result = process_workflow_run(
@@ -723,8 +1136,8 @@ def test_malicious_event_artifact_and_job_content_never_reaches_issue_or_summary
 
 
 def test_non_201_rerun_response_fails_after_persistent_issue() -> None:
-    event = _event(name=DAILY_NAME, path=DAILY_PATH)
-    client = _client_for(event, jobs=[{"name": "resolve", "conclusion": "failure"}])
+    event = _event(name=DAILY_NAME, path=DAILY_PATH, conclusion="timed_out")
+    client = _client_for(event, jobs=[{"name": "resolve", "conclusion": "timed_out"}])
     client.rerun_status = 202
 
     with pytest.raises(GitHubApiError):

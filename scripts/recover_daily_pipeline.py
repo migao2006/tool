@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from http.client import HTTPResponse
 import io
 import json
@@ -58,6 +58,27 @@ _IMPORT_RESULT_KEYS = frozenset(
         "as_of_date",
     }
 )
+_FEATURE_FAILURE_RESULT_KEYS = frozenset(
+    {
+        "build_status",
+        "generated_at",
+        "label_status",
+        "reason_codes",
+        "system_status",
+        "usage_scope",
+    }
+)
+_PRODUCTION_FAILURE_RESULT_KEYS = frozenset(
+    {
+        "as_of_date",
+        "generated_at",
+        "market",
+        "message",
+        "reason_codes",
+        "status",
+    }
+)
+_TRANSIENT_DAILY_REASON_CODES = frozenset({"SUPABASE_CONNECTION_ERROR"})
 
 
 class RecoveryError(RuntimeError):
@@ -69,7 +90,7 @@ class GitHubApiError(RecoveryError):
 
 
 class ArtifactValidationError(RecoveryError):
-    """The attempt-qualified import result artifact was absent or invalid."""
+    """An attempt-qualified result artifact was absent or invalid."""
 
 
 class _StripCrossOriginAuthorization(HTTPRedirectHandler):
@@ -283,6 +304,18 @@ class ImportResult:
 
 
 @dataclass(frozen=True)
+class DailyFailureResult:
+    reason_code: str
+
+
+@dataclass(frozen=True)
+class FailureScope:
+    report_stage: str
+    stages: tuple[str, ...]
+    has_unknown: bool
+
+
+@dataclass(frozen=True)
 class IssueRecord:
     number: int
     state: str
@@ -341,6 +374,32 @@ _STAGE_NAMES = {
     "publish-production (TPEX)": "PUBLISH_PRODUCTION_TPEX",
 }
 _STAGE_ORDER = {stage: index for index, stage in enumerate(_STAGE_NAMES.values())}
+_DAILY_FAILURE_ARTIFACT_SPECS = {
+    "BUILD_FEATURES_TWSE": (
+        "daily-research-features-TWSE",
+        "twse-research-features-audit.json",
+        "FEATURE",
+        "TWSE",
+    ),
+    "BUILD_FEATURES_TPEX": (
+        "daily-research-features-TPEX",
+        "tpex-research-features-audit.json",
+        "FEATURE",
+        "TPEX",
+    ),
+    "PUBLISH_PRODUCTION_TWSE": (
+        "daily-research-production-TWSE",
+        "twse-production-publish-report.json",
+        "PRODUCTION",
+        "TWSE",
+    ),
+    "PUBLISH_PRODUCTION_TPEX": (
+        "daily-research-production-TPEX",
+        "tpex-production-publish-report.json",
+        "PRODUCTION",
+        "TPEX",
+    ),
+}
 
 
 def _mapping(value: object, code: str) -> Mapping[str, Any]:
@@ -484,11 +543,11 @@ def _get_main_sha(client: GitHubClient, repository: str) -> str:
     return sha
 
 
-def _failed_stage(
+def _failed_scope(
     client: GitHubClient,
     repository: str,
     run: TrustedRun,
-) -> str:
+) -> FailureScope:
     stages: list[str] = []
     saw_unknown_failure = False
     for page in range(1, 101):
@@ -507,6 +566,7 @@ def _failed_stage(
             raise RecoveryError("INVALID_JOBS_RESPONSE")
         for raw_job in jobs:
             if not isinstance(raw_job, Mapping):
+                saw_unknown_failure = True
                 continue
             conclusion = raw_job.get("conclusion")
             if conclusion not in _FAILED_JOB_CONCLUSIONS:
@@ -520,9 +580,14 @@ def _failed_stage(
             break
     else:
         raise RecoveryError("JOBS_PAGINATION_LIMIT_EXCEEDED")
-    if stages:
-        return min(stages, key=lambda stage: _STAGE_ORDER[stage])
-    return "UNKNOWN" if saw_unknown_failure or run.conclusion != "success" else "WORKFLOW"
+    ordered = tuple(sorted(set(stages), key=lambda stage: _STAGE_ORDER[stage]))
+    has_unknown = saw_unknown_failure or not ordered
+    report_stage = ordered[0] if ordered else "UNKNOWN"
+    return FailureScope(
+        report_stage=report_stage,
+        stages=ordered,
+        has_unknown=has_unknown,
+    )
 
 
 def _issue_marker(run_id: int) -> str:
@@ -710,6 +775,28 @@ def _strict_iso_date(value: object) -> str | None:
     return value
 
 
+def _strict_timestamp(value: object) -> None:
+    if not isinstance(value, str) or len(value) > 64:
+        raise ArtifactValidationError("INVALID_RESULT_TIMESTAMP")
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as error:
+        raise ArtifactValidationError("INVALID_RESULT_TIMESTAMP") from error
+    if parsed.tzinfo is None:
+        raise ArtifactValidationError("INVALID_RESULT_TIMESTAMP")
+
+
+def _single_reason_code(value: object) -> str:
+    if (
+        not isinstance(value, list)
+        or len(value) != 1
+        or not isinstance(value[0], str)
+        or not _SAFE_REASON_CODE.fullmatch(value[0])
+    ):
+        raise ArtifactValidationError("INVALID_DAILY_RESULT_REASON")
+    return value[0]
+
+
 def _parse_import_result(raw: bytes) -> ImportResult:
     if len(raw) > MAX_ARTIFACT_RESULT_BYTES:
         raise ArtifactValidationError("IMPORT_RESULT_TOO_LARGE")
@@ -767,12 +854,14 @@ def _parse_import_result(raw: bytes) -> ImportResult:
     )
 
 
-def _load_import_result(
+def _load_attempt_artifact_file(
     client: GitHubClient,
     repository: str,
     run: TrustedRun,
-) -> ImportResult:
-    artifact_name = f"import-market-data-result-{run.run_id}-{run.attempt}"
+    *,
+    artifact_name: str,
+    filename: str,
+) -> bytes:
     matches: list[Mapping[str, Any]] = []
     for page in range(1, 101):
         payload = _mapping(
@@ -815,15 +904,92 @@ def _load_import_result(
             entries = zipped.infolist()
             if (
                 len(entries) != 1
-                or entries[0].filename != IMPORT_ARTIFACT_FILENAME
+                or entries[0].filename != filename
                 or entries[0].is_dir()
                 or entries[0].file_size > MAX_ARTIFACT_RESULT_BYTES
             ):
-                raise ArtifactValidationError("INVALID_IMPORT_RESULT_ARCHIVE")
+                raise ArtifactValidationError("INVALID_ATTEMPT_RESULT_ARCHIVE")
             raw = zipped.read(entries[0])
     except (BadZipFile, RuntimeError) as error:
-        raise ArtifactValidationError("INVALID_IMPORT_RESULT_ARCHIVE") from error
+        raise ArtifactValidationError("INVALID_ATTEMPT_RESULT_ARCHIVE") from error
+    return raw
+
+
+def _load_import_result(
+    client: GitHubClient,
+    repository: str,
+    run: TrustedRun,
+) -> ImportResult:
+    raw = _load_attempt_artifact_file(
+        client,
+        repository,
+        run,
+        artifact_name=f"import-market-data-result-{run.run_id}-{run.attempt}",
+        filename=IMPORT_ARTIFACT_FILENAME,
+    )
     return _parse_import_result(raw)
+
+
+def _parse_daily_failure_result(
+    raw: bytes,
+    *,
+    kind: str,
+    market: str,
+) -> DailyFailureResult:
+    if len(raw) > MAX_ARTIFACT_RESULT_BYTES:
+        raise ArtifactValidationError("DAILY_RESULT_TOO_LARGE")
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ArtifactValidationError("INVALID_DAILY_RESULT_JSON") from error
+    if not isinstance(payload, dict):
+        raise ArtifactValidationError("INVALID_DAILY_RESULT_SCHEMA")
+    reason_code = _single_reason_code(payload.get("reason_codes"))
+    _strict_timestamp(payload.get("generated_at"))
+    if kind == "FEATURE":
+        if (
+            set(payload) != _FEATURE_FAILURE_RESULT_KEYS
+            or payload.get("build_status") != "FAIL"
+            or payload.get("system_status") != "FAIL"
+            or payload.get("label_status") != "LABELS_NOT_ASSEMBLED"
+            or payload.get("usage_scope") != "FEATURE_RESEARCH_ONLY"
+        ):
+            raise ArtifactValidationError("INVALID_DAILY_FEATURE_RESULT")
+    elif kind == "PRODUCTION":
+        message = payload.get("message")
+        if (
+            set(payload) != _PRODUCTION_FAILURE_RESULT_KEYS
+            or payload.get("status") != "FAIL"
+            or payload.get("market") != market
+            or _strict_iso_date(payload.get("as_of_date")) is None
+            or not isinstance(message, str)
+            or len(message) > 1_024
+        ):
+            raise ArtifactValidationError("INVALID_DAILY_PRODUCTION_RESULT")
+    else:
+        raise ArtifactValidationError("INVALID_DAILY_RESULT_KIND")
+    return DailyFailureResult(reason_code=reason_code)
+
+
+def _load_daily_failure_result(
+    client: GitHubClient,
+    repository: str,
+    run: TrustedRun,
+    *,
+    stage: str,
+) -> DailyFailureResult:
+    specification = _DAILY_FAILURE_ARTIFACT_SPECS.get(stage)
+    if specification is None:
+        raise ArtifactValidationError("DAILY_STAGE_HAS_NO_TRANSIENT_RESULT")
+    artifact_prefix, filename, kind, market = specification
+    raw = _load_attempt_artifact_file(
+        client,
+        repository,
+        run,
+        artifact_name=f"{artifact_prefix}-{run.run_id}-{run.attempt}",
+        filename=filename,
+    )
+    return _parse_daily_failure_result(raw, kind=kind, market=market)
 
 
 def _result(
@@ -891,11 +1057,12 @@ def process_workflow_run(
         return _result(run, decision="STATE_CHANGED", issue=None, rerun_requested=False)
 
     main_sha = _get_initial_main_sha(client, repository)
-    stage = "WORKFLOW" if run.conclusion == "success" else _failed_stage(
-        client,
-        repository,
-        run,
-    )
+    failure_scope: FailureScope | None = None
+    if run.conclusion == "success":
+        stage = "WORKFLOW"
+    else:
+        failure_scope = _failed_scope(client, repository, run)
+        stage = failure_scope.report_stage
     existing_issue = _find_issue(client, repository, run.run_id)
 
     if run.head_sha != main_sha:
@@ -969,12 +1136,46 @@ def process_workflow_run(
                     reason_code = import_result.reason_code
                     terminal_decision = "NON_RETRYABLE"
     else:
-        if run.conclusion in {"failure", "timed_out"}:
+        if run.conclusion == "timed_out":
             eligible = True
-            reason_code = (
-                "WORKFLOW_FAILURE" if run.conclusion == "failure" else "WORKFLOW_TIMED_OUT"
-            )
+            reason_code = "WORKFLOW_TIMED_OUT"
             delay_seconds = 300 if run.attempt == 1 else 900
+        elif run.conclusion == "failure":
+            if failure_scope is None:
+                raise RecoveryError("MISSING_DAILY_FAILURE_SCOPE")
+            if failure_scope.has_unknown:
+                reason_code = "DAILY_RESULT_UNVERIFIED"
+                terminal_decision = "UNVERIFIED_DAILY_RESULT"
+            else:
+                try:
+                    daily_results = [
+                        _load_daily_failure_result(
+                            client,
+                            repository,
+                            run,
+                            stage=failed_stage,
+                        )
+                        for failed_stage in failure_scope.stages
+                    ]
+                except ArtifactValidationError:
+                    reason_code = "DAILY_RESULT_UNVERIFIED"
+                    terminal_decision = "UNVERIFIED_DAILY_RESULT"
+                else:
+                    non_retryable = next(
+                        (
+                            result.reason_code
+                            for result in daily_results
+                            if result.reason_code not in _TRANSIENT_DAILY_REASON_CODES
+                        ),
+                        None,
+                    )
+                    if non_retryable is not None:
+                        reason_code = non_retryable
+                        terminal_decision = "NON_RETRYABLE"
+                    else:
+                        eligible = True
+                        reason_code = "SUPABASE_CONNECTION_ERROR"
+                        delay_seconds = 300 if run.attempt == 1 else 900
         else:
             reason_code = f"CONCLUSION_{run.conclusion.upper()}"
             terminal_decision = "INELIGIBLE"

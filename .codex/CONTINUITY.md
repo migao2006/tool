@@ -5,51 +5,70 @@ and must not replace `tasks/active/TASK.md` or completed reports.
 
 ## Current Work Package
 
-- Status: COMPLETE
-- Outcome: Adopted `FULL_AUTONOMY_UNTIL_MAIN_UPDATE` with one final
-  protected-branch update boundary.
-- Record: `tasks/completed/2026-07-23-update-main-authorization-policy.md`.
+- Status: ACTIVE
+- Outcome: Refresh and complete the archive/current-publication row-adaptation
+  extraction in existing PR #97.
+- Task: `tasks/active/TASK.md`.
 
 ## Current Branch
 
-- `codex/update-main-authorization-policy`
-- Based on `origin/main` at `7a7e431f4086eabbe458a4ad244c940ec8cac9ae`.
+- `codex/extract-archive-row-adaptation`
+- Authoritative base: `origin/main` at
+  `88fef120648adff8023aff3696ce2df042463ede`.
+- Pre-refresh head: `06356f03b2d7106d501d377054ae0cceb8c78821`.
+- Non-destructive merge head: `04f4879757826495f1a632a98f5d5c1657825ac6`.
 
 ## Completed Work
 
-- Replaced the prior authorization boundary with one final protected-branch gate.
-- Added regression coverage for automatic operations, safety, and handoff evidence.
-- Completed local Full verification and core GitHub Project tests.
-- Pushed the feature branch and marked PR #99 Ready for review.
+- Merged current `origin/main` into the existing feature branch without
+  conflicts or production-code drift.
+- Reinspected the extraction, callers, compatibility imports, contracts,
+  counters, provenance, point-in-time gates, and writer lifecycle.
+- Added direct regression coverage for within-source duplicates, incremental
+  `previous=` accumulation, cross-source duplicates, publication precedence,
+  provenance association, and writer success/abort ordering.
+- Passed Focused, Ruff, basedpyright, diff, Fast, and final Full verification.
 
 ## Remaining Work
 
-- Human review and final protected-branch authorization.
-- Do not merge or otherwise update `main` without that authorization.
+- Commit and push the refreshed evidence.
+- Observe current-head PR #97 checks, repair only directly related failures,
+  archive the task, restore the active task to `NONE`, and confirm merge
+  readiness.
+- Stop before updating `main` and request final protected-branch authorization.
 
 ## Key Decisions
 
-- Keep the layered instruction architecture and product contracts unchanged.
-- Preserve completed reports as immutable historical evidence.
-- Treat deployment, migration, production workflow, and release preparation as
-  in-scope Work Package actions; only a protected-branch update needs final approval.
+- Reuse PR #97 and its original extraction; do not duplicate or rewrite it.
+- Keep the builder responsible for verified reads, feature calculation, audit,
+  persistence, exceptions, and writer orchestration.
+- Preserve duplicate-date fail-closed behavior and provenance/counter semantics
+  rather than introducing a behavior change during structural extraction.
 
 ## Validation Already Passed
 
-- Focused governance contracts: 11 passed.
-- Ruff and basedpyright passed; instruction limits and changed-file Gitleaks passed.
-- Fast verification passed.
-- Full verification passed: 990 Python and 65 Playwright tests.
+- Focused venue feature suite: 21 passed.
+- Pinned Ruff: passed.
+- Pinned basedpyright: 0 errors and 0 warnings.
+- Active-task contract, instruction limits, `git diff --check`, and changed-diff
+  Gitleaks: passed.
+- Fast verification: passed.
+- Final Full verification: 999 Python and 65 Playwright tests passed.
 
 ## Known Issues or Blockers
 
-- None.
+- The first Full run had one transient iPhone 13 WebKit bounding-box failure.
+  The screenshot showed correct layout; the exact case passed alone and the
+  unchanged final Full rerun passed all 65 Playwright tests.
+- No current blocker.
 
 ## Commit and Pull Request References
 
-- Core commit: `3d0f398698b871af218663ad9c0ffbd0aa24e958`.
-- Terminal task record follows the core commit.
-- Ready PR #99: https://github.com/migao2006/tool/pull/99
+- Original implementation head:
+  `06356f03b2d7106d501d377054ae0cceb8c78821`.
+- Refresh merge:
+  `04f4879757826495f1a632a98f5d5c1657825ac6`.
+- Existing PR #97: https://github.com/migao2006/tool/pull/97
 
 ## Maintenance
 

@@ -7,7 +7,7 @@ from io import BytesIO
 import json
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any
+from typing import Any, cast
 
 import pyarrow.parquet as pq
 import pandas as pd
@@ -470,6 +470,181 @@ def test_extracted_row_adapter_selects_sources_and_provenance_deterministically(
     assert captured.value.reason_code == "TPEX_CURRENT_IDENTITY_SCOPE_MISMATCH"
 
 
+def test_extracted_row_adapter_fails_closed_on_duplicate_dates_within_one_source() -> None:
+    adapter = ArchiveFeatureRowAdapter(market="TWSE")
+    identity = TwseCurrentSecurityIdentity(
+        security_id=2330,
+        symbol="2330",
+        listing_date=START_DATE,
+    )
+    archive_rows = [_parsed_row(index) for index in range(72)]
+    duplicate = dict(archive_rows[-1])
+    duplicate["close_price"] = "999"
+    archive_rows.append(duplicate)
+    for row in archive_rows:
+        row["reason_codes"] = json.dumps(
+            row["reason_codes"],
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+
+    adapted_sources = adapter.adapt_source_rows(
+        archive_sources=(
+            ArchiveRowSource(
+                archive_id=21,
+                object_key="historical/twse/2330-single-source.parquet",
+                source_payload_sha256=SOURCE_PAYLOAD_HASH,
+                parquet_sha256="6" * 64,
+                manifest_reason_codes=(
+                    "POINT_IN_TIME_UNVERIFIED",
+                    "RAW_LANDING_ONLY",
+                ),
+                rows=tuple(archive_rows),
+                row_count=73,
+            ),
+        ),
+        identity=identity,
+    )
+    features = build_price_volume_features(
+        adapted_sources.records,
+        market="TWSE",
+        availability_mode="RESEARCH_SCHEDULING_HINT",
+    )
+    duplicate_date = END_DATE
+    duplicate_feature = next(
+        feature for feature in features.rows if feature.decision_date == duplicate_date
+    )
+
+    assert adapted_sources.source_row_count == 73
+    assert adapted_sources.parsed_source_row_count == 73
+    assert len(adapted_sources.records) == 73
+    assert len(adapted_sources.provenance_by_date) == 72
+    assert duplicate_feature.decision_close_price == 171.0
+    assert duplicate_feature.hard_fail is True
+    assert duplicate_feature.hard_fail_reason_codes == ("DUPLICATE_CANONICAL_BAR",)
+
+    adapted_output = adapter.adapt_output_rows(
+        features.rows,
+        identity=identity,
+        provenance_by_date=adapted_sources.provenance_by_date,
+        dataset_snapshot_sha256="e" * 64,
+        source_archive_snapshot_sha256="a" * 64,
+        current_identity_snapshot_sha256="b" * 64,
+    )
+
+    decision_dates = [cast(date, row["decision_date"]) for row in adapted_output.rows]
+    assert duplicate_date not in decision_dates
+    assert decision_dates == sorted(set(decision_dates))
+    assert adapted_output.exclusion_reason_counts["DUPLICATE_CANONICAL_BAR"] == 1
+    assert {row["archive_id"] for row in adapted_output.rows} == {21}
+
+
+def test_extracted_row_adapter_accumulates_incremental_sources_exactly_once() -> None:
+    adapter = ArchiveFeatureRowAdapter(market="TWSE")
+    identity = TwseCurrentSecurityIdentity(
+        security_id=2330,
+        symbol="2330",
+        listing_date=START_DATE,
+    )
+    first_rows = [_parsed_row(index) for index in range(66)]
+    quarantined = dict(first_rows[0])
+    quarantined["parse_status"] = "QUARANTINED"
+    first_rows.append(quarantined)
+    second_rows = [_parsed_row(0), *[_parsed_row(index) for index in range(66, 72)]]
+    for row in (*first_rows, *second_rows):
+        row["reason_codes"] = json.dumps(
+            row["reason_codes"],
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+
+    first = adapter.adapt_source_rows(
+        archive_sources=(
+            ArchiveRowSource(
+                archive_id=31,
+                object_key="historical/twse/2330-first.parquet",
+                source_payload_sha256="7" * 64,
+                parquet_sha256="8" * 64,
+                manifest_reason_codes=("FIRST_ARCHIVE",),
+                rows=tuple(first_rows),
+                row_count=67,
+            ),
+        ),
+        identity=identity,
+    )
+    second = adapter.adapt_source_rows(
+        archive_sources=(
+            ArchiveRowSource(
+                archive_id=32,
+                object_key="historical/twse/2330-second.parquet",
+                source_payload_sha256="9" * 64,
+                parquet_sha256="a" * 64,
+                manifest_reason_codes=("SECOND_ARCHIVE",),
+                rows=tuple(second_rows),
+                row_count=7,
+            ),
+        ),
+        identity=identity,
+        previous=first,
+    )
+    publication = _publication_snapshot(END_DATE)
+    final = adapter.adapt_source_rows(
+        archive_sources=(),
+        identity=identity,
+        publication_row=publication.rows[0],
+        publication_manifest=publication.manifest,
+        previous=second,
+    )
+    duplicate_date = START_DATE
+    second_source_output_start = START_DATE + timedelta(days=66)
+
+    assert first.source_row_count == 67
+    assert first.parsed_source_row_count == 66
+    assert first.exclusion_reason_counts == {"ARCHIVE_ROW_QUARANTINED": 1}
+    assert len(first.records) == 66
+    assert first.provenance_by_date[duplicate_date].archive_id == 31
+
+    assert second.source_row_count == 74
+    assert second.parsed_source_row_count == 73
+    assert second.exclusion_reason_counts == {"ARCHIVE_ROW_QUARANTINED": 1}
+    assert len(second.records) == 73
+    assert len(second.provenance_by_date) == 72
+    assert second.provenance_by_date[duplicate_date].archive_id == 32
+
+    assert final.source_row_count == 75
+    assert final.parsed_source_row_count == 74
+    assert final.exclusion_reason_counts == {
+        "ARCHIVE_ROW_QUARANTINED": 1,
+        "DAILY_PUBLICATION_OVERLAPS_ARCHIVE": 1,
+    }
+    assert final.records == second.records
+    assert final.provenance_by_date == second.provenance_by_date
+    assert final.provenance_by_date[END_DATE].archive_id == 32
+
+    features = build_price_volume_features(
+        final.records,
+        market="TWSE",
+        availability_mode="RESEARCH_SCHEDULING_HINT",
+    )
+    adapted_output = adapter.adapt_output_rows(
+        features.rows,
+        identity=identity,
+        provenance_by_date=final.provenance_by_date,
+        dataset_snapshot_sha256="e" * 64,
+        source_archive_snapshot_sha256="a" * 64,
+        current_identity_snapshot_sha256="b" * 64,
+    )
+
+    decision_dates = [cast(date, row["decision_date"]) for row in adapted_output.rows]
+    assert duplicate_date not in decision_dates
+    assert decision_dates == sorted(set(decision_dates))
+    assert adapted_output.exclusion_reason_counts["DUPLICATE_CANONICAL_BAR"] == 10
+    for row in adapted_output.rows:
+        decision_date = cast(date, row["decision_date"])
+        expected_archive_id = 31 if decision_date < second_source_output_start else 32
+        assert row["archive_id"] == expected_archive_id
+
+
 def test_extracted_row_adapter_excludes_hard_fail_and_adapts_output_rows() -> None:
     adapter = ArchiveFeatureRowAdapter(market="TWSE")
     identity = TwseCurrentSecurityIdentity(
@@ -558,6 +733,55 @@ def test_extracted_row_adapter_excludes_hard_fail_and_adapts_output_rows() -> No
         current_identity_snapshot_sha256="b" * 64,
         market="TWSE",
     )
+
+
+def test_builder_preserves_writer_success_and_abort_call_order() -> None:
+    class RecordingWriter:
+        def __init__(self, *, fail_write: bool = False) -> None:
+            self.fail_write = fail_write
+            self.events: list[tuple[str, int | None]] = []
+
+        def write_rows(self, rows: tuple[dict[str, object], ...]) -> None:
+            self.events.append(("write_rows", len(rows)))
+            if self.fail_write:
+                raise RuntimeError("recording writer failed")
+
+        def finish(self) -> None:
+            self.events.append(("finish", None))
+
+        def abort(self) -> None:
+            self.events.append(("abort", None))
+
+    reader, manifests = _archive()
+    identity = TwseCurrentSecurityIdentity(
+        security_id=2330,
+        symbol="2330",
+        listing_date=START_DATE,
+    )
+    identities = TwseIdentitySnapshot(
+        by_symbol={"2330": identity},
+        snapshot_sha256=identity_snapshot_hash({"2330": identity}),
+    )
+    successful_writer = RecordingWriter()
+
+    audit = TwseArchiveFeatureDatasetBuilder(reader).build(
+        manifests=manifests,
+        identities=identities,
+        writer=cast(Any, successful_writer),
+    )
+
+    assert audit.output_row_count == 12
+    assert successful_writer.events == [("write_rows", 12), ("finish", None)]
+
+    failing_writer = RecordingWriter(fail_write=True)
+    with pytest.raises(RuntimeError, match="recording writer failed"):
+        _ = TwseArchiveFeatureDatasetBuilder(reader).build(
+            manifests=manifests,
+            identities=identities,
+            writer=cast(Any, failing_writer),
+        )
+
+    assert failing_writer.events == [("write_rows", 12), ("abort", None)]
 
 
 def test_builder_streams_eligible_rows_and_preserves_research_limits(

@@ -46,7 +46,7 @@ test("上市與上櫃使用獨立快照，空的上櫃資料不回退上市", as
   await expect(page.getByRole("heading", { name: /TEST1/u })).toBeVisible();
 
   const markets = predictionRequests.map((url) => url.searchParams.get("market"));
-  expect(markets).toEqual(["TWSE", "TPEX"]);
+  expect(markets).toEqual(["TWSE", "TPEX", "TWSE"]);
 });
 
 test("上櫃 API 錯誤不會覆蓋已載入的上市快照", async ({ page }) => {

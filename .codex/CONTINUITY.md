@@ -20,7 +20,7 @@ and must not replace `tasks/active/TASK.md` or completed reports.
   `e2ba3f54e6086082b72775a326a5fef2f54b43fb`.
 - The isolated worktree was clean at task start; all current changes belong to
   this Work Package.
-- Head: `5784312e5c338298c12b9f3f85c4064570d8e560`.
+- Staging-deployed head: `5784312e5c338298c12b9f3f85c4064570d8e560`; later PR commits only update release evidence.
 - Ready Pull Request:
   [#106](https://github.com/migao2006/tool/pull/106).
 
@@ -88,7 +88,8 @@ and must not replace `tasks/active/TASK.md` or completed reports.
 
 ## Commit and Pull Request References
 
-- Commits: `405e828`, `df5a57a`, `1e3b6ce`, `c92d7ab`, `8bae944`, `5784312`.
+- Delivery commits: `405e828`, `df5a57a`, `1e3b6ce`, `c92d7ab`, `8bae944`,
+  `5784312`, `5bc016d`.
 - Staging deployment:
   [run 30087314367](https://github.com/migao2006/tool/actions/runs/30087314367).
 - No protected-branch update or Production data write has been performed.

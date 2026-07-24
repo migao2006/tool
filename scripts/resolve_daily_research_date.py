@@ -33,6 +33,17 @@ MIN_ROWS = {"TWSE": 500, "TPEX": 500}
 MAX_PREDICTIONS = 5_000
 RESOLUTION_TIMEOUT_SECONDS = 60.0
 RESOLUTION_RETRY_DELAYS_SECONDS = (1.0, 2.0)
+DECISION_COUNT_FIELDS = {
+    "CANDIDATE": "candidate_count",
+    "WATCH": "watch_count",
+    "NO_TRADE": "no_trade_count",
+}
+POLICY_STATUS_COUNT_FIELDS = {
+    "MISSING_REQUIRED_DATA": "policy_input_missing_count",
+    "VALIDATION_FAILED": "policy_validation_failed_count",
+    "HARD_FAIL": "policy_hard_fail_count",
+}
+DATA_QUALITY_STATUSES = {"PASS", "WARN", "HARD_FAIL"}
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -88,7 +99,8 @@ def _latest_prediction_snapshot(
         select=(
             "prediction_run_id,as_of_date,decision_at,horizon,market_scope,"
             "system_validation_status,candidate_count,watch_count,no_trade_count,"
-            "hard_fail_count"
+            "policy_input_missing_count,policy_validation_failed_count,"
+            "policy_hard_fail_count,hard_fail_count"
         ),
         filters={
             "market_scope": f"eq.{market}",
@@ -109,6 +121,9 @@ def _latest_prediction_snapshot(
                 "candidate_count",
                 "watch_count",
                 "no_trade_count",
+                "policy_input_missing_count",
+                "policy_validation_failed_count",
+                "policy_hard_fail_count",
                 "hard_fail_count",
             )
         }
@@ -120,13 +135,12 @@ def _latest_prediction_snapshot(
         or run.get("horizon") != 5
         or run.get("system_validation_status") != "RESEARCH_ONLY"
         or counts["candidate_count"] != 0
-        or counts["watch_count"] != 0
-        or counts["hard_fail_count"] != 0
+        or counts["hard_fail_count"] < counts["policy_hard_fail_count"]
     ):
         return None
     predictions = writer.select_all_rows(
         "stock_predictions",
-        select="stock_prediction_id,market,decision,data_quality_status",
+        select=("stock_prediction_id,market,decision,decision_policy_status,data_quality_status"),
         filters={
             "prediction_run_id": f"eq.{run_id}",
             "order": "stock_prediction_id.asc",
@@ -136,22 +150,43 @@ def _latest_prediction_snapshot(
     )
     try:
         prediction_ids = [
-            _integer(row.get("stock_prediction_id"), "stock_prediction_id")
-            for row in predictions
+            _integer(row.get("stock_prediction_id"), "stock_prediction_id") for row in predictions
         ]
     except (TypeError, ValueError):
         return None
     prediction_count = len(prediction_ids)
+    actual_counts = {field: 0 for field in counts if field != "hard_fail_count"}
+    rows_valid = True
+    for row in predictions:
+        status = row.get("decision_policy_status")
+        decision = row.get("decision")
+        quality = row.get("data_quality_status")
+        if (
+            row.get("market") != market
+            or status
+            not in {
+                "EVALUATED",
+                "MISSING_REQUIRED_DATA",
+                "VALIDATION_FAILED",
+                "HARD_FAIL",
+            }
+            or quality not in DATA_QUALITY_STATUSES
+            or (status == "EVALUATED") != (decision in DECISION_COUNT_FIELDS)
+            or (status == "EVALUATED" and quality != "PASS")
+            or (status == "HARD_FAIL") != (quality == "HARD_FAIL")
+        ):
+            rows_valid = False
+            break
+        if status == "EVALUATED":
+            actual_counts[DECISION_COUNT_FIELDS[cast(str, decision)]] += 1
+        else:
+            actual_counts[POLICY_STATUS_COUNT_FIELDS[cast(str, status)]] += 1
     if (
         prediction_count < MIN_ROWS[market]
-        or prediction_count != counts["no_trade_count"]
+        or prediction_count != sum(actual_counts.values())
         or len(set(prediction_ids)) != prediction_count
-        or any(
-            row.get("market") != market
-            or row.get("decision") != "NO_TRADE"
-            or row.get("data_quality_status") not in {"PASS", "FAIL"}
-            for row in predictions
-        )
+        or not rows_valid
+        or any(actual_counts[field] != counts[field] for field in actual_counts)
     ):
         return None
     gate_count = 0
@@ -250,8 +285,7 @@ def _resolve_once(
     }
     market_data = _resolution_writer()
     latest_snapshots = {
-        market: _latest_prediction_snapshot(market_data, market)
-        for market in ("TWSE", "TPEX")
+        market: _latest_prediction_snapshot(market_data, market) for market in ("TWSE", "TPEX")
     }
     missing = [
         market
@@ -268,9 +302,7 @@ def _resolve_once(
     # when this run would actually publish a missing market.
     if missing and age_days > max_age_days:
         raise ValueError("DAILY_RESEARCH_SOURCE_DATE_OUTSIDE_ALLOWED_AGE")
-    if target == aligned_date and any(
-        counts[market] < MIN_ROWS[market] for market in missing
-    ):
+    if target == aligned_date and any(counts[market] < MIN_ROWS[market] for market in missing):
         raise ValueError("DAILY_RESEARCH_SOURCE_COVERAGE_TOO_LOW")
     return {
         "schema_version": 1,
@@ -282,11 +314,7 @@ def _resolve_once(
         "markets": missing,
         "daily_bar_counts": counts,
         "latest_prediction_dates": {
-            market: (
-                snapshot.as_of_date.isoformat()
-                if snapshot is not None
-                else None
-            )
+            market: (snapshot.as_of_date.isoformat() if snapshot is not None else None)
             for market, snapshot in latest_snapshots.items()
         },
         "validated_production_snapshots": {
@@ -305,9 +333,8 @@ def _resolve_with_connection_retry(
         try:
             return resolve_once()
         except IngestionError as error:
-            if (
-                error.reason_code != "SUPABASE_CONNECTION_ERROR"
-                or attempt == len(RESOLUTION_RETRY_DELAYS_SECONDS)
+            if error.reason_code != "SUPABASE_CONNECTION_ERROR" or attempt == len(
+                RESOLUTION_RETRY_DELAYS_SECONDS
             ):
                 raise
             delay = RESOLUTION_RETRY_DELAYS_SECONDS[attempt]

@@ -212,15 +212,12 @@ class _FakeTpexBundle:
 
     @staticmethod
     def predict_direction(matrix: Any) -> tuple[CalibratedDirectionPrediction, ...]:
-        return tuple(
-            CalibratedDirectionPrediction(0.6, 0.3, 0.1) for _ in range(len(matrix))
-        )
+        return tuple(CalibratedDirectionPrediction(0.6, 0.3, 0.1) for _ in range(len(matrix)))
 
     @staticmethod
     def predict_quantiles(matrix: Any) -> tuple[CalibratedQuantilePrediction, ...]:
         return tuple(
-            CalibratedQuantilePrediction(-0.02, 0.01, 0.05, False)
-            for _ in range(len(matrix))
+            CalibratedQuantilePrediction(-0.02, 0.01, 0.05, False) for _ in range(len(matrix))
         )
 
 
@@ -237,16 +234,16 @@ def test_tpex_latest_feature_scores_only_tpex_and_emits_tpex_contract(
     )
 
     assert snapshot.market == "TPEX"
-    assert snapshot.artifact_contract_version == (
-        "tpex-research-prediction-snapshot.v1"
-    )
+    assert snapshot.artifact_contract_version == ("tpex-research-prediction-snapshot.v1")
     assert {row.market for row in snapshot.predictions} == {"TPEX"}
-    assert all(row.to_dict()["decision"] == "NO_TRADE" for row in snapshot.predictions)
+    assert all(row.to_dict()["decision"] is None for row in snapshot.predictions)
+    assert all(
+        row.to_dict()["decision_policy_status"] == "MISSING_REQUIRED_DATA"
+        for row in snapshot.predictions
+    )
     assert "TPEX_PRICE_ONLY_RESEARCH" in snapshot.reason_codes
     assert snapshot.validation["locked_holdout_executed"] is False
-    assert snapshot.model_metadata["research_run_provenance"] == (
-        _training_provenance()
-    )
+    assert snapshot.model_metadata["research_run_provenance"] == (_training_provenance())
     assert snapshot.model_metadata["feature_artifact_manifest"] == (
         cross_section.manifest.to_dict()
     )

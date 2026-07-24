@@ -24,6 +24,18 @@ from src.pipeline.daily_research_publish_contract import (  # noqa: E402
     MIN_DAILY_RESEARCH_PREDICTIONS,
 )
 
+DECISION_COUNT_FIELDS = {
+    "CANDIDATE": "candidate_count",
+    "WATCH": "watch_count",
+    "NO_TRADE": "no_trade_count",
+}
+POLICY_STATUS_COUNT_FIELDS = {
+    "MISSING_REQUIRED_DATA": "policy_input_missing_count",
+    "VALIDATION_FAILED": "policy_validation_failed_count",
+    "HARD_FAIL": "policy_hard_fail_count",
+}
+DATA_QUALITY_STATUSES = {"PASS", "WARN", "HARD_FAIL"}
+
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -107,7 +119,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             select=(
                 "prediction_run_id,as_of_date,decision_at,horizon,market_scope,"
                 "system_validation_status,candidate_count,watch_count,no_trade_count,"
-                "hard_fail_count"
+                "policy_input_missing_count,policy_validation_failed_count,"
+                "policy_hard_fail_count,hard_fail_count"
             ),
             filters={
                 "market_scope": f"eq.{market}",
@@ -130,7 +143,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise ValueError("DAILY_RESEARCH_PERSISTED_RUN_SCOPE_MISMATCH")
         prediction_rows = writer.select_all_rows(
             "stock_predictions",
-            select="stock_prediction_id",
+            select=(
+                "stock_prediction_id,market,decision,decision_policy_status,data_quality_status"
+            ),
             filters={
                 "prediction_run_id": f"eq.{persisted_run_id}",
                 "order": "stock_prediction_id.asc",
@@ -143,6 +158,37 @@ def main(argv: Sequence[str] | None = None) -> int:
             for row in prediction_rows
         ]
         prediction_count = len(prediction_ids)
+        manifest_counts = {
+            field: int(str(run.get(field) or 0))
+            for field in (
+                *DECISION_COUNT_FIELDS.values(),
+                *POLICY_STATUS_COUNT_FIELDS.values(),
+            )
+        }
+        actual_counts = {field: 0 for field in manifest_counts}
+        for row in prediction_rows:
+            status = row.get("decision_policy_status")
+            decision = row.get("decision")
+            quality = row.get("data_quality_status")
+            if (
+                row.get("market") != market
+                or status
+                not in {
+                    "EVALUATED",
+                    "MISSING_REQUIRED_DATA",
+                    "VALIDATION_FAILED",
+                    "HARD_FAIL",
+                }
+                or quality not in DATA_QUALITY_STATUSES
+                or (status == "EVALUATED") != (decision in DECISION_COUNT_FIELDS)
+                or (status == "EVALUATED" and quality != "PASS")
+                or (status == "HARD_FAIL") != (quality == "HARD_FAIL")
+            ):
+                raise ValueError("DAILY_RESEARCH_PERSISTED_POLICY_CONTRACT_INVALID")
+            if status == "EVALUATED":
+                actual_counts[DECISION_COUNT_FIELDS[cast(str, decision)]] += 1
+            else:
+                actual_counts[POLICY_STATUS_COUNT_FIELDS[cast(str, status)]] += 1
         gate_count = 0
         for offset in range(0, len(prediction_ids), 100):
             values = ",".join(str(value) for value in prediction_ids[offset : offset + 100])
@@ -150,15 +196,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "decision_gate_results",
                 filters={"stock_prediction_id": f"in.({values})"},
             )
-        manifest_count = sum(
-            int(str(run.get(field) or 0))
-            for field in ("candidate_count", "watch_count", "no_trade_count")
-        )
+        manifest_count = sum(manifest_counts.values())
         if (
             prediction_count != reported_count
             or prediction_count != manifest_count
-            or gate_count
-            != prediction_count * DAILY_RESEARCH_GATES_PER_PREDICTION
+            or actual_counts != manifest_counts
+            or len(set(prediction_ids)) != prediction_count
+            or gate_count != prediction_count * DAILY_RESEARCH_GATES_PER_PREDICTION
         ):
             raise ValueError("DAILY_RESEARCH_PERSISTED_COUNTS_MISMATCH")
         result: dict[str, object] = {
@@ -171,6 +215,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             "prediction_run_id": persisted_run_id,
             "prediction_count": prediction_count,
             "decision_gate_count": gate_count,
+            "decision_counts": {
+                "CANDIDATE": manifest_counts["candidate_count"],
+                "WATCH": manifest_counts["watch_count"],
+                "NO_TRADE": manifest_counts["no_trade_count"],
+                "MISSING_REQUIRED_DATA": manifest_counts["policy_input_missing_count"],
+                "VALIDATION_FAILED": manifest_counts["policy_validation_failed_count"],
+                "HARD_FAIL": manifest_counts["policy_hard_fail_count"],
+            },
             "system_status": "RESEARCH_ONLY",
         }
         _write(output, result)

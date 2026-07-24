@@ -20,6 +20,7 @@ from src.data.research.twse_feature_artifact_contracts import (
     TwseFeatureArtifactManifest,
 )
 from src.data.research.twse_feature_artifact_reader import TwseFeatureArtifactReader
+from src.decision.decision_policy import DecisionPolicyStatus
 from src.features.twse_price_volume_schema import (
     TWSE_PRICE_VOLUME_FEATURE_NAMES,
     TWSE_PRICE_VOLUME_FEATURE_SCHEMA_HASH,
@@ -207,12 +208,8 @@ def _manifest() -> TwseResearchModelBundleManifest:
 class _FakeBundle:
     def __init__(self) -> None:
         self.manifest: TwseResearchModelBundleManifest = _manifest()
-        self.probability_calibrator: SimpleNamespace = SimpleNamespace(
-            version="prob-v1"
-        )
-        self.interval_calibrator: SimpleNamespace = SimpleNamespace(
-            version="interval-v1"
-        )
+        self.probability_calibrator: SimpleNamespace = SimpleNamespace(version="prob-v1")
+        self.interval_calibrator: SimpleNamespace = SimpleNamespace(version="interval-v1")
 
     def transform(self, frame: Any, decision_dates: list[date]) -> Any:
         assert tuple(frame.columns) == TWSE_PRICE_VOLUME_FEATURE_NAMES
@@ -225,15 +222,12 @@ class _FakeBundle:
 
     @staticmethod
     def predict_direction(matrix: Any) -> tuple[CalibratedDirectionPrediction, ...]:
-        return tuple(
-            CalibratedDirectionPrediction(0.6, 0.3, 0.1) for _ in range(len(matrix))
-        )
+        return tuple(CalibratedDirectionPrediction(0.6, 0.3, 0.1) for _ in range(len(matrix)))
 
     @staticmethod
     def predict_quantiles(matrix: Any) -> tuple[CalibratedQuantilePrediction, ...]:
         return tuple(
-            CalibratedQuantilePrediction(-0.02, 0.01, 0.05, False)
-            for _ in range(len(matrix))
+            CalibratedQuantilePrediction(-0.02, 0.01, 0.05, False) for _ in range(len(matrix))
         )
 
 
@@ -246,10 +240,33 @@ def test_refactored_daily_inference_runs_from_an_in_memory_cross_section() -> No
 
     assert snapshot.as_of_date == DEFAULT_ROW_DATE
     assert [row.symbol for row in snapshot.predictions] == ["2317", "2330"]
-    assert all(row.to_dict()["decision"] == "NO_TRADE" for row in snapshot.predictions)
+    assert all(row.to_dict()["decision"] is None for row in snapshot.predictions)
+    assert all(
+        row.to_dict()["decision_policy_status"] == "MISSING_REQUIRED_DATA"
+        for row in snapshot.predictions
+    )
     assert all(row.estimated_round_trip_cost > 0 for row in snapshot.predictions)
     assert snapshot.validation["research_decision_policy_executed"] is True
     assert snapshot.validation["formal_decision_policy_executed"] is False
+
+
+def test_daily_inference_preserves_hard_fail_as_a_distinct_policy_status() -> None:
+    cross_section = _in_memory_cross_section()
+    cross_section.frame.loc[cross_section.frame["symbol"] == "2330", "hard_fail"] = True
+    cross_section.frame.at[0, "hard_fail_reason_codes"] = ["DUPLICATE_CANONICAL_BAR"]
+
+    snapshot = TwseDailyResearchInference().run(
+        cross_section,
+        _FakeBundle(),  # pyright: ignore[reportArgumentType]
+        load_mvp_config(),
+    )
+
+    prediction = next(row for row in snapshot.predictions if row.symbol == "2330")
+    assert prediction.decision is None
+    assert prediction.decision_policy_status == DecisionPolicyStatus.HARD_FAIL
+    assert prediction.data_quality_status == "HARD_FAIL"
+    assert "DUPLICATE_CANONICAL_BAR" in prediction.reason_codes
+    assert "DATA_QUALITY_HARD_FAIL" in prediction.reason_codes
 
 
 def test_latest_feature_is_scored_without_labels_and_costs_are_recomputed(
@@ -280,17 +297,14 @@ def test_latest_feature_is_scored_without_labels_and_costs_are_recomputed(
     assert all(row.estimated_round_trip_cost > 0 for row in snapshot.predictions)
     for row in snapshot.predictions:
         assert len(row.gates) == 8
-        assert row.to_dict()["decision"] == "NO_TRADE"
+        assert row.to_dict()["decision"] is None
+        assert row.to_dict()["decision_policy_status"] == "MISSING_REQUIRED_DATA"
         assert "RESEARCH_ONLY_NO_FORMAL_DECISION_POLICY" not in row.reason_codes
         gates = {gate.gate: gate for gate in row.gates}
-        assert gates["tradability_gate"].reason_code == (
-            "FORMAL_TRADABILITY_INPUT_MISSING"
-        )
+        assert gates["tradability_gate"].reason_code == ("FORMAL_TRADABILITY_INPUT_MISSING")
         assert gates["market_exposure_cap"].source_date is None
         assert gates["position_capacity_limits"].source_date is None
-        assert row.net_q50 == pytest.approx(
-            row.gross_q50 - row.estimated_round_trip_cost
-        )
+        assert row.net_q50 == pytest.approx(row.gross_q50 - row.estimated_round_trip_cost)
         assert sum(
             (row.calibrated_p_up, row.calibrated_p_neutral, row.calibrated_p_down)
         ) == pytest.approx(1.0)

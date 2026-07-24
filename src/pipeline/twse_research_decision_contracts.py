@@ -9,7 +9,11 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Any
 
-from src.decision.decision_policy import DECISION_GATE_ORDER, Decision
+from src.decision.decision_policy import (
+    DECISION_GATE_ORDER,
+    Decision,
+    DecisionPolicyStatus,
+)
 
 
 @dataclass(frozen=True)
@@ -59,7 +63,8 @@ class ResearchDecisionGate:
 class ResearchDecisionPolicyResult:
     symbol: str
     horizon: int
-    decision: Decision
+    decision: Decision | None
+    decision_policy_status: DecisionPolicyStatus
     rank_score: float | None
     global_rank: int | None
     gates: tuple[ResearchDecisionGate, ...]
@@ -70,6 +75,13 @@ class ResearchDecisionPolicyResult:
             raise ValueError("UNSUPPORTED_HORIZON")
         if self.decision == Decision.CANDIDATE:
             raise ValueError("research decision policy cannot emit CANDIDATE")
+        if self.decision_policy_status == DecisionPolicyStatus.EVALUATED and self.decision is None:
+            raise ValueError("evaluated decision policy requires a decision")
+        if (
+            self.decision_policy_status != DecisionPolicyStatus.EVALUATED
+            and self.decision is not None
+        ):
+            raise ValueError("unevaluated decision policy cannot emit a decision")
         if tuple(gate.gate for gate in self.gates) != DECISION_GATE_ORDER:
             raise ValueError("research decision gates must follow the complete order")
 
@@ -77,7 +89,8 @@ class ResearchDecisionPolicyResult:
         return {
             "symbol": self.symbol,
             "horizon": self.horizon,
-            "decision": self.decision.value,
+            "decision": self.decision.value if self.decision is not None else None,
+            "decision_policy_status": self.decision_policy_status.value,
             "rank_score": self.rank_score,
             "global_rank": self.global_rank,
             "gates": [gate.to_dict() for gate in self.gates],

@@ -13,6 +13,7 @@ from src.calibration.status import (
     has_valid_calibration_version,
 )
 from src.core.horizon import require_supported_horizon
+from src.decision.decision_policy import DecisionPolicyStatus
 
 from .market_output import MarketOutput
 from .prediction_output import MARKETS, StockPredictionOutput
@@ -40,10 +41,7 @@ def _json_safe(value: Any, path: str = "value") -> Any:
     if isinstance(value, date):
         return value.isoformat()
     if isinstance(value, Mapping):
-        return {
-            str(key): _json_safe(item, f"{path}.{key}")
-            for key, item in value.items()
-        }
+        return {str(key): _json_safe(item, f"{path}.{key}") for key, item in value.items()}
     if isinstance(value, (tuple, list)):
         return [_json_safe(item, f"{path}[{index}]") for index, item in enumerate(value)]
     raise TypeError(f"{path} contains unsupported JSON value {type(value).__name__}")
@@ -78,9 +76,10 @@ class ExcludedSecurityOutput:
             "market": self.market,
             "asset_type": "STOCK",
             "horizon": self.horizon,
-            "data_quality_status": "FAIL",
+            "data_quality_status": "HARD_FAIL",
             "data_quality_hard_fail": True,
-            "decision": "NO_TRADE",
+            "decision": None,
+            "decision_policy_status": DecisionPolicyStatus.HARD_FAIL.value,
             "reason_codes": list(self.reason_codes),
             "latest_available_at": (
                 self.latest_available_at.isoformat()
@@ -120,6 +119,11 @@ class PredictionSnapshotOutput:
 
         all_predictions = (*self.predictions, *self.watchlist)
         for prediction in all_predictions:
+            if (
+                prediction.decision_policy_status == DecisionPolicyStatus.HARD_FAIL.value
+                or prediction.data_quality_status == "HARD_FAIL"
+            ):
+                raise ValueError("HARD_FAIL rows must be published through excluded")
             if prediction.horizon != self.horizon:
                 raise ValueError("prediction horizon does not match snapshot horizon")
             if prediction.as_of_date != self.as_of_date:
@@ -129,6 +133,14 @@ class PredictionSnapshotOutput:
         for excluded in self.excluded:
             if excluded.horizon != self.horizon or excluded.as_of_date != self.as_of_date:
                 raise ValueError("excluded security does not match snapshot date or horizon")
+        included_keys = {
+            (prediction.market, prediction.symbol.strip().upper()) for prediction in all_predictions
+        }
+        excluded_keys = {
+            (excluded.market, excluded.symbol.strip().upper()) for excluded in self.excluded
+        }
+        if included_keys & excluded_keys:
+            raise ValueError("included and excluded securities must be disjoint")
 
         if self.market is not None:
             if self.market.horizon != self.horizon:
@@ -151,6 +163,8 @@ class PredictionSnapshotOutput:
         self,
         predictions: tuple[StockPredictionOutput, ...],
     ) -> None:
+        if not self.predictions:
+            raise ValueError("PASS snapshot requires a non-empty prediction universe")
         if self.market is None:
             raise ValueError("PASS snapshot requires market output")
         versions = {
@@ -165,6 +179,11 @@ class PredictionSnapshotOutput:
         if not self.validation:
             raise ValueError("PASS snapshot requires validation results")
         for prediction in predictions:
+            if (
+                prediction.decision_policy_status != DecisionPolicyStatus.EVALUATED.value
+                or prediction.data_quality_status != "PASS"
+            ):
+                raise ValueError("PASS snapshot requires evaluated policy evidence")
             if prediction.model_version != self.model_version:
                 raise ValueError("prediction model_version does not match snapshot")
             if prediction.cost_profile_version != self.cost_profile_version:
@@ -173,12 +192,12 @@ class PredictionSnapshotOutput:
                 raise ValueError("prediction training_end_date does not match snapshot")
             if prediction.market_regime != self.market.market_regime:
                 raise ValueError("prediction market_regime does not match market output")
-            if not isfinite(prediction.market_exposure_cap) or abs(
-                prediction.market_exposure_cap - self.market.market_exposure_cap
-            ) > 1e-9:
+            if (
+                prediction.market_exposure_cap is None
+                or not isfinite(prediction.market_exposure_cap)
+                or abs(prediction.market_exposure_cap - self.market.market_exposure_cap) > 1e-9
+            ):
                 raise ValueError("prediction market_exposure_cap does not match market output")
-            if prediction.data_quality_status != "PASS":
-                continue
             if not has_valid_calibration_version(prediction.calibration_version):
                 raise ValueError("formal prediction requires calibrated direction probabilities")
             if not has_calibrated_interval_status(prediction.calibration_status):
@@ -207,6 +226,22 @@ class PredictionSnapshotOutput:
                 )
 
     def to_dict(self) -> dict[str, Any]:
+        decision_counts = {
+            "CANDIDATE": 0,
+            "WATCH": 0,
+            "NO_TRADE": 0,
+            DecisionPolicyStatus.MISSING_REQUIRED_DATA.value: 0,
+            DecisionPolicyStatus.VALIDATION_FAILED.value: 0,
+            "HARD_FAIL": len(self.excluded),
+        }
+        for prediction in self.predictions:
+            if (
+                prediction.decision_policy_status == DecisionPolicyStatus.EVALUATED.value
+                and prediction.decision in {"CANDIDATE", "WATCH", "NO_TRADE"}
+            ):
+                decision_counts[prediction.decision] += 1
+            elif prediction.decision_policy_status in decision_counts:
+                decision_counts[prediction.decision_policy_status] += 1
         payload = {
             "api_contract_version": self.api_contract_version,
             "as_of_date": self.as_of_date.isoformat(),
@@ -216,15 +251,14 @@ class PredictionSnapshotOutput:
             "stale": self.stale,
             "data_quality_hard_fail": self.data_quality_hard_fail,
             "reason_codes": list(self.reason_codes),
+            "decision_counts": decision_counts,
             "market": self.market.to_dict() if self.market is not None else None,
             "predictions": [prediction.to_dict() for prediction in self.predictions],
             "watchlist": [prediction.to_dict() for prediction in self.watchlist],
             "excluded": [security.to_dict() for security in self.excluded],
             "model_version": self.model_version,
             "training_end_date": (
-                self.training_end_date.isoformat()
-                if self.training_end_date is not None
-                else None
+                self.training_end_date.isoformat() if self.training_end_date is not None else None
             ),
             "cost_profile_version": self.cost_profile_version,
             "validation": _json_safe(self.validation, "validation"),

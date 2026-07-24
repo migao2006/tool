@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from src.decision.decision_policy import Decision, DecisionPolicy, DecisionPolicyConfig
+from src.decision.decision_policy import (
+    Decision,
+    DecisionPolicy,
+    DecisionPolicyConfig,
+    DecisionPolicyStatus,
+)
 from src.decision.position_sizing import PositionLimits, allocate_inverse_volatility
 
 
@@ -32,6 +37,7 @@ def valid_row(symbol: str = "2330", rank: int = 1) -> dict[str, object]:
 def test_policy_exposes_all_eight_gates_in_required_order() -> None:
     result = DecisionPolicy().evaluate(valid_row())
     assert result.decision == Decision.CANDIDATE
+    assert result.decision_policy_status == DecisionPolicyStatus.EVALUATED
     assert [gate.gate for gate in result.gates] == [
         "data_quality_hard_gate",
         "tradability_gate",
@@ -51,17 +57,19 @@ def test_high_rank_with_bad_probability_is_no_trade_not_reweighted() -> None:
     row["calibrated_p_down"] = 0.20
     result = DecisionPolicy().evaluate(row)
     assert result.decision == Decision.NO_TRADE
+    assert result.decision_policy_status == DecisionPolicyStatus.EVALUATED
     assert "DIRECTION_THRESHOLD_FAIL" in result.reason_codes
 
 
-def test_uncalibrated_probabilities_and_intervals_are_no_trade() -> None:
+def test_missing_calibration_evidence_is_not_a_no_trade_decision() -> None:
     row = valid_row()
     row["calibration_version"] = "not-trained"
     row["calibration_status"] = "UNCALIBRATED"
 
     result = DecisionPolicy().evaluate(row)
 
-    assert result.decision == Decision.NO_TRADE
+    assert result.decision is None
+    assert result.decision_policy_status == DecisionPolicyStatus.MISSING_REQUIRED_DATA
     assert "DIRECTION_CALIBRATION_MISSING" in result.reason_codes
     assert "QUANTILE_NOT_CALIBRATED" in result.reason_codes
 
@@ -71,8 +79,42 @@ def test_hard_quality_fail_can_never_be_candidate() -> None:
     row["data_quality_status"] = "FAIL"
     row["reason_codes"] = ("DISPOSITION_SECURITY",)
     result = DecisionPolicy().evaluate(row)
-    assert result.decision == Decision.NO_TRADE
+    assert result.decision is None
+    assert result.decision_policy_status == DecisionPolicyStatus.HARD_FAIL
     assert "DISPOSITION_SECURITY" in result.reason_codes
+
+
+def test_missing_market_policy_input_is_not_a_no_trade_decision() -> None:
+    row = valid_row()
+    row["market_exposure_cap"] = None
+
+    result = DecisionPolicy().evaluate(row)
+
+    assert result.decision is None
+    assert result.decision_policy_status == DecisionPolicyStatus.MISSING_REQUIRED_DATA
+    assert "MARKET_EXPOSURE_INPUT_MISSING" in result.reason_codes
+
+
+def test_invalid_probability_vector_is_a_validation_failure() -> None:
+    row = valid_row()
+    row["calibrated_p_up"] = 0.90
+
+    result = DecisionPolicy().evaluate(row)
+
+    assert result.decision is None
+    assert result.decision_policy_status == DecisionPolicyStatus.VALIDATION_FAILED
+    assert "INVALID_CALIBRATED_PROBABILITIES" in result.reason_codes
+
+
+def test_known_non_tradable_security_is_an_evaluated_no_trade() -> None:
+    row = valid_row()
+    row["tradable"] = False
+
+    result = DecisionPolicy().evaluate(row)
+
+    assert result.decision == Decision.NO_TRADE
+    assert result.decision_policy_status == DecisionPolicyStatus.EVALUATED
+    assert "NOT_TRADABLE" in result.reason_codes
 
 
 def test_top_k_uses_global_rank_only() -> None:

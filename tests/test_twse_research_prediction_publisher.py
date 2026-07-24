@@ -132,9 +132,7 @@ def test_publisher_writes_versioned_read_back_verified_oos_snapshot(
     )
 
     payload = json.loads(target.read_text(encoding="utf-8"))
-    assert payload["artifact_contract_version"] == (
-        RESEARCH_PREDICTION_CONTRACT_VERSION
-    )
+    assert payload["artifact_contract_version"] == (RESEARCH_PREDICTION_CONTRACT_VERSION)
     assert payload["system_status"] == "RESEARCH_ONLY"
     assert payload["horizon"] == 5
     assert payload["as_of_date"] == "2026-01-02"
@@ -142,7 +140,8 @@ def test_publisher_writes_versioned_read_back_verified_oos_snapshot(
     assert payload["snapshot_sha256"] == published.snapshot.snapshot_sha256
     assert len(published.artifact_sha256) == 64
     assert [row["symbol"] for row in payload["predictions"]] == ["2317", "2330"]
-    assert "decision" not in payload["predictions"][0]
+    assert payload["predictions"][0]["decision"] is None
+    assert payload["predictions"][0]["decision_policy_status"] == "MISSING_REQUIRED_DATA"
     assert "name" not in payload["predictions"][0]
     assert payload["predictions"][0]["industry"] is None
     assert payload["predictions"][0]["adv20_ntd"] is None

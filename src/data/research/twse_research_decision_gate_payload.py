@@ -28,9 +28,7 @@ def parse_prediction_gates(
     if len(raw_gates) != len(DECISION_GATE_ORDER):
         raise ValueError("research decision gates must contain all eight gates")
     gates = tuple(
-        cast(Mapping[str, object], value)
-        for value in raw_gates
-        if isinstance(value, Mapping)
+        cast(Mapping[str, object], value) for value in raw_gates if isinstance(value, Mapping)
     )
     if len(gates) != len(raw_gates):
         raise ValueError("research decision gates must be JSON objects")
@@ -54,13 +52,9 @@ def parse_prediction_gates(
         try:
             parsed = date.fromisoformat(source_date)
         except ValueError as error:
-            raise ValueError(
-                "research decision gate source_date must use YYYY-MM-DD"
-            ) from error
+            raise ValueError("research decision gate source_date must use YYYY-MM-DD") from error
         if parsed.isoformat() != source_date or parsed > snapshot_date:
             raise ValueError("research decision gate source_date is invalid")
-    if prediction.get("decision") != "NO_TRADE":
-        raise ValueError("research decision gates may only publish NO_TRADE")
     return gates
 
 
@@ -101,6 +95,8 @@ def resolve_gate_rows(
     if gated_count not in {0, len(predictions)}:
         raise ValueError("one research snapshot cannot mix gated and legacy rows")
     return tuple(resolved)
+
+
 __all__ = [
     "GATE_ENVELOPE_VERSION",
     "parse_prediction_gates",

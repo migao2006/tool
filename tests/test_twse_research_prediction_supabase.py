@@ -118,6 +118,7 @@ def _payload(
     evaluation_scope: str = "OUT_OF_SAMPLE_TEST",
     model_bundle_sha256: str | None = None,
     include_gates: bool = False,
+    legacy_policy_contract: bool = False,
 ) -> dict[str, object]:
     prediction = {
         "symbol": "2330",
@@ -147,10 +148,14 @@ def _payload(
         "estimated_round_trip_cost": 0.006,
         "latest_available_at": "2026-01-02T06:00:00+00:00",
         "data_quality_status": "WARN",
+        "decision": None,
+        "decision_policy_status": "MISSING_REQUIRED_DATA",
         "reason_codes": ["TWSE_PRICE_ONLY_RESEARCH"],
     }
-    if include_gates:
+    if legacy_policy_contract:
         prediction["decision"] = "NO_TRADE"
+        del prediction["decision_policy_status"]
+    if include_gates:
         prediction["gates"] = [
             {
                 "gate": gate,
@@ -267,9 +272,7 @@ class _TpexWriter(_Writer):
         limit: int = 1_000,
     ) -> list[dict[str, object]]:
         if table != "securities":
-            return super().select_rows(
-                table, select=select, filters=filters, limit=limit
-            )
+            return super().select_rows(table, select=select, filters=filters, limit=limit)
         assert filters is not None
         assert filters["market"] == "eq.TPEX"
         return [
@@ -301,21 +304,186 @@ def test_staging_publish_is_conservative_and_idempotent() -> None:
     stock = cast(list[dict[str, object]], parameters["p_stock_predictions"])[0]
     assert run["system_validation_status"] == "RESEARCH_ONLY"
     assert run["candidate_count"] == 0
-    assert run["no_trade_count"] == 1
+    assert run["no_trade_count"] == 0
+    assert run["policy_input_missing_count"] == 1
+    assert run["policy_validation_failed_count"] == 0
+    assert run["policy_hard_fail_count"] == 0
     assert run["hard_fail_count"] == 0
     assert run["model_bundle_version"] == ("twse-price-research-h5-v1:oos-research")
     source_dates = cast(dict[str, object], run["source_dates"])
     assert source_dates["prediction_scope"] == "OUT_OF_SAMPLE_TEST"
     assert source_dates["feature_snapshot"] == "b" * 64
     assert source_dates["decision_gate_count"] == 0
-    assert source_dates["decision_gate_attachment_contract"] == (
-        "research-decision-gate.v1"
-    )
+    assert source_dates["decision_gate_attachment_contract"] == ("research-decision-gate.v1")
+    assert stock["decision"] is None
+    assert stock["decision_policy_status"] == "MISSING_REQUIRED_DATA"
+    assert stock["data_quality_status"] == "WARN"
+    assert "RESEARCH_DATA_QUALITY_WARN" in cast(list[object], stock["reason_codes"])
+
+
+def test_unclassified_legacy_no_trade_is_fail_closed_as_validation() -> None:
+    writer = _Writer()
+
+    _ = TwseResearchPredictionSupabasePublisher(
+        writer,
+        target_environment="staging",
+        publish_enabled=True,
+    ).publish(_payload(legacy_policy_contract=True))
+
+    _, parameters = writer.rpc_calls[0]
+    run = cast(dict[str, object], parameters["p_run"])
+    stock = cast(list[dict[str, object]], parameters["p_stock_predictions"])[0]
+    assert run["no_trade_count"] == 0
+    assert run["policy_input_missing_count"] == 0
+    assert run["policy_validation_failed_count"] == 1
+    assert stock["decision"] is None
+    assert stock["decision_policy_status"] == "VALIDATION_FAILED"
+    assert "DECISION_POLICY_VALIDATION_FAILED" in cast(list[object], stock["reason_codes"])
+
+
+def test_evaluated_research_action_requires_pass_quality_and_gate_evidence() -> None:
+    payload = _payload(include_gates=True)
+    prediction = cast(list[dict[str, object]], payload["predictions"])[0]
+    prediction["decision"] = "NO_TRADE"
+    prediction["decision_policy_status"] = "EVALUATED"
+    gates = cast(list[dict[str, object]], prediction["gates"])
+    for gate in gates:
+        gate["source_date"] = "2026-01-02"
+    payload["snapshot_sha256"] = sha256(
+        json.dumps(
+            {key: value for key, value in payload.items() if key != "snapshot_sha256"},
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
+
+    with pytest.raises(ValueError, match="requires PASS data quality"):
+        _ = TwseResearchPredictionSupabasePublisher(
+            _Writer(),
+            target_environment="staging",
+            publish_enabled=True,
+        ).publish(payload)
+
+    prediction["data_quality_status"] = "PASS"
+    payload["snapshot_sha256"] = sha256(
+        json.dumps(
+            {key: value for key, value in payload.items() if key != "snapshot_sha256"},
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
+    writer = _Writer()
+    _ = TwseResearchPredictionSupabasePublisher(
+        writer,
+        target_environment="staging",
+        publish_enabled=True,
+    ).publish(payload)
+
+    _, parameters = writer.rpc_calls[0]
+    run = cast(dict[str, object], parameters["p_run"])
+    stock = cast(list[dict[str, object]], parameters["p_stock_predictions"])[0]
+    assert run["no_trade_count"] == 1
+    assert run["policy_validation_failed_count"] == 0
     assert stock["decision"] == "NO_TRADE"
-    assert stock["data_quality_status"] == "FAIL"
-    assert "RESEARCH_ONLY_NO_FORMAL_DECISION_POLICY" in cast(
-        list[object], stock["reason_codes"]
-    )
+    assert stock["decision_policy_status"] == "EVALUATED"
+
+
+def test_hard_fail_status_and_quality_are_published_without_collapsing() -> None:
+    writer = _Writer()
+    payload = _payload()
+    prediction = cast(list[dict[str, object]], payload["predictions"])[0]
+    prediction["data_quality_status"] = "HARD_FAIL"
+    prediction["decision"] = None
+    prediction["decision_policy_status"] = "HARD_FAIL"
+    prediction["reason_codes"] = ["DUPLICATE_CANONICAL_BAR"]
+    payload["snapshot_sha256"] = sha256(
+        json.dumps(
+            {key: value for key, value in payload.items() if key != "snapshot_sha256"},
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
+
+    _ = TwseResearchPredictionSupabasePublisher(
+        writer,
+        target_environment="staging",
+        publish_enabled=True,
+    ).publish(payload)
+
+    _, parameters = writer.rpc_calls[0]
+    run = cast(dict[str, object], parameters["p_run"])
+    stock = cast(list[dict[str, object]], parameters["p_stock_predictions"])[0]
+    assert run["policy_hard_fail_count"] == 1
+    assert run["hard_fail_count"] == 1
+    assert run["no_trade_count"] == 0
+    assert stock["decision"] is None
+    assert stock["decision_policy_status"] == "HARD_FAIL"
+    assert stock["data_quality_status"] == "HARD_FAIL"
+    assert "DUPLICATE_CANONICAL_BAR" in cast(list[object], stock["reason_codes"])
+
+
+def test_legacy_hard_fail_quality_is_not_reclassified_as_missing() -> None:
+    writer = _Writer()
+    payload = _payload(legacy_policy_contract=True)
+    prediction = cast(list[dict[str, object]], payload["predictions"])[0]
+    prediction["data_quality_status"] = "HARD_FAIL"
+    prediction["decision"] = "NO_TRADE"
+    prediction["reason_codes"] = ["DUPLICATE_CANONICAL_BAR"]
+    payload["snapshot_sha256"] = sha256(
+        json.dumps(
+            {key: value for key, value in payload.items() if key != "snapshot_sha256"},
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
+
+    _ = TwseResearchPredictionSupabasePublisher(
+        writer,
+        target_environment="staging",
+        publish_enabled=True,
+    ).publish(payload)
+
+    _, parameters = writer.rpc_calls[0]
+    run = cast(dict[str, object], parameters["p_run"])
+    stock = cast(list[dict[str, object]], parameters["p_stock_predictions"])[0]
+    assert run["policy_input_missing_count"] == 0
+    assert run["policy_hard_fail_count"] == 1
+    assert stock["decision"] is None
+    assert stock["decision_policy_status"] == "HARD_FAIL"
+    assert stock["data_quality_status"] == "HARD_FAIL"
+    assert "DATA_QUALITY_HARD_FAIL" in cast(list[object], stock["reason_codes"])
+
+
+def test_hard_fail_status_and_quality_mismatch_is_rejected_before_write() -> None:
+    writer = _Writer()
+    payload = _payload()
+    prediction = cast(list[dict[str, object]], payload["predictions"])[0]
+    prediction["decision_policy_status"] = "HARD_FAIL"
+    payload["snapshot_sha256"] = sha256(
+        json.dumps(
+            {key: value for key, value in payload.items() if key != "snapshot_sha256"},
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
+
+    with pytest.raises(
+        ValueError,
+        match="HARD_FAIL policy status and research data quality must agree",
+    ):
+        _ = TwseResearchPredictionSupabasePublisher(
+            writer,
+            target_environment="staging",
+            publish_enabled=True,
+        ).publish(payload)
+
+    assert writer.upserts == []
+    assert writer.rpc_calls == []
 
 
 def test_gated_research_snapshot_persists_all_eight_verified_gate_rows() -> None:
@@ -341,9 +509,7 @@ def test_gated_research_snapshot_persists_all_eight_verified_gate_rows() -> None
     assert source_dates["decision_gate_count"] == 8
     assert source_dates["snapshot_sha256"] == first_actual["attachment_snapshot_sha256"]
     stock = cast(list[dict[str, object]], parameters["p_stock_predictions"])[0]
-    assert "RESEARCH_ONLY_NO_FORMAL_DECISION_POLICY" in cast(
-        list[object], stock["reason_codes"]
-    )
+    assert "REQUIRED_DECISION_POLICY_DATA_MISSING" not in cast(list[object], stock["reason_codes"])
 
 
 def test_gate_attachment_verification_respects_database_numeric_scales() -> None:
@@ -418,16 +584,12 @@ def test_legacy_snapshot_metadata_does_not_change_cost_profile_identity() -> Non
         publish_enabled=True,
     )
     _ = publisher.publish(_payload())
-    writer.cost_profiles["cost-v1"]["parameters"] = {
-        "research_snapshot_sha256": "a" * 64
-    }
+    writer.cost_profiles["cost-v1"]["parameters"] = {"research_snapshot_sha256": "a" * 64}
 
     _ = publisher.publish(_payload())
 
     assert len(writer.rpc_calls) == 2
-    assert writer.cost_profiles["cost-v1"]["parameters"] == {
-        "research_snapshot_sha256": "a" * 64
-    }
+    assert writer.cost_profiles["cost-v1"]["parameters"] == {"research_snapshot_sha256": "a" * 64}
 
 
 def test_cost_profile_parameter_mismatch_fails_closed_before_snapshot_rpc() -> None:
@@ -483,7 +645,7 @@ def test_production_publish_requires_a_second_explicit_gate() -> None:
         )
 
 
-def test_explicit_production_research_publish_remains_no_trade() -> None:
+def test_explicit_production_research_publish_remains_fail_closed() -> None:
     writer = _Writer()
     result = TwseResearchPredictionSupabasePublisher(
         writer,
@@ -498,10 +660,10 @@ def test_explicit_production_research_publish_remains_no_trade() -> None:
     stock = cast(list[dict[str, object]], parameters["p_stock_predictions"])[0]
     assert run["system_validation_status"] == "RESEARCH_ONLY"
     assert run["candidate_count"] == 0
-    assert stock["decision"] == "NO_TRADE"
-    assert "RESEARCH_ONLY_NO_FORMAL_DECISION_POLICY" in cast(
-        list[object], stock["reason_codes"]
-    )
+    assert run["no_trade_count"] == 0
+    assert run["policy_input_missing_count"] == 1
+    assert stock["decision"] is None
+    assert stock["decision_policy_status"] == "MISSING_REQUIRED_DATA"
 
 
 def test_publish_gate_is_disabled_by_default() -> None:
@@ -521,9 +683,7 @@ def test_publish_gate_is_disabled_by_default() -> None:
         ("RETROSPECTIVE_RESEARCH_INFERENCE", "retrospective-research"),
     ],
 )
-def test_supported_scopes_use_semantic_bundle_identity(
-    scope: str, version_part: str
-) -> None:
+def test_supported_scopes_use_semantic_bundle_identity(scope: str, version_part: str) -> None:
     writer = _Writer()
     bundle_hash = "c" * 64
     payload = _payload(
@@ -549,9 +709,7 @@ def test_supported_scopes_use_semantic_bundle_identity(
 def test_invalid_snapshot_is_rejected_before_any_database_write() -> None:
     writer = _Writer()
     payload = _payload()
-    cast(list[dict[str, object]], payload["predictions"])[0]["decision_date"] = (
-        "2026-01-03"
-    )
+    cast(list[dict[str, object]], payload["predictions"])[0]["decision_date"] = "2026-01-03"
     payload["snapshot_sha256"] = sha256(
         json.dumps(
             {key: value for key, value in payload.items() if key != "snapshot_sha256"},

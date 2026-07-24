@@ -22,8 +22,12 @@ X-Alpha-Lens-Contract: prediction-snapshot.v1
 - Stored snapshot 無法套用 request-time 研究設定；收到設定 query 時回 `422`，
   避免把未重新計算的資料冒充為新成本情境。
 - Hard-fail 股票不會出現在 `predictions`，只會出現在 `excluded`。
-- 具有完整研究警告標記的 `RESEARCH_ONLY` 列會公開為 `WARN`，維持
-  `NO_TRADE`，不會被誤列為 hard fail；沒有標記的 `FAIL` 仍會排除。
+- 具有完整研究警告標記的 `RESEARCH_ONLY` 列會公開為 `WARN`，維持 可稽核 reason
+  codes；若缺少必要政策輸入，會公開為
+  `decision_policy_status=MISSING_REQUIRED_DATA`、`decision=null`，不會被誤列為
+  有效 `NO_TRADE` 或 hard fail。沒有研究警告標記的 legacy `FAIL` 仍會排除。
+- `NO_TRADE` 只代表 `EVALUATED` 的完整政策評估決定不進場。 `decision_counts`
+  分別統計三種動作、缺資料、驗證失敗與 hard fail，總和必須與 實際發布列一致。
 - 個股排除不會把 envelope 的 `data_quality_hard_fail` 設為
   `true`；該欄位只保留給 無法形成整體快照的系統級品質失敗，而 manifest
   不一致會直接回 `409`。

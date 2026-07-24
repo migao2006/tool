@@ -4,7 +4,7 @@ from datetime import date, datetime, timezone
 import pytest
 
 from src.api.market_output import MarketOutput
-from src.api.prediction_output import StockPredictionOutput
+from src.api.prediction_output import DecisionGateOutput, StockPredictionOutput
 from src.config import load_mvp_config
 from src.core.horizon import require_production_horizon, require_supported_horizon
 from src.features import load_feature_catalog
@@ -122,6 +122,26 @@ def _prediction(**overrides: float) -> StockPredictionOutput:
     }
     values.update(overrides)
     decision_at = datetime(2026, 1, 2, 10, tzinfo=timezone.utc)
+    gates = tuple(
+        DecisionGateOutput(
+            gate=name,
+            passed=True,
+            actual="PASS",
+            threshold="PASS",
+            reason_code="PASS",
+            source_date=date(2026, 1, 2),
+        )
+        for name in (
+            "data_quality_hard_gate",
+            "tradability_gate",
+            "liquidity_capacity_gate",
+            "market_exposure_cap",
+            "calibrated_direction_probabilities",
+            "net_quantile_thresholds",
+            "rank_eligibility",
+            "position_capacity_limits",
+        )
+    )
     return StockPredictionOutput(
         as_of_date=date(2026, 1, 2),
         decision_at=decision_at,
@@ -154,11 +174,13 @@ def _prediction(**overrides: float) -> StockPredictionOutput:
         estimated_round_trip_cost=0.006,
         data_quality_status="PASS",
         decision="WATCH",
-        reason_codes=("RESEARCH_ONLY",),
+        decision_policy_status="EVALUATED",
+        reason_codes=("RESEARCH_ONLY", "OUTSIDE_TOP_K"),
         model_version="bundle-v1",
         feature_schema_hash="schema-hash",
         cost_profile_version="tw_stock_swing_v1",
         training_end_date=date(2025, 12, 31),
         source_dates={"daily_bars": "2026-01-02"},
         latest_available_at=decision_at,
+        gates=gates,
     )

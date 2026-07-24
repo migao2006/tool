@@ -77,6 +77,7 @@ def _prediction() -> StockPredictionOutput:
         estimated_round_trip_cost=0.01,
         data_quality_status="PASS",
         decision="CANDIDATE",
+        decision_policy_status="EVALUATED",
         reason_codes=(),
         model_version="rank-5d-v1",
         feature_schema_hash="schema-sha256-v1",
@@ -147,29 +148,104 @@ def test_snapshot_serializes_the_versioned_frontend_contract() -> None:
     assert payload["predictions"][0]["gates"][0]["gate"] == "data_quality_hard_gate"
     assert payload["predictions"][0]["gates"][0]["source_date"] == "2026-07-17"
     assert payload["excluded"][0]["data_quality_hard_fail"] is True
+    assert payload["excluded"][0]["decision"] is None
+    assert payload["excluded"][0]["decision_policy_status"] == "HARD_FAIL"
+    assert payload["decision_counts"] == {
+        "CANDIDATE": 1,
+        "WATCH": 0,
+        "NO_TRADE": 0,
+        "MISSING_REQUIRED_DATA": 0,
+        "VALIDATION_FAILED": 0,
+        "HARD_FAIL": 1,
+    }
     json.dumps(payload, ensure_ascii=False, allow_nan=False)
 
 
-def test_pass_snapshot_rejects_missing_detail_contract_or_non_finite_metrics() -> None:
-    prediction = _prediction()
-    incomplete = StockPredictionOutput(
+def test_missing_policy_data_serializes_without_a_no_trade_decision() -> None:
+    missing = StockPredictionOutput(
         **{
-            **prediction.__dict__,
-            "gates": (),
+            **_prediction().__dict__,
+            "decision": None,
+            "decision_policy_status": "MISSING_REQUIRED_DATA",
+            "reason_codes": ("FORMAL_MARKET_EXPOSURE_INPUT_MISSING",),
         }
     )
-    with pytest.raises(ValueError, match="missing API detail fields"):
+    payload = PredictionSnapshotOutput(
+        as_of_date=AS_OF_DATE,
+        decision_at=DECISION_AT,
+        horizon=5,
+        system_status="RESEARCH_ONLY",
+        predictions=(missing,),
+        reason_codes=("MARKET_POLICY_DATA_UNAVAILABLE",),
+    ).to_dict()
+
+    assert payload["predictions"][0]["decision"] is None
+    assert payload["predictions"][0]["decision_policy_status"] == "MISSING_REQUIRED_DATA"
+    assert payload["decision_counts"]["NO_TRADE"] == 0
+    assert payload["decision_counts"]["MISSING_REQUIRED_DATA"] == 1
+    assert payload["market"] is None
+
+
+def test_hard_fail_quality_and_policy_status_must_agree() -> None:
+    with pytest.raises(ValueError, match="must agree"):
+        StockPredictionOutput(
+            **{
+                **_prediction().__dict__,
+                "decision": None,
+                "decision_policy_status": "MISSING_REQUIRED_DATA",
+                "data_quality_status": "HARD_FAIL",
+            }
+        )
+
+
+def test_pass_snapshot_rejects_unevaluated_policy_rows() -> None:
+    missing = StockPredictionOutput(
+        **{
+            **_prediction().__dict__,
+            "decision": None,
+            "decision_policy_status": "MISSING_REQUIRED_DATA",
+            "data_quality_status": "WARN",
+            "reason_codes": ("FORMAL_MARKET_EXPOSURE_INPUT_MISSING",),
+        }
+    )
+    with pytest.raises(ValueError, match="evaluated policy evidence"):
         PredictionSnapshotOutput(
             as_of_date=AS_OF_DATE,
             decision_at=DECISION_AT,
             horizon=5,
             system_status="PASS",
             market=_market(),
-            predictions=(incomplete,),
+            predictions=(missing,),
             model_version="rank-5d-v1",
             training_end_date=TRAINING_END_DATE,
             cost_profile_version="tw-stock-base-v1",
             validation={"ndcg_10": 0.42},
+        )
+
+
+def test_pass_snapshot_requires_a_non_empty_prediction_universe() -> None:
+    with pytest.raises(ValueError, match="non-empty prediction universe"):
+        PredictionSnapshotOutput(
+            as_of_date=AS_OF_DATE,
+            decision_at=DECISION_AT,
+            horizon=5,
+            system_status="PASS",
+            market=_market(),
+            model_version="rank-5d-v1",
+            training_end_date=TRAINING_END_DATE,
+            cost_profile_version="tw-stock-base-v1",
+            validation={"ndcg_10": 0.42},
+        )
+
+
+def test_pass_snapshot_rejects_missing_detail_contract_or_non_finite_metrics() -> None:
+    prediction = _prediction()
+    with pytest.raises(ValueError, match="requires all decision gates"):
+        StockPredictionOutput(
+            **{
+                **prediction.__dict__,
+                "gates": (),
+            }
         )
 
     with pytest.raises(ValueError, match="NaN or infinity"):
@@ -235,3 +311,154 @@ def test_candidate_output_rejects_failed_decision_gate() -> None:
     )
     with pytest.raises(ValueError, match="failed decision gate"):
         StockPredictionOutput(**{**prediction.__dict__, "gates": failed_gates})
+
+
+def test_evaluated_policy_requires_pass_data_quality() -> None:
+    prediction = _prediction()
+
+    with pytest.raises(ValueError, match="requires PASS data quality"):
+        StockPredictionOutput(
+            **{
+                **prediction.__dict__,
+                "data_quality_status": "WARN",
+            }
+        )
+
+
+def test_watch_and_no_trade_actions_match_gate_evidence() -> None:
+    prediction = _prediction()
+    failed_gates = (
+        *prediction.gates[:-1],
+        DecisionGateOutput(
+            gate="position_capacity_limits",
+            passed=False,
+            actual=False,
+            threshold=True,
+            reason_code="POSITION_LIMIT_FAIL",
+            source_date=AS_OF_DATE,
+        ),
+    )
+
+    watch = StockPredictionOutput(
+        **{
+            **prediction.__dict__,
+            "decision": "WATCH",
+            "reason_codes": ("OUTSIDE_TOP_K",),
+        }
+    )
+    no_trade = StockPredictionOutput(
+        **{
+            **prediction.__dict__,
+            "decision": "NO_TRADE",
+            "reason_codes": ("POSITION_LIMIT_FAIL",),
+            "gates": failed_gates,
+        }
+    )
+    assert watch.decision == "WATCH"
+    assert no_trade.decision == "NO_TRADE"
+
+    with pytest.raises(ValueError, match="NO_TRADE requires"):
+        StockPredictionOutput(
+            **{
+                **prediction.__dict__,
+                "decision": "NO_TRADE",
+            }
+        )
+    with pytest.raises(ValueError, match="WATCH cannot contain"):
+        StockPredictionOutput(
+            **{
+                **prediction.__dict__,
+                "decision": "WATCH",
+                "reason_codes": ("OUTSIDE_TOP_K",),
+                "gates": failed_gates,
+            }
+        )
+    with pytest.raises(ValueError, match="WATCH requires OUTSIDE_TOP_K"):
+        StockPredictionOutput(
+            **{
+                **prediction.__dict__,
+                "decision": "WATCH",
+            }
+        )
+
+
+def test_evaluated_policy_requires_complete_dated_gate_evidence() -> None:
+    prediction = _prediction()
+    missing_actual = (
+        DecisionGateOutput(
+            **{
+                **prediction.gates[0].__dict__,
+                "actual": None,
+            }
+        ),
+        *prediction.gates[1:],
+    )
+    with pytest.raises(ValueError, match="actual, threshold, and source_date"):
+        StockPredictionOutput(
+            **{
+                **prediction.__dict__,
+                "decision": "NO_TRADE",
+                "gates": missing_actual,
+            }
+        )
+
+    future_source = (
+        DecisionGateOutput(
+            **{
+                **prediction.gates[0].__dict__,
+                "source_date": date(2026, 7, 18),
+            }
+        ),
+        *prediction.gates[1:],
+    )
+    with pytest.raises(ValueError, match="cannot exceed as_of_date"):
+        StockPredictionOutput(
+            **{
+                **prediction.__dict__,
+                "decision": "NO_TRADE",
+                "gates": future_source,
+            }
+        )
+
+
+def test_snapshot_requires_hard_fail_rows_in_excluded() -> None:
+    prediction = _prediction()
+    hard_fail = StockPredictionOutput(
+        **{
+            **prediction.__dict__,
+            "decision": None,
+            "decision_policy_status": "HARD_FAIL",
+            "data_quality_status": "HARD_FAIL",
+            "reason_codes": ("DATA_QUALITY_HARD_FAIL",),
+        }
+    )
+    with pytest.raises(ValueError, match="published through excluded"):
+        PredictionSnapshotOutput(
+            as_of_date=AS_OF_DATE,
+            decision_at=DECISION_AT,
+            horizon=5,
+            system_status="RESEARCH_ONLY",
+            predictions=(hard_fail,),
+        )
+
+
+def test_snapshot_rejects_included_excluded_security_overlap() -> None:
+    prediction = _prediction()
+    excluded = ExcludedSecurityOutput(
+        as_of_date=AS_OF_DATE,
+        symbol=prediction.symbol,
+        name=prediction.name,
+        market=prediction.market,
+        horizon=5,
+        reason_codes=("DATA_QUALITY_HARD_FAIL",),
+    )
+
+    with pytest.raises(ValueError, match="must be disjoint"):
+        PredictionSnapshotOutput(
+            as_of_date=AS_OF_DATE,
+            decision_at=DECISION_AT,
+            horizon=5,
+            system_status="RESEARCH_ONLY",
+            predictions=(prediction,),
+            excluded=(excluded,),
+        )

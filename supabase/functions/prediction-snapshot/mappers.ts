@@ -1,6 +1,8 @@
 import type {
   DataQualityAuditRow,
+  Decision,
   DecisionGateRow,
+  DecisionPolicyStatus,
   JsonRecord,
   JsonValue,
   MarketPredictionRow,
@@ -18,7 +20,15 @@ import {
 
 const RESEARCH_DATA_QUALITY_WARNING = "RESEARCH_DATA_QUALITY_WARN";
 const LEGACY_NO_POLICY_REASON = "RESEARCH_ONLY_NO_FORMAL_DECISION_POLICY";
+const REQUIRED_POLICY_DATA_MISSING = "REQUIRED_DECISION_POLICY_DATA_MISSING";
 const RESEARCH_GATE_ENVELOPE_VERSION = "research-decision-gate.v1";
+const DECISIONS = new Set<Decision>(["CANDIDATE", "WATCH", "NO_TRADE"]);
+const POLICY_STATUSES = new Set<DecisionPolicyStatus>([
+  "EVALUATED",
+  "MISSING_REQUIRED_DATA",
+  "VALIDATION_FAILED",
+  "HARD_FAIL",
+]);
 const COST_PROFILES = new Set([
   "low_cost",
   "base_cost",
@@ -43,6 +53,12 @@ export function resolvePublicDataQuality(
       : { status: "PASS", hardFail: false };
   }
 
+  if (prediction.data_quality_status === "HARD_FAIL") {
+    return { status: "HARD_FAIL", hardFail: true };
+  }
+  if (prediction.data_quality_status === "WARN") {
+    return { status: "WARN", hardFail: false };
+  }
   const researchWarning = run.system_validation_status === "RESEARCH_ONLY" &&
     prediction.data_quality_status === "FAIL" &&
     prediction.reason_codes.includes(RESEARCH_DATA_QUALITY_WARNING);
@@ -50,6 +66,65 @@ export function resolvePublicDataQuality(
   return prediction.data_quality_status === "FAIL"
     ? { status: "HARD_FAIL", hardFail: true }
     : { status: "PASS", hardFail: false };
+}
+
+export interface PublicDecisionPolicy {
+  decision: Decision | null;
+  status: DecisionPolicyStatus;
+}
+
+function isMissingPolicyReason(reason: string): boolean {
+  return reason === LEGACY_NO_POLICY_REASON ||
+    reason === REQUIRED_POLICY_DATA_MISSING ||
+    reason.endsWith("_INPUT_MISSING") ||
+    reason.includes("SOURCE_DATE_MISSING");
+}
+
+export function resolvePublicDecisionPolicy(
+  run: PredictionRunRow,
+  prediction: StockPredictionRow,
+  quality: PublicDataQuality,
+  gates: JsonRecord[],
+): PublicDecisionPolicy {
+  if (quality.hardFail) return { decision: null, status: "HARD_FAIL" };
+
+  const suppliedStatus = prediction.decision_policy_status ?? null;
+  if (suppliedStatus !== null && !POLICY_STATUSES.has(suppliedStatus)) {
+    return { decision: null, status: "VALIDATION_FAILED" };
+  }
+  if (suppliedStatus !== null) {
+    if (
+      suppliedStatus === "EVALUATED" &&
+      prediction.decision !== null &&
+      DECISIONS.has(prediction.decision)
+    ) {
+      return { decision: prediction.decision, status: suppliedStatus };
+    }
+    if (
+      suppliedStatus !== "EVALUATED" &&
+      prediction.decision === null
+    ) {
+      return { decision: null, status: suppliedStatus };
+    }
+    return { decision: null, status: "VALIDATION_FAILED" };
+  }
+
+  const gateReasons = gates.map((gate) =>
+    typeof gate.reason_code === "string" ? gate.reason_code : ""
+  );
+  if (
+    prediction.reason_codes.some(isMissingPolicyReason) ||
+    gateReasons.some(isMissingPolicyReason)
+  ) {
+    return { decision: null, status: "MISSING_REQUIRED_DATA" };
+  }
+  if (run.system_validation_status === "RESEARCH_ONLY") {
+    return { decision: null, status: "VALIDATION_FAILED" };
+  }
+  if (prediction.decision !== null && DECISIONS.has(prediction.decision)) {
+    return { decision: prediction.decision, status: "EVALUATED" };
+  }
+  return { decision: null, status: "VALIDATION_FAILED" };
 }
 
 function numberValue(value: JsonValue): number | null {
@@ -133,6 +208,12 @@ export function mapPrediction(
 ): JsonRecord {
   const quality = resolvePublicDataQuality(run, prediction, audit);
   const mappedGates = mapGates(gates);
+  const policy = resolvePublicDecisionPolicy(
+    run,
+    prediction,
+    quality,
+    mappedGates,
+  );
   const predictionReasons = mappedGates.length > 0
     ? prediction.reason_codes.filter((reason) =>
       reason !== LEGACY_NO_POLICY_REASON
@@ -188,7 +269,8 @@ export function mapPrediction(
     ),
     data_quality_status: quality.status,
     data_quality_hard_fail: quality.hardFail,
-    decision: prediction.decision,
+    decision: policy.decision,
+    decision_policy_status: policy.status,
     reason_codes: [
       ...new Set([
         ...predictionReasons,

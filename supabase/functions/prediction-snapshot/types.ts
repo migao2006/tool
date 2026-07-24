@@ -8,6 +8,12 @@ export type JsonValue =
 
 export type JsonRecord = Record<string, JsonValue>;
 export type MarketScope = "TWSE" | "TPEX";
+export type Decision = "CANDIDATE" | "WATCH" | "NO_TRADE";
+export type DecisionPolicyStatus =
+  | "EVALUATED"
+  | "MISSING_REQUIRED_DATA"
+  | "VALIDATION_FAILED"
+  | "HARD_FAIL";
 
 export interface PredictionRunRow extends JsonRecord {
   prediction_run_id: number;
@@ -25,6 +31,9 @@ export interface PredictionRunRow extends JsonRecord {
   candidate_count: number;
   watch_count: number;
   no_trade_count: number;
+  policy_input_missing_count: number | null;
+  policy_validation_failed_count: number | null;
+  policy_hard_fail_count: number | null;
   hard_fail_count: number;
   created_at: string;
 }
@@ -59,8 +68,9 @@ export interface StockPredictionRow extends JsonRecord {
   market_regime: string | null;
   market_exposure_cap: number | string | null;
   estimated_round_trip_cost: number | string;
-  data_quality_status: "PASS" | "FAIL";
-  decision: "CANDIDATE" | "WATCH" | "NO_TRADE";
+  data_quality_status: "PASS" | "WARN" | "FAIL" | "HARD_FAIL";
+  decision: Decision | null;
+  decision_policy_status: DecisionPolicyStatus | null;
   reason_codes: string[];
 }
 

@@ -11,12 +11,13 @@ from src.calibration.status import (
     has_valid_calibration_version,
 )
 from src.core.horizon import require_supported_horizon
-from src.decision.decision_policy import DECISION_GATE_ORDER
+from src.decision.decision_policy import DECISION_GATE_ORDER, DecisionPolicyStatus
 
 
 DECISIONS = {"CANDIDATE", "WATCH", "NO_TRADE"}
 MARKETS = {"LISTED", "OTC"}
-DATA_QUALITY_STATUSES = {"PASS", "FAIL"}
+DATA_QUALITY_STATUSES = {"PASS", "WARN", "HARD_FAIL"}
+DECISION_POLICY_STATUSES = {status.value for status in DecisionPolicyStatus}
 
 
 def _require_text(value: str, field_name: str) -> None:
@@ -87,10 +88,11 @@ class StockPredictionOutput:
     forecast_volatility: float | None
     downside_risk: float | None
     market_regime: str | None
-    market_exposure_cap: float
+    market_exposure_cap: float | None
     estimated_round_trip_cost: float
     data_quality_status: str
-    decision: str
+    decision: str | None
+    decision_policy_status: str
     reason_codes: tuple[str, ...]
     model_version: str
     feature_schema_hash: str
@@ -127,16 +129,23 @@ class StockPredictionOutput:
             raise ValueError("ordinary-stock output market must be LISTED or OTC")
         if self.asset_type != "STOCK":
             raise ValueError("ordinary-stock output asset_type must be STOCK")
-        if self.decision not in DECISIONS:
-            raise ValueError(f"unsupported decision: {self.decision}")
+        if self.decision_policy_status not in DECISION_POLICY_STATUSES:
+            raise ValueError(f"unsupported decision policy status: {self.decision_policy_status}")
+        if (
+            self.decision_policy_status == DecisionPolicyStatus.EVALUATED.value
+            and self.decision not in DECISIONS
+        ):
+            raise ValueError("evaluated decision policy requires a decision")
+        if (
+            self.decision_policy_status != DecisionPolicyStatus.EVALUATED.value
+            and self.decision is not None
+        ):
+            raise ValueError("unevaluated decision policy cannot emit a decision")
         if not isfinite(self.rank_score) or not 0 <= self.rank_score <= 100:
             raise ValueError("Rank Score must be a 0-100 cross-sectional percentile")
         if self.global_rank < 1:
             raise ValueError("global_rank must be positive")
-        if (
-            not isfinite(self.global_rank_percentile)
-            or not 0 <= self.global_rank_percentile <= 1
-        ):
+        if not isfinite(self.global_rank_percentile) or not 0 <= self.global_rank_percentile <= 1:
             raise ValueError("global_rank_percentile must be within [0, 1]")
         if self.industry_rank is not None and self.industry_rank < 1:
             raise ValueError("industry_rank must be positive when provided")
@@ -150,9 +159,7 @@ class StockPredictionOutput:
             self.calibrated_p_neutral,
             self.calibrated_p_down,
         )
-        if any(
-            not isfinite(value) or value < 0 or value > 1 for value in probabilities
-        ):
+        if any(not isfinite(value) or value < 0 or value > 1 for value in probabilities):
             raise ValueError("calibrated probabilities must be within [0, 1]")
         if not isclose(sum(probabilities), 1.0, abs_tol=1e-6):
             raise ValueError("calibrated probabilities must sum to 1")
@@ -176,18 +183,12 @@ class StockPredictionOutput:
             abs_tol=1e-9,
         ):
             raise ValueError("interval_width must equal net_q90 - net_q10")
-        if (
-            not isfinite(self.market_exposure_cap)
-            or not 0 <= self.market_exposure_cap <= 1
+        if self.market_exposure_cap is not None and (
+            not isfinite(self.market_exposure_cap) or not 0 <= self.market_exposure_cap <= 1
         ):
             raise ValueError("market_exposure_cap must be within [0, 1]")
-        if (
-            not isfinite(self.estimated_round_trip_cost)
-            or self.estimated_round_trip_cost < 0
-        ):
-            raise ValueError(
-                "estimated_round_trip_cost must be finite and non-negative"
-            )
+        if not isfinite(self.estimated_round_trip_cost) or self.estimated_round_trip_cost < 0:
+            raise ValueError("estimated_round_trip_cost must be finite and non-negative")
         for field_name, value in (
             ("forecast_volatility", self.forecast_volatility),
             ("downside_risk", self.downside_risk),
@@ -204,32 +205,49 @@ class StockPredictionOutput:
                 raise ValueError(f"{field_name} must be within [0, 1]")
         if self.previous_global_rank is not None and self.previous_global_rank < 1:
             raise ValueError("previous_global_rank must be positive when provided")
-        if (
-            self.previous_decision is not None
-            and self.previous_decision not in DECISIONS
-        ):
+        if self.previous_decision is not None and self.previous_decision not in DECISIONS:
             raise ValueError("previous_decision is invalid")
         if any(not isinstance(gate, DecisionGateOutput) for gate in self.gates):
             raise TypeError("gates must contain DecisionGateOutput values")
-        if (
-            self.gates
-            and tuple(gate.gate for gate in self.gates) != DECISION_GATE_ORDER
-        ):
+        if self.gates and tuple(gate.gate for gate in self.gates) != DECISION_GATE_ORDER:
             raise ValueError("gates must follow the complete decision policy order")
-        if (
-            self.decision == "CANDIDATE"
-            and self.gates
-            and any(not gate.passed for gate in self.gates)
-        ):
-            raise ValueError("CANDIDATE cannot contain a failed decision gate")
-        if (
-            self.decision == "CANDIDATE"
-            and self.gates
-            and any(gate.source_date is None for gate in self.gates)
-        ):
-            raise ValueError("CANDIDATE decision gates require source_date")
+        if self.decision_policy_status == DecisionPolicyStatus.EVALUATED.value:
+            if tuple(gate.gate for gate in self.gates) != DECISION_GATE_ORDER:
+                raise ValueError("evaluated decision policy requires all decision gates")
+            if any(
+                gate.actual is None or gate.threshold is None or gate.source_date is None
+                for gate in self.gates
+            ):
+                raise ValueError(
+                    "evaluated decision gates require actual, threshold, and source_date"
+                )
+        for gate in self.gates:
+            parsed_gate_source_date = (
+                date.fromisoformat(gate.source_date)
+                if isinstance(gate.source_date, str)
+                else gate.source_date
+            )
+            if parsed_gate_source_date is not None and parsed_gate_source_date > self.as_of_date:
+                raise ValueError(f"decision gate {gate.gate} source_date cannot exceed as_of_date")
         if self.data_quality_status not in DATA_QUALITY_STATUSES:
-            raise ValueError("data_quality_status must be PASS or FAIL")
+            raise ValueError("data_quality_status must be PASS, WARN, or HARD_FAIL")
+        if (
+            self.decision_policy_status == DecisionPolicyStatus.EVALUATED.value
+            and self.data_quality_status != "PASS"
+        ):
+            raise ValueError("evaluated decision policy requires PASS data quality")
+        if self.decision_policy_status == DecisionPolicyStatus.EVALUATED.value:
+            all_gates_passed = all(gate.passed for gate in self.gates)
+            if self.decision in {"CANDIDATE", "WATCH"} and not all_gates_passed:
+                raise ValueError(f"{self.decision} cannot contain a failed decision gate")
+            if self.decision == "WATCH" and "OUTSIDE_TOP_K" not in self.reason_codes:
+                raise ValueError("WATCH requires OUTSIDE_TOP_K evidence")
+            if self.decision == "NO_TRADE" and all_gates_passed:
+                raise ValueError("NO_TRADE requires at least one failed decision gate")
+        if (self.decision_policy_status == DecisionPolicyStatus.HARD_FAIL.value) != (
+            self.data_quality_status == "HARD_FAIL"
+        ):
+            raise ValueError("HARD_FAIL policy status and data quality must agree")
         if self.latest_available_at > self.decision_at:
             raise ValueError("latest_available_at cannot exceed decision_at")
         if self.training_end_date >= self.as_of_date:
@@ -245,15 +263,11 @@ class StockPredictionOutput:
             else:
                 parsed_source_date = source_date
             if parsed_source_date > self.as_of_date:
-                raise ValueError(
-                    f"source date for {source_name} cannot exceed as_of_date"
-                )
+                raise ValueError(f"source date for {source_name} cannot exceed as_of_date")
 
         if self.decision == "CANDIDATE":
             if not has_valid_calibration_version(self.calibration_version):
-                raise ValueError(
-                    "CANDIDATE requires an OOS direction calibration version"
-                )
+                raise ValueError("CANDIDATE requires an OOS direction calibration version")
             if not has_calibrated_interval_status(self.calibration_status):
                 raise ValueError("CANDIDATE requires calibrated return intervals")
             for field_name, value in (
@@ -265,7 +279,7 @@ class StockPredictionOutput:
                     raise ValueError(f"CANDIDATE requires a valid {field_name}")
             if self.data_quality_status != "PASS":
                 raise ValueError("CANDIDATE requires passing data quality")
-            if self.market_exposure_cap <= 0:
+            if self.market_exposure_cap is None or self.market_exposure_cap <= 0:
                 raise ValueError("CANDIDATE requires positive market exposure")
 
     def to_dict(self) -> dict[str, Any]:

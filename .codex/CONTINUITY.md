@@ -5,9 +5,11 @@ and must not replace `tasks/active/TASK.md` or completed reports.
 
 ## Current Work Package
 
-- Status: ACTIVE.
-- Outcome: repair Manual full update Production artifact handoff.
-- Active record: `tasks/active/TASK.md`.
+- Status: COMPLETE.
+- Outcome: Manual full update Production artifact handoff repaired.
+- Active record: `tasks/active/TASK.md` is `NONE`.
+- Completion record:
+  `tasks/completed/2026-07-24-repair-manual-full-update-artifact-handoff.md`.
 - Authorization: `FULL_AUTONOMY_UNTIL_MAIN_UPDATE`; protected branches remain
   unchanged.
 
@@ -15,7 +17,8 @@ and must not replace `tasks/active/TASK.md` or completed reports.
 
 - Branch: `codex/repair-manual-update-artifacts`.
 - Base: `main` at `47eceb1d7de5f42e0bd70668a3d025fcc4bf24c4`.
-- Commit and Pull Request: pending.
+- Implementation commits: `6e7c85b`, `2e7d4af`.
+- Pull Request: #103.
 
 ## Completed Work
 
@@ -47,10 +50,9 @@ and must not replace `tasks/active/TASK.md` or completed reports.
 
 ## Remaining Work
 
-- Commit and push the feature branch.
-- Create/update the Pull Request, wait for CI green, then archive the task and
-  restore `tasks/active/TASK.md` to `NONE`.
-- Do not update `main` without additional authorization.
+- No remaining feature-branch work.
+- Updating protected `main` and the subsequent live Manual workflow verification
+  require the separate final authorization boundary.
 
 ## Public Contracts
 
@@ -60,14 +62,15 @@ and must not replace `tasks/active/TASK.md` or completed reports.
 
 ## Known Issues or Blockers
 
-- No implementation blocker.
+- No implementation or Pull Request blocker.
 - Live verification of the repaired Manual workflow requires the change on
   `main`, because preflight intentionally rejects feature branches.
 
 ## Commit and Pull Request References
 
 - Failure evidence: https://github.com/migao2006/tool/actions/runs/30061633611
-- Feature commit and Pull Request: pending.
+- Pull Request: https://github.com/migao2006/tool/pull/103
+- Green CI: https://github.com/migao2006/tool/actions/runs/30063441859
 
 ## Maintenance
 

@@ -5,9 +5,11 @@ and must not replace `tasks/active/TASK.md` or completed reports.
 
 ## Current Work Package
 
-- Status: ACTIVE
+- Status: COMPLETE
 - Outcome: add one owner-triggered, fail-closed full daily update workflow.
-- Active record: `tasks/active/TASK.md`.
+- Active record: `tasks/active/TASK.md` is `NONE`.
+- Completed record:
+  `tasks/completed/2026-07-24-add-safe-manual-full-update-workflow.md`.
 - Authorization: `FULL_AUTONOMY_UNTIL_MAIN_UPDATE`.
 
 ## Current Branch
@@ -41,7 +43,7 @@ and must not replace `tasks/active/TASK.md` or completed reports.
 - Complete quality/security suite and `git diff --check` passed.
 - Fast passed. Full passed: 1,114 Python and 66 Playwright tests.
 - Independent final read-only review: zero findings at every severity.
-- Commit, push, PR, and CI remain pending.
+- Implementation-head GitHub Actions and Vercel checks passed.
 
 ## Key Decisions
 
@@ -57,9 +59,8 @@ and must not replace `tasks/active/TASK.md` or completed reports.
 
 ## Remaining Work
 
-- Commit and push the implementation, open the PR, and repair CI until green.
-- Complete/archive TASK and push the terminal record.
-- Stop immediately before protected-main update and ask once for authorization.
+- Push this terminal record, observe its checks, mark PR #102 ready, then stop
+  immediately before protected-main update and ask once for authorization.
 
 ## Known Issues or Blockers
 
@@ -71,9 +72,10 @@ and must not replace `tasks/active/TASK.md` or completed reports.
 
 ## Commit and Pull Request References
 
-- Commit: pending.
-- Feature push: pending.
-- Pull Request: pending.
+- Implementation commit:
+  `eaceb9d24881f01948c427fb214ad4a87ff55021`.
+- Feature branch: `origin/codex/manual-full-update`.
+- Pull Request: #102, target `main`, unmerged.
 
 ## Maintenance
 

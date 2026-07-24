@@ -5,9 +5,11 @@ and must not replace `tasks/active/TASK.md` or completed reports.
 
 ## Current Work Package
 
-- Status: ACTIVE.
+- Status: COMPLETE.
 - Outcome: audit and correct end-to-end Decision Policy status semantics.
-- Active record: `tasks/active/TASK.md`.
+- Active record: `tasks/active/TASK.md` is `NONE`.
+- Completion record:
+  `tasks/completed/2026-07-24-correct-decision-policy-status-semantics.md`.
 - Authorization: `FULL_AUTONOMY_UNTIL_MAIN_UPDATE`; protected branches remain
   unchanged.
 
@@ -18,7 +20,9 @@ and must not replace `tasks/active/TASK.md` or completed reports.
   `e089c4cb25f26414574082e3e9128b60ab530bdd`.
 - Isolated clone; the separate Manual full update repair checkout and branch have
   not been modified.
-- Pull Request: not created yet.
+- Implementation commits: `a14828e`, `c087760`, `46b8428`.
+- Ready Pull Request:
+  [#104](https://github.com/migao2006/tool/pull/104).
 
 ## Completed Work
 
@@ -48,8 +52,10 @@ and must not replace `tasks/active/TASK.md` or completed reports.
 
 ## Remaining Work
 
-- Commit and push the reviewed change set, create the Pull Request, resolve PR CI,
-  then archive the completed task without updating a protected branch.
+- No feature-branch work remains. Updating protected `main` is the next operation
+  and requires final explicit authorization.
+- Staging/Production migration and deployment remain intentionally unperformed;
+  rollout order is frontend/Edge → migration → publisher.
 
 ## Key Decisions
 
@@ -75,11 +81,16 @@ and must not replace `tasks/active/TASK.md` or completed reports.
 
 ## Known Issues or Blockers
 
-- No external blocker. Production deployment remains intentionally unperformed.
+- No implementation or Pull Request blocker.
 
 ## Commit and Pull Request References
 
-- No commit, push, deployment, Pull Request, or protected-branch update yet.
+- Pull Request: https://github.com/migao2006/tool/pull/104
+- Green Project tests:
+  https://github.com/migao2006/tool/actions/runs/30073952671
+- Green Edge tests:
+  https://github.com/migao2006/tool/actions/runs/30073952943
+- No protected-branch update or Production data write was performed.
 
 ## Maintenance
 

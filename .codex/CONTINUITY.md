@@ -19,11 +19,11 @@ and must not replace `tasks/active/TASK.md` or completed reports.
 ## Current Branch
 
 - Branch: `main`.
-- Local `main` and `origin/main`:
+- Implementation merge commit:
   `53d16233c1ffd494ccb18cc5b53ec550585f8689`.
 - PR #102 merged by normal merge commit with exact head guard.
 
-## Released Outcome
+## Completed Work
 
 - `Manual full update` is active at
   `.github/workflows/manual-full-update.yml` and remains dispatch-only.
@@ -34,6 +34,10 @@ and must not replace `tasks/active/TASK.md` or completed reports.
   the sole implementation paths.
 - Final summaries fail closed on missing or inconsistent source, resolution,
   prediction, gate, market, date, or environment evidence.
+
+## Remaining Work
+
+- None for this completed Work Package.
 
 ## Post-Merge Verification
 
@@ -51,7 +55,15 @@ and must not replace `tasks/active/TASK.md` or completed reports.
   `2026-07-20`, `decision_at=2026-07-20T17:00:00+08:00`,
   `RESEARCH_ONLY`, exact venue scope, and `Cache-Control: no-store,max-age=0`.
 
-## Validation
+## Key Decisions
+
+- Resolve the newest valid aligned trading date; never substitute the calendar
+  date.
+- Treat an already-current Production snapshot as an explicit successful no-op.
+- Reuse the existing import and Daily Research paths instead of duplicating
+  publication, retry, ranking, or validation logic.
+
+## Validation Already Passed
 
 - Focused affected tests: 112 passed.
 - Ruff and actionlint passed; basedpyright: 0 errors, 0 warnings.
@@ -74,7 +86,7 @@ and must not replace `tasks/active/TASK.md` or completed reports.
 - A valid no-op means the newest aligned, complete Production snapshots are
   already current; it must not be replaced with today's calendar date.
 
-## References
+## Commit and Pull Request References
 
 - Pull Request: https://github.com/migao2006/tool/pull/102
 - Merge commit: `53d16233c1ffd494ccb18cc5b53ec550585f8689`

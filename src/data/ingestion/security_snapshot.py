@@ -42,6 +42,30 @@ EXPECTED_CONTRACTS = {
 }
 
 
+def resolve_market_profile_date(
+    payloads: MarketSnapshotPayloads,
+    *,
+    market: str,
+) -> date:
+    """Resolve one venue's independently published profile observation date."""
+
+    if market not in EXPECTED_CONTRACTS:
+        raise ValueError("market must be TWSE or TPEX")
+    profile = payloads.profile
+    if (profile.provider, profile.dataset) != EXPECTED_CONTRACTS[market][0]:
+        raise IngestionError(
+            "SECURITY_SNAPSHOT_SOURCE_INVALID",
+            "Security profile provider or dataset does not match the market",
+        )
+    retrieval_date = profile.retrieved_at.astimezone(TAIPEI).date()
+    _, profile_date = profile_state(
+        profile,
+        market=market,
+        snapshot_date=retrieval_date,
+    )
+    return profile_date
+
+
 def resolve_coherent_profile_date(
     payloads_by_market: Mapping[str, MarketSnapshotPayloads],
 ) -> date:
@@ -52,15 +76,13 @@ def resolve_coherent_profile_date(
             "SECURITY_SNAPSHOT_MARKETS_INCOMPLETE",
             "Both TWSE and TPEX profiles are required to resolve the snapshot date",
         )
-    profile_dates: dict[str, date] = {}
-    for market in EXPECTED_CONTRACTS:
-        profile = payloads_by_market[market].profile
-        retrieval_date = profile.retrieved_at.astimezone(TAIPEI).date()
-        _, profile_dates[market] = profile_state(
-            profile,
+    profile_dates = {
+        market: resolve_market_profile_date(
+            payloads_by_market[market],
             market=market,
-            snapshot_date=retrieval_date,
         )
+        for market in EXPECTED_CONTRACTS
+    }
     if len(set(profile_dates.values())) != 1:
         raise IngestionError(
             "SECURITY_SNAPSHOT_MARKET_DATE_MISMATCH",
@@ -82,9 +104,7 @@ def snapshot_revision_hash(payloads: MarketSnapshotPayloads) -> str:
             payloads.disposals,
         )
     ]
-    return sha256(
-        json.dumps(evidence, separators=(",", ":"), sort_keys=True).encode()
-    ).hexdigest()
+    return sha256(json.dumps(evidence, separators=(",", ":"), sort_keys=True).encode()).hexdigest()
 
 
 def _validate_bundle(
@@ -108,9 +128,7 @@ def _validate_bundle(
             "SECURITY_SNAPSHOT_SOURCE_INVALID",
             "Security snapshot provider or dataset contract does not match the market",
         )
-    retrieval_dates = {
-        payload.retrieved_at.astimezone(TAIPEI).date() for payload in bundle
-    }
+    retrieval_dates = {payload.retrieved_at.astimezone(TAIPEI).date() for payload in bundle}
     if len(retrieval_dates) != 1 or next(iter(retrieval_dates)) < snapshot_date:
         raise IngestionError(
             "SECURITY_SNAPSHOT_DATE_MISMATCH",

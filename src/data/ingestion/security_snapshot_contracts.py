@@ -19,6 +19,7 @@ SECURITY_SNAPSHOT_REASON_CODES = (
     "INTRADAY_SUSPENSIONS_NOT_REPRESENTED",
 )
 NON_SESSION_REASON = "SNAPSHOT_DATE_NOT_CONFIRMED_BY_BOTH_MARKETS"
+MARKET_NON_SESSION_REASON = "SNAPSHOT_DATE_NOT_CONFIRMED_BY_SELECTED_MARKET"
 
 
 @dataclass(frozen=True)
@@ -43,6 +44,7 @@ class NormalizedSecuritySnapshot:
 class SecuritySnapshotSummary:
     snapshot_date: date
     dry_run: bool
+    markets: tuple[str, ...]
     fetched_records: Mapping[str, int]
     normalized_records: Mapping[str, int]
     excluded_records: Mapping[str, int]
@@ -58,6 +60,7 @@ class SecuritySnapshotSummary:
         return {
             "snapshot_date": self.snapshot_date.isoformat(),
             "dry_run": self.dry_run,
+            "markets": self.markets,
             "fetched_records": dict(self.fetched_records),
             "normalized_records": dict(self.normalized_records),
             "excluded_records": dict(self.excluded_records),

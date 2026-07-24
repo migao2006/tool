@@ -4,10 +4,19 @@ on:
   workflow_dispatch:
     inputs:
       snapshot_date:
-        description: Profile observation date; blank resolves a coherent date from both markets
+        description: Profile observation date; blank resolves each selected venue independently
         required: false
         default: ""
         type: string
+      market:
+        description: Venue scope; scheduled runs always execute TWSE and TPEX independently
+        required: true
+        default: ALL
+        type: choice
+        options:
+          - ALL
+          - TWSE
+          - TPEX
       dry_run:
         description: Fetch and validate without writing to Supabase
         required: true
@@ -28,6 +37,10 @@ jobs:
   import:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        market: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.market != 'ALL' && format('["{0}"]', inputs.market) || '["TWSE","TPEX"]') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -44,9 +57,10 @@ jobs:
           API_HTTP_TIMEOUT_SECONDS: "30"
           REQUESTED_SNAPSHOT_DATE: ${{ inputs.snapshot_date }}
           DRY_RUN: ${{ inputs.dry_run }}
+          MARKET: ${{ matrix.market }}
         shell: bash
         run: |
-          args=()
+          args=(--market "$MARKET")
           if [[ -n "$REQUESTED_SNAPSHOT_DATE" ]]; then
             args+=(--snapshot-date "$REQUESTED_SNAPSHOT_DATE")
           fi
@@ -57,7 +71,7 @@ jobs:
             | tee security-snapshot-summary.json
 
       - name: Import unresolved current listing identity evidence
-        if: always()
+        if: always() && matrix.market == 'TWSE'
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
@@ -76,7 +90,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: security-snapshot-import-${{ github.run_id }}
+          name: security-snapshot-import-${{ matrix.market }}-${{ github.run_id }}
           path: |
             security-snapshot-summary.json
             current-listing-identity-summary.json

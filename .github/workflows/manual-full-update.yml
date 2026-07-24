@@ -124,6 +124,11 @@ jobs:
           digest-mismatch: error
 
       - name: Download TWSE Production verification evidence
+        if: >-
+          needs.research.outputs.should_run == 'true' &&
+          needs.research.outputs.production_requested == 'true' &&
+          vars.DAILY_RESEARCH_PRODUCTION_PUBLISH_ENABLED != 'false' &&
+          contains(needs.research.outputs.markets, '"TWSE"')
         continue-on-error: true
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -132,6 +137,11 @@ jobs:
           digest-mismatch: error
 
       - name: Download TPEx Production verification evidence
+        if: >-
+          needs.research.outputs.should_run == 'true' &&
+          needs.research.outputs.production_requested == 'true' &&
+          vars.DAILY_RESEARCH_PRODUCTION_PUBLISH_ENABLED != 'false' &&
+          contains(needs.research.outputs.markets, '"TPEX"')
         continue-on-error: true
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:

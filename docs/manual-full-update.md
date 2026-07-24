@@ -55,6 +55,13 @@ artifacts 組合證據：
 - Daily resolution：target、aligned date、required markets 與更新前有效 snapshot；
 - required market 的 Production verifier result：run、prediction count、decision-gate count。
 
+Daily reusable workflow 會把 `should_run`、`markets` 與 `production_requested` 回傳給
+manual wrapper。Final job 只下載本次確實要求且啟用 Production publication 的市場
+artifact；no-op、dry-run、Staging-only 或不需更新的市場直接使用 resolution 內已驗證的
+Production snapshot，不會嘗試下載一個依契約不會產生的 artifact。若市場本次應發布
+Production，artifact 仍必須使用 caller 的 `run_id` 與 `run_attempt` 精確存在，否則摘要
+fail closed。
+
 摘要顯示 trigger SHA／branch、兩市場來源日期、resolved target／aligned date、需要更新的
 市場、Production 是否改變、最終 Production 日期、prediction／八層 gate 完整度，以及
 失敗或 no-op reason。缺檔、多檔、日期／市場／environment 不符、prediction coverage 不足，

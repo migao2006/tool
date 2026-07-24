@@ -23,6 +23,16 @@ on:
         required: false
         default: true
         type: boolean
+    outputs:
+      should_run:
+        description: Whether the resolver found at least one market requiring an update
+        value: ${{ jobs.resolve.outputs.should_run }}
+      markets:
+        description: JSON array of markets requiring an update
+        value: ${{ jobs.resolve.outputs.markets }}
+      production_requested:
+        description: Whether this call requested Production publication
+        value: ${{ jobs.resolve.outputs.production_requested }}
     secrets:
       R2_ACCESS_KEY_ID:
         required: true

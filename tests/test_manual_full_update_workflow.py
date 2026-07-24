@@ -86,6 +86,31 @@ def test_manual_summary_is_always_fail_closed_and_attempt_qualified() -> None:
     assert reviewed_action_reference("actions/upload-artifact") in workflow
 
 
+def test_manual_summary_downloads_only_required_production_artifacts() -> None:
+    workflow = MANUAL.read_text(encoding="utf-8")
+
+    for market, next_step in (
+        ("TWSE", "Download TPEx Production verification evidence"),
+        ("TPEX", "Build fail-closed final summary"),
+    ):
+        start = workflow.index(
+            f"- name: Download {'TPEx' if market == 'TPEX' else market} "
+            "Production verification evidence"
+        )
+        end = workflow.index(f"- name: {next_step}", start)
+        step = workflow[start:end]
+
+        assert "needs.research.outputs.should_run == 'true'" in step
+        assert "needs.research.outputs.production_requested == 'true'" in step
+        assert "vars.DAILY_RESEARCH_PRODUCTION_PUBLISH_ENABLED != 'false'" in step
+        assert f'contains(needs.research.outputs.markets, \'"{market}"\')' in step
+        assert (
+            f"daily-research-production-{market}-${{{{ github.run_id }}}}"
+            "-${{ github.run_attempt }}"
+            in step
+        )
+
+
 def test_existing_recovery_explicitly_monitors_the_manual_wrapper() -> None:
     recovery = RECOVERY.read_text(encoding="utf-8")
 

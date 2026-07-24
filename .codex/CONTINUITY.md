@@ -17,7 +17,7 @@ and must not replace `tasks/active/TASK.md` or completed reports.
 - Base: `main` at `47eceb1d7de5f42e0bd70668a3d025fcc4bf24c4`.
 - Commit and Pull Request: pending.
 
-## Confirmed Root Cause and Repair
+## Completed Work
 
 - Main run `30061633611` requested `dry_run=true` and
   `publish_production=false`; Production jobs correctly did not upload artifacts.
@@ -29,7 +29,13 @@ and must not replace `tasks/active/TASK.md` or completed reports.
   downloads only required market artifacts while preserving missing-required-
   artifact failure and strict evidence validation.
 
-## Validation
+## Key Decisions
+
+- Expose resolver and publication intent through backward-compatible reusable
+  workflow outputs instead of changing artifact names or weakening validation.
+- Skip only artifacts that the called workflow contract says cannot exist.
+
+## Validation Already Passed
 
 - Focused affected workflow, recovery, and summary tests: 95 passed.
 - Quality/security: passed; Ruff, basedpyright, actionlint, Deno, secret and

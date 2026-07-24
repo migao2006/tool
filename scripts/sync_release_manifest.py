@@ -225,12 +225,12 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
         "snapshot primary path must use one PostgREST request",
     )
     require(
-        snapshot_read.get("migration") in patch_added,
-        "snapshot RPC migration must be part of this patch",
+        snapshot_read.get("migration") in migration_names,
+        "snapshot RPC migration must exist in repository history",
     )
     require(
-        snapshot_read.get("remote_status") == "REPOSITORY_ONLY_NOT_REMOTELY_VERIFIED",
-        "snapshot RPC remote status must preserve the evidence boundary",
+        snapshot_read.get("remote_status") == "DEPLOYED_READ_ONLY_REVERIFIED_2026_07_24",
+        "snapshot RPC remote status must match the recorded evidence boundary",
     )
     require(
         snapshot_read.get("deployment_guard") == "RPC_MIGRATION_VERIFIED_ATTESTATION_REQUIRED",
@@ -260,8 +260,8 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
         "snapshot base migration is invalid",
     )
     require(
-        snapshot_read.get("base_migration") in patch_added,
-        "snapshot base migration must remain in the patch evidence set",
+        snapshot_read.get("base_migration") in migration_names,
+        "snapshot base migration must exist in repository history",
     )
     freshness = snapshot_read.get("freshness_policy")
     require(isinstance(freshness, dict), "snapshot freshness policy is required")
@@ -555,11 +555,12 @@ def render_status_header(manifest: dict[str, Any]) -> str:
             ),
             ">",
             (
-                "> Staging／Production 的既有文件最後完整紀錄均為 "
+                "> Staging／Production 遠端 migration history 已於本修補唯讀重驗，"
+                "完整紀錄均為 "
                 f"{staging['recorded_applied_count']}／{production['recorded_applied_count']} 筆；"
                 f"其後 Repository 共有 {len(repository['migrations_after_recorded_remote_latest'])} 檔："
-                f"{remote_gap}。本修補未連線重新驗證這些 migration 的遠端套用狀態，"
-                "不得由檔案存在與否推測已部署或未部署。"
+                f"{remote_gap}。這些較新的檔案仍只存在 Repository，"
+                "不得由檔案存在推測已部署。"
             ),
             ">",
             (

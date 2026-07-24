@@ -56,38 +56,28 @@ def test_release_manifest_records_repository_and_remote_evidence_separately() ->
     migration_files = list((ROOT / "supabase/migrations").glob("*.sql"))
 
     assert repository["migration_file_count"] == len(migration_files)
-    assert repository["migration_file_count"] == 38
+    assert repository["migration_file_count"] == 39
     assert repository["patch_added_migrations"] == [
-        "20260720170000_prediction_snapshot_rate_limit.sql",
-        "20260720190000_prediction_snapshot_read_rpc.sql",
-        "20260721090000_prediction_snapshot_calendar_freshness.sql",
-        "20260724044115_decision_policy_status_semantics.sql",
+        "20260724085021_publish_research_market_evidence_atomically.sql",
     ]
     assert repository["patch_requires_staging_validation"] == [
-        "20260720170000_prediction_snapshot_rate_limit.sql",
-        "20260720190000_prediction_snapshot_read_rpc.sql",
-        "20260721090000_prediction_snapshot_calendar_freshness.sql",
-        "20260724044115_decision_policy_status_semantics.sql",
+        "20260724085021_publish_research_market_evidence_atomically.sql",
     ]
     assert repository["migrations_after_recorded_remote_latest"] == [
-        "20260720051630_tpex_price_index_ohlc_queue.sql",
-        "20260720061143_scope_prediction_runs_by_market.sql",
-        "20260720064801_exclude_legacy_prediction_publisher_from_lint.sql",
-        "20260720170000_prediction_snapshot_rate_limit.sql",
-        "20260720190000_prediction_snapshot_read_rpc.sql",
-        "20260721090000_prediction_snapshot_calendar_freshness.sql",
-        "20260724044115_decision_policy_status_semantics.sql",
+        "20260724085021_publish_research_market_evidence_atomically.sql",
     ]
     for environment in ("staging", "production"):
         state = repository["environment_migration_history"][environment]
-        assert state["recorded_applied_count"] == 31
-        assert state["evidence_status"] == "DOCUMENTED_NOT_REVERIFIED_BY_THIS_PATCH"
+        assert state["recorded_applied_count"] == 38
+        assert state["recorded_latest_migration"] == (
+            "20260724044115_decision_policy_status_semantics.sql"
+        )
+        assert state["evidence_status"] == "READ_ONLY_REVERIFIED_2026_07_24"
 
 
 def test_generated_markdown_discloses_unknown_commit_and_has_no_old_snapshot() -> None:
-    combined = MODEL_CARD_MD.read_text(encoding="utf-8") + CURRENT_STATUS.read_text(
-        encoding="utf-8"
-    )
+    current_status = CURRENT_STATUS.read_text(encoding="utf-8")
+    combined = MODEL_CARD_MD.read_text(encoding="utf-8") + current_status
 
     assert "release-manifest:model-header:start" in combined
     assert "release-manifest:model-snapshot:start" in combined
@@ -95,6 +85,8 @@ def test_generated_markdown_discloses_unknown_commit_and_has_no_old_snapshot() -
     assert "release-manifest:status-snapshot:start" in combined
     assert "未記錄於目前可用證據" in combined
     assert "最新具完整 artifact／provenance 證據" in combined
+    assert "已於本修補唯讀重驗" in current_status
+    assert "未連線重新驗證這些 migration" not in current_status
     assert "29695406502" not in combined
     assert "b588f93a9d43639b7329155aafff3f3d31c00dd6e78875618e426f8dd8f50156" not in combined
     assert "0b1f116e64ccdfb3880acd352b95913e03fb8419c24196f6f4d6b2e1458b088a" not in combined

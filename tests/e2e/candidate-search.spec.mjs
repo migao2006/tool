@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { routeHomeDataStatus } from "./support/home-data-status-fixture.mjs";
 import { verifyTouchTarget } from "./support/mobile-audit-helpers.mjs";
+import { retargetPredictionEvidence } from "./support/policy-evidence-fixture.mjs";
 
 test.beforeEach(async ({ page }) => {
 	await routeHomeDataStatus(page);
@@ -30,7 +31,7 @@ async function routeThreeStockSnapshot(
 				: gate,
 		);
 		payload.predictions = [
-			{
+			retargetPredictionEvidence({
 				...template,
 				symbol: "6515",
 				name: "穎崴",
@@ -40,8 +41,8 @@ async function routeThreeStockSnapshot(
 				rank_score: 99,
 				reason_codes: [],
 				gates: allPassedGates,
-			},
-			{
+			}),
+			retargetPredictionEvidence({
 				...template,
 				symbol: "2330",
 				name: "台積電",
@@ -51,8 +52,8 @@ async function routeThreeStockSnapshot(
 				rank_score: 98,
 				reason_codes: ["OUTSIDE_TOP_K"],
 				gates: allPassedGates,
-			},
-			{
+			}),
+			retargetPredictionEvidence({
 				...template,
 				symbol: "2454",
 				name: "聯發科",
@@ -62,7 +63,7 @@ async function routeThreeStockSnapshot(
 				rank_score: 97,
 				reason_codes: ["NET_QUANTILE_THRESHOLD_FAIL"],
 				gates: noTradeGates,
-			},
+			}),
 		];
 		payload.decision_counts = {
 			CANDIDATE: 1,

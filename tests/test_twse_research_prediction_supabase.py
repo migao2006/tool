@@ -93,6 +93,9 @@ class _Writer:
             "prediction_run_id": 7,
             "prediction_count": len(predictions),
             "market_scope": run["market_scope"],
+            "market_prediction_count": (
+                0 if parameters["p_market_prediction"] is None else 1
+            ),
         }
 
 
@@ -242,6 +245,97 @@ def _payload(
     return payload
 
 
+def _attach_authoritative_required_evidence(
+    prediction: dict[str, object],
+    *,
+    tradable: bool = False,
+) -> None:
+    gates = cast(list[dict[str, object]], prediction["gates"])
+    for gate in gates:
+        gate["passed"] = True
+        gate["reason_code"] = "PASS"
+        gate["source_date"] = "2026-01-02"
+    by_gate = {str(gate["gate"]): gate for gate in gates}
+    tradability = by_gate["tradability_gate"]
+    tradability["passed"] = tradable
+    tradability["actual"] = tradable
+    tradability["reason_code"] = "PASS" if tradable else "NOT_TRADABLE"
+    tradability["evidence"] = {
+        "contract_version": "decision-policy-required-evidence.v1",
+        "category": "TRADABILITY",
+        "status": "AVAILABLE",
+        "value": tradable,
+        "source": "TWSE_MOPS_SNAPSHOT",
+        "market": "TWSE",
+        "symbol": "2330",
+        "effective_date": "2026-01-02",
+        "available_at": "2026-01-02T06:00:00+00:00",
+        "publication_id": "a" * 64,
+        "validation_result": "PASS",
+        "reason_code": "PASS",
+        "details": {
+            "trading_status": "ACTIVE",
+            "attention_flag": False,
+            "disposal_flag": not tradable,
+            "altered_trading_method_flag": False,
+            "full_cash_delivery_flag": False,
+            "periodic_auction_flag": False,
+            "suspended_flag": False,
+        },
+    }
+    market = by_gate["market_exposure_cap"]
+    market["actual"] = 0.6
+    market["evidence"] = {
+        "contract_version": "decision-policy-required-evidence.v1",
+        "category": "MARKET_EXPOSURE",
+        "status": "AVAILABLE",
+        "value": 0.6,
+        "source": "MARKET_PREDICTION:twse-market-h5-v1",
+        "market": "TWSE",
+        "symbol": None,
+        "effective_date": "2026-01-02",
+        "available_at": "2026-01-02T06:00:00+00:00",
+        "publication_id": "prediction_run:6",
+        "validation_result": "PASS",
+        "reason_code": "PASS",
+        "details": {
+            "calibrated_p_up": 0.55,
+            "calibrated_p_neutral": 0.30,
+            "calibrated_p_down": 0.15,
+            "market_regime": "UPTREND_LOW_VOL_BROAD",
+            "forecast_market_volatility": 0.012,
+            "model_version": "twse-market-h5-v1",
+            "training_end_date": "2025-12-31",
+        },
+    }
+    position = by_gate["position_capacity_limits"]
+    position["actual"] = True
+    position["evidence"] = {
+        "contract_version": "decision-policy-required-evidence.v1",
+        "category": "POSITION_LIMITS",
+        "status": "AVAILABLE",
+        "value": True,
+        "source": "PORTFOLIO_POLICY_ENGINE",
+        "market": "TWSE",
+        "symbol": "2330",
+        "effective_date": "2026-01-02",
+        "available_at": "2026-01-02T06:00:00+00:00",
+        "publication_id": "portfolio-state-2330",
+        "validation_result": "PASS",
+        "reason_code": "PASS",
+        "details": {
+            "portfolio_policy_version": "portfolio-h5-v1",
+            "portfolio_state_id": "portfolio-20260102-0600",
+            "maximum_single_name_weight": 0.10,
+            "maximum_industry_weight": 0.25,
+            "maximum_adv_participation": 0.01,
+            "proposed_weight": 0.04,
+            "resulting_industry_weight": 0.18,
+            "proposed_adv_participation": 0.005,
+        },
+    }
+
+
 def _tpex_payload() -> dict[str, object]:
     payload = _payload()
     payload["market"] = "TPEX"
@@ -314,7 +408,8 @@ def test_staging_publish_is_conservative_and_idempotent() -> None:
     assert source_dates["prediction_scope"] == "OUT_OF_SAMPLE_TEST"
     assert source_dates["feature_snapshot"] == "b" * 64
     assert source_dates["decision_gate_count"] == 0
-    assert source_dates["decision_gate_attachment_contract"] == ("research-decision-gate.v1")
+    assert source_dates["decision_gate_attachment_contract"] == ("research-decision-gate.v2")
+    assert parameters["p_market_prediction"] is None
     assert stock["decision"] is None
     assert stock["decision_policy_status"] == "MISSING_REQUIRED_DATA"
     assert stock["data_quality_status"] == "WARN"
@@ -366,6 +461,7 @@ def test_evaluated_research_action_requires_pass_quality_and_gate_evidence() -> 
         ).publish(payload)
 
     prediction["data_quality_status"] = "PASS"
+    _attach_authoritative_required_evidence(prediction)
     payload["snapshot_sha256"] = sha256(
         json.dumps(
             {key: value for key, value in payload.items() if key != "snapshot_sha256"},
@@ -388,6 +484,97 @@ def test_evaluated_research_action_requires_pass_quality_and_gate_evidence() -> 
     assert run["policy_validation_failed_count"] == 0
     assert stock["decision"] == "NO_TRADE"
     assert stock["decision_policy_status"] == "EVALUATED"
+
+
+def test_evaluated_candidate_with_authoritative_evidence_is_publishable() -> None:
+    payload = _payload(include_gates=True)
+    prediction = cast(list[dict[str, object]], payload["predictions"])[0]
+    prediction["data_quality_status"] = "PASS"
+    prediction["decision"] = "CANDIDATE"
+    prediction["decision_policy_status"] = "EVALUATED"
+    _attach_authoritative_required_evidence(prediction, tradable=True)
+    payload["snapshot_sha256"] = sha256(
+        json.dumps(
+            {key: value for key, value in payload.items() if key != "snapshot_sha256"},
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
+    writer = _Writer()
+
+    _ = TwseResearchPredictionSupabasePublisher(
+        writer,
+        target_environment="staging",
+        publish_enabled=True,
+    ).publish(payload)
+
+    _, parameters = writer.rpc_calls[0]
+    run = cast(dict[str, object], parameters["p_run"])
+    stock = cast(list[dict[str, object]], parameters["p_stock_predictions"])[0]
+    assert run["candidate_count"] == 1
+    assert run["no_trade_count"] == 0
+    assert stock["decision"] == "CANDIDATE"
+    assert stock["decision_policy_status"] == "EVALUATED"
+
+
+def test_evaluated_evidence_source_date_must_match_effective_date() -> None:
+    payload = _payload(include_gates=True)
+    prediction = cast(list[dict[str, object]], payload["predictions"])[0]
+    prediction["data_quality_status"] = "PASS"
+    prediction["decision"] = "CANDIDATE"
+    prediction["decision_policy_status"] = "EVALUATED"
+    _attach_authoritative_required_evidence(prediction, tradable=True)
+    gates = cast(list[dict[str, object]], prediction["gates"])
+    tradability = next(gate for gate in gates if gate["gate"] == "tradability_gate")
+    tradability["source_date"] = "2026-01-01"
+    payload["snapshot_sha256"] = sha256(
+        json.dumps(
+            {key: value for key, value in payload.items() if key != "snapshot_sha256"},
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
+    writer = _Writer()
+
+    with pytest.raises(ValueError, match="required evidence is invalid"):
+        _ = TwseResearchPredictionSupabasePublisher(
+            writer,
+            target_environment="staging",
+            publish_enabled=True,
+        ).publish(payload)
+
+    assert writer.upserts == []
+    assert writer.rpc_calls == []
+
+
+def test_missing_policy_row_rejects_invalid_available_evidence_before_write() -> None:
+    payload = _payload(include_gates=True)
+    prediction = cast(list[dict[str, object]], payload["predictions"])[0]
+    _attach_authoritative_required_evidence(prediction, tradable=True)
+    gates = cast(list[dict[str, object]], prediction["gates"])
+    tradability = next(gate for gate in gates if gate["gate"] == "tradability_gate")
+    tradability["source_date"] = "2026-01-01"
+    payload["snapshot_sha256"] = sha256(
+        json.dumps(
+            {key: value for key, value in payload.items() if key != "snapshot_sha256"},
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
+    writer = _Writer()
+
+    with pytest.raises(ValueError, match="required evidence is invalid"):
+        _ = TwseResearchPredictionSupabasePublisher(
+            writer,
+            target_environment="staging",
+            publish_enabled=True,
+        ).publish(payload)
+
+    assert writer.upserts == []
+    assert writer.rpc_calls == []
 
 
 def test_hard_fail_status_and_quality_are_published_without_collapsing() -> None:
@@ -501,7 +688,7 @@ def test_gated_research_snapshot_persists_all_eight_verified_gate_rows() -> None
     gate_rows = writer.upserts[-1][1]
     assert [row["gate_name"] for row in gate_rows] == list(DECISION_GATE_ORDER)
     first_actual = cast(dict[str, object], gate_rows[0]["actual_value"])
-    assert first_actual["contract_version"] == "research-decision-gate.v1"
+    assert first_actual["contract_version"] == "research-decision-gate.v2"
     assert first_actual["source_date"] == "2026-01-02"
     _, parameters = writer.rpc_calls[0]
     run = cast(dict[str, object], parameters["p_run"])
@@ -764,7 +951,12 @@ def test_publisher_rejects_an_unexpected_atomic_rpc_count() -> None:
             parameters: Mapping[str, object],
         ) -> object:
             self.rpc_calls.append((function_name, dict(parameters)))
-            return {"prediction_run_id": 7, "prediction_count": 0}
+            return {
+                "prediction_run_id": 7,
+                "prediction_count": 0,
+                "market_prediction_count": 0,
+                "market_scope": "TWSE",
+            }
 
     with pytest.raises(ValueError, match="unexpected row count"):
         _ = TwseResearchPredictionSupabasePublisher(

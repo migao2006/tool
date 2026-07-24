@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date, datetime, timezone
 import json
 
@@ -13,6 +14,7 @@ from src.api import (
     PredictionSnapshotOutput,
     StockPredictionOutput,
 )
+from tests.support.policy_evidence import required_policy_evidence
 
 
 AS_OF_DATE = date(2026, 7, 17)
@@ -20,8 +22,38 @@ DECISION_AT = datetime(2026, 7, 17, 6, 0, tzinfo=timezone.utc)
 TRAINING_END_DATE = date(2026, 6, 30)
 
 
+def _gate(
+    name: str,
+    *,
+    passed: bool = True,
+    market_exposure_cap: float = 0.6,
+) -> DecisionGateOutput:
+    evidence = required_policy_evidence(
+        name,
+        as_of_date=AS_OF_DATE,
+        decision_at=DECISION_AT,
+        symbol="TEST",
+        passed=passed,
+        market_regime="UPTREND_NORMAL_VOL",
+        market_exposure_cap=market_exposure_cap,
+        maximum_single_name_weight=0.1,
+        maximum_industry_weight=0.25,
+    )
+    return DecisionGateOutput(
+        gate=name,
+        passed=passed,
+        actual=evidence["value"] if evidence is not None else "PASS",
+        threshold="PASS",
+        reason_code="PASS" if passed else "POSITION_LIMIT_FAIL",
+        source_date=AS_OF_DATE,
+        evidence=evidence,
+    )
+
+
 def _gates() -> tuple[DecisionGateOutput, ...]:
-    names = (
+    return tuple(
+        _gate(name)
+        for name in (
         "data_quality_hard_gate",
         "tradability_gate",
         "liquidity_capacity_gate",
@@ -30,17 +62,7 @@ def _gates() -> tuple[DecisionGateOutput, ...]:
         "net_quantile_thresholds",
         "rank_eligibility",
         "position_capacity_limits",
-    )
-    return tuple(
-        DecisionGateOutput(
-            gate=name,
-            passed=True,
-            actual="PASS",
-            threshold="PASS",
-            reason_code="PASS",
-            source_date=AS_OF_DATE,
         )
-        for name in names
     )
 
 
@@ -186,6 +208,24 @@ def test_missing_policy_data_serializes_without_a_no_trade_decision() -> None:
     assert payload["market"] is None
 
 
+def test_missing_policy_row_rejects_invalid_available_evidence() -> None:
+    gates = list(_gates())
+    evidence = dict(gates[1].evidence or {})
+    evidence["effective_date"] = "2026-07-16"
+    gates[1] = replace(gates[1], evidence=evidence)
+
+    with pytest.raises(ValueError, match="required evidence is invalid"):
+        StockPredictionOutput(
+            **{
+                **_prediction().__dict__,
+                "decision": None,
+                "decision_policy_status": "MISSING_REQUIRED_DATA",
+                "reason_codes": ("FORMAL_POSITION_LIMIT_INPUT_MISSING",),
+                "gates": tuple(gates),
+            }
+        )
+
+
 def test_hard_fail_quality_and_policy_status_must_agree() -> None:
     with pytest.raises(ValueError, match="must agree"):
         StockPredictionOutput(
@@ -275,10 +315,16 @@ def test_pass_snapshot_rejects_stale_or_inconsistent_market_output() -> None:
             validation={"ndcg_10": 0.42},
         )
 
+    inconsistent_gates = (
+        *prediction.gates[:3],
+        _gate("market_exposure_cap", market_exposure_cap=0.5),
+        *prediction.gates[4:],
+    )
     inconsistent = StockPredictionOutput(
         **{
             **prediction.__dict__,
             "market_exposure_cap": 0.5,
+            "gates": inconsistent_gates,
         }
     )
     with pytest.raises(ValueError, match="market_exposure_cap"):
@@ -300,14 +346,7 @@ def test_candidate_output_rejects_failed_decision_gate() -> None:
     prediction = _prediction()
     failed_gates = (
         *prediction.gates[:-1],
-        DecisionGateOutput(
-            gate="position_capacity_limits",
-            passed=False,
-            actual=False,
-            threshold=True,
-            reason_code="POSITION_LIMIT_FAIL",
-            source_date=AS_OF_DATE,
-        ),
+        _gate("position_capacity_limits", passed=False),
     )
     with pytest.raises(ValueError, match="failed decision gate"):
         StockPredictionOutput(**{**prediction.__dict__, "gates": failed_gates})
@@ -329,14 +368,7 @@ def test_watch_and_no_trade_actions_match_gate_evidence() -> None:
     prediction = _prediction()
     failed_gates = (
         *prediction.gates[:-1],
-        DecisionGateOutput(
-            gate="position_capacity_limits",
-            passed=False,
-            actual=False,
-            threshold=True,
-            reason_code="POSITION_LIMIT_FAIL",
-            source_date=AS_OF_DATE,
-        ),
+        _gate("position_capacity_limits", passed=False),
     )
 
     watch = StockPredictionOutput(
@@ -417,6 +449,55 @@ def test_evaluated_policy_requires_complete_dated_gate_evidence() -> None:
                 **prediction.__dict__,
                 "decision": "NO_TRADE",
                 "gates": future_source,
+            }
+        )
+
+
+def test_evaluated_policy_requires_point_in_time_authoritative_evidence() -> None:
+    prediction = _prediction()
+    missing_evidence = (
+        prediction.gates[0],
+        DecisionGateOutput(
+            **{
+                **prediction.gates[1].__dict__,
+                "evidence": None,
+            }
+        ),
+        *prediction.gates[2:],
+    )
+    with pytest.raises(ValueError, match="authoritative required evidence"):
+        StockPredictionOutput(
+            **{
+                **prediction.__dict__,
+                "gates": missing_evidence,
+            }
+        )
+
+    late_payload = dict(prediction.gates[1].evidence or {})
+    late_payload["available_at"] = "2026-07-17T06:00:01+00:00"
+    late_evidence = (
+        prediction.gates[0],
+        DecisionGateOutput(
+            **{
+                **prediction.gates[1].__dict__,
+                "evidence": late_payload,
+            }
+        ),
+        *prediction.gates[2:],
+    )
+    with pytest.raises(ValueError, match="required evidence is invalid"):
+        StockPredictionOutput(
+            **{
+                **prediction.__dict__,
+                "gates": late_evidence,
+            }
+        )
+
+    with pytest.raises(ValueError, match="position evidence does not match"):
+        StockPredictionOutput(
+            **{
+                **prediction.__dict__,
+                "max_single_position": None,
             }
         )
 

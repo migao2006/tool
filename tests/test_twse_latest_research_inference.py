@@ -32,6 +32,11 @@ from src.pipeline.twse_latest_feature_repository import (
     LatestTwseFeatureRepository,
     LatestTwseFeatureSourceError,
 )
+from src.pipeline.research_decision_policy_evidence import (
+    DecisionPolicyEvidenceSnapshot,
+    RequiredEvidenceCategory,
+    RequiredPolicyEvidence,
+)
 from src.pipeline.twse_research_daily_inference import TwseDailyResearchInference
 from src.pipeline.twse_research_loaded_bundle import (
     CalibratedDirectionPrediction,
@@ -231,6 +236,105 @@ class _FakeBundle:
         )
 
 
+def _required_policy_evidence(
+    *,
+    missing_position_symbol: str | None = None,
+) -> DecisionPolicyEvidenceSnapshot:
+    available_at = datetime(
+        2026,
+        7,
+        17,
+        16,
+        tzinfo=ZoneInfo("Asia/Taipei"),
+    )
+    evidence: list[RequiredPolicyEvidence] = [
+        RequiredPolicyEvidence.available(
+            category=RequiredEvidenceCategory.MARKET_EXPOSURE,
+            value=0.6,
+            source="TWSE_MARKET_MODEL",
+            market="TWSE",
+            symbol=None,
+            effective_date=DEFAULT_ROW_DATE,
+            available_at=available_at,
+            publication_id="market-run-17",
+            details={
+                "calibrated_p_up": 0.55,
+                "calibrated_p_neutral": 0.30,
+                "calibrated_p_down": 0.15,
+                "market_regime": "UPTREND_LOW_VOL_BROAD",
+                "forecast_market_volatility": 0.012,
+                "model_version": "twse-market-h5-v1",
+                "training_end_date": "2026-07-16",
+            },
+        )
+    ]
+    for symbol in ("2317", "2330"):
+        tradable = symbol != "2330"
+        evidence.append(
+            RequiredPolicyEvidence.available(
+                category=RequiredEvidenceCategory.TRADABILITY,
+                value=tradable,
+                source="TWSE_MOPS_SNAPSHOT",
+                market="TWSE",
+                symbol=symbol,
+                effective_date=DEFAULT_ROW_DATE,
+                available_at=available_at,
+                publication_id=f"security-state-{symbol}",
+                details={
+                    "trading_status": "ACTIVE",
+                    "attention_flag": False,
+                    "disposal_flag": not tradable,
+                    "altered_trading_method_flag": False,
+                    "full_cash_delivery_flag": False,
+                    "periodic_auction_flag": False,
+                    "suspended_flag": False,
+                },
+            )
+        )
+        evidence.append(
+            RequiredPolicyEvidence.missing(
+                category=RequiredEvidenceCategory.POSITION_LIMITS,
+                market="TWSE",
+                symbol=symbol,
+                reason_code="POSITION_LIMIT_PRODUCER_UNAVAILABLE",
+            )
+            if symbol == missing_position_symbol
+            else RequiredPolicyEvidence.available(
+                category=RequiredEvidenceCategory.POSITION_LIMITS,
+                value=True,
+                source="PORTFOLIO_POLICY_ENGINE",
+                market="TWSE",
+                symbol=symbol,
+                effective_date=DEFAULT_ROW_DATE,
+                available_at=available_at,
+                publication_id=f"portfolio-state-{symbol}",
+                details={
+                    "portfolio_policy_version": "portfolio-h5-v1",
+                    "portfolio_state_id": "portfolio-20260717-1600",
+                    "maximum_single_name_weight": 0.10,
+                    "maximum_industry_weight": 0.25,
+                    "maximum_adv_participation": 0.01,
+                    "proposed_weight": 0.04,
+                    "resulting_industry_weight": 0.18,
+                    "proposed_adv_participation": 0.005,
+                },
+            )
+        )
+    return DecisionPolicyEvidenceSnapshot(
+        market="TWSE",
+        as_of_date=DEFAULT_ROW_DATE,
+        decision_at=datetime(
+            2026,
+            7,
+            17,
+            17,
+            tzinfo=ZoneInfo("Asia/Taipei"),
+        ),
+        evidence=tuple(evidence),
+        publication_id="decision-policy-evidence-run-17",
+    )
+
+
 def test_refactored_daily_inference_runs_from_an_in_memory_cross_section() -> None:
     snapshot = TwseDailyResearchInference().run(
         _in_memory_cross_section(),
@@ -248,6 +352,54 @@ def test_refactored_daily_inference_runs_from_an_in_memory_cross_section() -> No
     assert all(row.estimated_round_trip_cost > 0 for row in snapshot.predictions)
     assert snapshot.validation["research_decision_policy_executed"] is True
     assert snapshot.validation["formal_decision_policy_executed"] is False
+    assert snapshot.validation["evaluated_policy_row_count"] == 0
+
+
+def test_daily_inference_evaluates_only_rows_with_complete_required_evidence() -> None:
+    cross_section = _in_memory_cross_section()
+    cross_section.frame["point_in_time_audit_pass"] = True
+
+    snapshot = TwseDailyResearchInference().run(
+        cross_section,
+        _FakeBundle(),  # pyright: ignore[reportArgumentType]
+        load_mvp_config(),
+        policy_evidence=_required_policy_evidence(
+            missing_position_symbol="2317",
+        ),
+    )
+
+    by_symbol = {row.symbol: row for row in snapshot.predictions}
+    assert by_symbol["2330"].decision_policy_status == DecisionPolicyStatus.EVALUATED
+    assert by_symbol["2330"].decision is not None
+    assert by_symbol["2330"].decision.value == "NO_TRADE"
+    assert by_symbol["2317"].decision_policy_status == (DecisionPolicyStatus.MISSING_REQUIRED_DATA)
+    assert by_symbol["2317"].decision is None
+    position_gate = next(
+        gate for gate in by_symbol["2317"].gates if gate.gate == "position_capacity_limits"
+    )
+    assert position_gate.reason_code == "POSITION_LIMIT_PRODUCER_UNAVAILABLE"
+    assert snapshot.validation["formal_decision_policy_executed"] is True
+    assert snapshot.validation["evaluated_policy_row_count"] == 1
+
+
+def test_daily_inference_rejects_an_evidence_universe_identity_mismatch() -> None:
+    cross_section = _in_memory_cross_section()
+    scoped = LatestTwseFeatureCrossSection(
+        frame=cross_section.frame.loc[cross_section.frame["symbol"] == "2330"].reset_index(
+            drop=True
+        ),
+        as_of_date=cross_section.as_of_date,
+        manifest=_feature_manifest(1),
+        market="TWSE",
+    )
+
+    with pytest.raises(ValueError, match="universe identity mismatch"):
+        _ = TwseDailyResearchInference().run(
+            scoped,
+            _FakeBundle(),  # pyright: ignore[reportArgumentType]
+            load_mvp_config(),
+            policy_evidence=_required_policy_evidence(),
+        )
 
 
 def test_daily_inference_preserves_hard_fail_as_a_distinct_policy_status() -> None:
@@ -310,6 +462,7 @@ def test_latest_feature_is_scored_without_labels_and_costs_are_recomputed(
         ) == pytest.approx(1.0)
     assert snapshot.validation["research_decision_policy_executed"] is True
     assert snapshot.validation["formal_decision_policy_executed"] is False
+    assert snapshot.validation["evaluated_policy_row_count"] == 0
 
 
 def test_latest_feature_rejects_values_available_after_decision(

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from datetime import date, datetime
 from math import isclose, isfinite
-from typing import Any
+from typing import Any, cast
 
 from src.calibration.status import (
     has_calibrated_interval_status,
@@ -12,12 +13,18 @@ from src.calibration.status import (
 )
 from src.core.horizon import require_supported_horizon
 from src.decision.decision_policy import DECISION_GATE_ORDER, DecisionPolicyStatus
+from src.pipeline.research_decision_policy_evidence import RequiredPolicyEvidence
 
 
 DECISIONS = {"CANDIDATE", "WATCH", "NO_TRADE"}
 MARKETS = {"LISTED", "OTC"}
 DATA_QUALITY_STATUSES = {"PASS", "WARN", "HARD_FAIL"}
 DECISION_POLICY_STATUSES = {status.value for status in DecisionPolicyStatus}
+REQUIRED_EVIDENCE_GATES = (
+    "tradability_gate",
+    "market_exposure_cap",
+    "position_capacity_limits",
+)
 
 
 def _require_text(value: str, field_name: str) -> None:
@@ -38,6 +45,7 @@ class DecisionGateOutput:
     threshold: Any
     reason_code: str
     source_date: date | str | None = None
+    evidence: Mapping[str, Any] | None = None
 
     def __post_init__(self) -> None:
         _require_text(self.gate, "gate")
@@ -51,6 +59,8 @@ class DecisionGateOutput:
                 raise ValueError("gate source_date must use YYYY-MM-DD") from error
             if parsed_source_date.isoformat() != self.source_date:
                 raise ValueError("gate source_date must use YYYY-MM-DD")
+        if self.evidence is not None and not self.evidence:
+            raise ValueError("gate evidence cannot be empty when present")
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
@@ -211,7 +221,10 @@ class StockPredictionOutput:
             raise TypeError("gates must contain DecisionGateOutput values")
         if self.gates and tuple(gate.gate for gate in self.gates) != DECISION_GATE_ORDER:
             raise ValueError("gates must follow the complete decision policy order")
-        if self.decision_policy_status == DecisionPolicyStatus.EVALUATED.value:
+        is_evaluated = (
+            self.decision_policy_status == DecisionPolicyStatus.EVALUATED.value
+        )
+        if is_evaluated:
             if tuple(gate.gate for gate in self.gates) != DECISION_GATE_ORDER:
                 raise ValueError("evaluated decision policy requires all decision gates")
             if any(
@@ -221,6 +234,68 @@ class StockPredictionOutput:
                 raise ValueError(
                     "evaluated decision gates require actual, threshold, and source_date"
                 )
+        if self.gates:
+            by_gate = {gate.gate: gate for gate in self.gates}
+            evidence_market = "TWSE" if self.market == "LISTED" else "TPEX"
+            for gate_name in REQUIRED_EVIDENCE_GATES:
+                gate = by_gate[gate_name]
+                if gate.evidence is None:
+                    if is_evaluated:
+                        raise ValueError(
+                            "evaluated decision policy requires authoritative "
+                            "required evidence"
+                        )
+                    continue
+                if not isinstance(gate.evidence, Mapping):
+                    raise ValueError("decision policy required evidence is invalid")
+                evidence = RequiredPolicyEvidence.from_mapping(
+                    cast(Mapping[str, object], gate.evidence)
+                )
+                expected_symbol = (
+                    None if gate_name == "market_exposure_cap" else self.symbol
+                )
+                source_date = (
+                    date.fromisoformat(gate.source_date)
+                    if isinstance(gate.source_date, str)
+                    else gate.source_date
+                )
+                if (
+                    evidence.gate != gate_name
+                    or evidence.market != evidence_market
+                    or evidence.symbol != expected_symbol
+                ):
+                    raise ValueError("decision policy required evidence is invalid")
+                if evidence.status == "AVAILABLE":
+                    if (
+                        evidence.effective_date != self.as_of_date
+                        or evidence.effective_date != source_date
+                        or evidence.available_at is None
+                        or evidence.available_at > self.decision_at
+                        or evidence.value != gate.actual
+                    ):
+                        raise ValueError(
+                            "decision policy required evidence is invalid"
+                        )
+                    if gate_name == "market_exposure_cap" and (
+                        evidence.value != self.market_exposure_cap
+                        or evidence.details["market_regime"] != self.market_regime
+                    ):
+                        raise ValueError(
+                            "market evidence does not match prediction"
+                        )
+                    if gate_name == "position_capacity_limits" and (
+                        evidence.details["maximum_single_name_weight"]
+                        != self.max_single_position
+                        or evidence.details["maximum_industry_weight"]
+                        != self.max_industry_position
+                    ):
+                        raise ValueError(
+                            "position evidence does not match prediction"
+                        )
+                elif is_evaluated:
+                    raise ValueError(
+                        "evaluated decision policy requires available required evidence"
+                    )
         for gate in self.gates:
             parsed_gate_source_date = (
                 date.fromisoformat(gate.source_date)

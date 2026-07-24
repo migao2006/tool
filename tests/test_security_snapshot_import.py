@@ -82,10 +82,7 @@ class FakeWriter:
 
 def registry() -> dict[str, FakeProvider]:
     payloads = import_payloads()
-    return {
-        provider: FakeProvider(datasets)
-        for provider, datasets in payloads.items()
-    }
+    return {provider: FakeProvider(datasets) for provider, datasets in payloads.items()}
 
 
 def test_snapshot_importer_dry_run_fetches_all_sources_without_writing() -> None:
@@ -134,17 +131,11 @@ def test_snapshot_importer_writes_sources_securities_then_history() -> None:
         "security_history",
     ]
     history_call = upserts[2]
-    assert history_call["on_conflict"] == (
-        "security_id,effective_from,source_id,source_version"
-    )
+    assert history_call["on_conflict"] == ("security_id,effective_from,source_id,source_version")
     assert history_call["preserve_existing"] is True
     assert len(history_call["rows"]) == 1_000
-    assert {row["full_cash_delivery_flag"] for row in history_call["rows"]} == {
-        None
-    }
-    assert {
-        row["record_kind"] for row in history_call["rows"]
-    } == {"CURRENT_DAILY_SNAPSHOT"}
+    assert {row["full_cash_delivery_flag"] for row in history_call["rows"]} == {None}
+    assert {row["record_kind"] for row in history_call["rows"]} == {"CURRENT_DAILY_SNAPSHOT"}
     assert summary.database_counts == {
         "data_sources": 123,
         "securities": 123,
@@ -167,18 +158,14 @@ def test_blank_date_resolves_coherent_profile_date_on_weekend() -> None:
     for datasets in payloads.values():
         for dataset, payload in datasets.items():
             datasets[dataset] = replace(payload, retrieved_at=retrieved_on_sunday)
-    providers = {
-        provider: FakeProvider(datasets) for provider, datasets in payloads.items()
-    }
+    providers = {provider: FakeProvider(datasets) for provider, datasets in payloads.items()}
     writer = FakeWriter()
 
     summary = SecuritySnapshotImporter(
         settings=ApiProviderSettings(), registry=providers, writer=writer
     ).run(snapshot_date=None)
 
-    history = next(
-        call for call in writer.calls if call.get("table") == "security_history"
-    )
+    history = next(call for call in writer.calls if call.get("table") == "security_history")
     history_rows = cast(list[dict[str, object]], history["rows"])
     assert summary.snapshot_date == date(2026, 7, 17)
     assert {row["snapshot_date"] for row in history_rows} == {"2026-07-17"}
@@ -187,9 +174,7 @@ def test_blank_date_resolves_coherent_profile_date_on_weekend() -> None:
 
 def test_snapshot_importer_rejects_disagreeing_market_profile_dates() -> None:
     payloads = import_payloads(listed_profile_date="1150717")
-    providers = {
-        provider: FakeProvider(datasets) for provider, datasets in payloads.items()
-    }
+    providers = {provider: FakeProvider(datasets) for provider, datasets in payloads.items()}
     writer = FakeWriter()
 
     with pytest.raises(IngestionError) as captured:
@@ -199,6 +184,30 @@ def test_snapshot_importer_rejects_disagreeing_market_profile_dates() -> None:
 
     assert captured.value.reason_code == "SECURITY_SNAPSHOT_MARKET_DATE_MISMATCH"
     assert writer.calls == []
+
+
+def test_market_scoped_import_is_not_blocked_by_the_other_market_profile() -> None:
+    payloads = import_payloads(listed_profile_date="1150717")
+    providers = {provider: FakeProvider(datasets) for provider, datasets in payloads.items()}
+    writer = FakeWriter()
+
+    summary = SecuritySnapshotImporter(
+        settings=ApiProviderSettings(), registry=providers, writer=writer
+    ).run(snapshot_date=None, market="TWSE")
+
+    history = next(call for call in writer.calls if call.get("table") == "security_history")
+    securities = next(call for call in writer.calls if call.get("table") == "securities")
+    history_rows = cast(list[dict[str, object]], history["rows"])
+    security_rows = cast(list[dict[str, object]], securities["rows"])
+    assert summary.snapshot_date == date(2026, 7, 17)
+    assert summary.markets == ("TWSE",)
+    assert summary.source_dates == {"TWSE": "2026-07-17"}
+    assert summary.normalized_records["securities"] == 500
+    assert {row["market"] for row in security_rows} == {"TWSE"}
+    assert {row["security_id"] for row in history_rows} == set(range(1, 501))
+    assert {row["snapshot_date"] for row in history_rows} == {"2026-07-17"}
+    assert providers["MOPS"].calls == ["listed_company_profile"]
+    assert providers["TPEX"].calls == []
 
 
 def test_incomplete_source_upsert_fails_before_security_write() -> None:
@@ -216,10 +225,7 @@ def test_incomplete_source_upsert_fails_before_security_write() -> None:
 
 def test_low_market_coverage_fails_before_first_write() -> None:
     payloads = import_payloads(profile_count=499)
-    providers = {
-        provider: FakeProvider(datasets)
-        for provider, datasets in payloads.items()
-    }
+    providers = {provider: FakeProvider(datasets) for provider, datasets in payloads.items()}
     writer = FakeWriter()
     importer = SecuritySnapshotImporter(
         settings=ApiProviderSettings(), registry=providers, writer=writer
@@ -249,10 +255,7 @@ def test_provider_failure_during_parallel_fetch_happens_before_first_write() -> 
 
 def test_non_session_snapshot_can_be_diagnosed_but_not_written() -> None:
     payloads = import_payloads(listed_profile_date="1150717")
-    providers = {
-        provider: FakeProvider(datasets)
-        for provider, datasets in payloads.items()
-    }
+    providers = {provider: FakeProvider(datasets) for provider, datasets in payloads.items()}
     writer = FakeWriter()
     importer = SecuritySnapshotImporter(
         settings=ApiProviderSettings(), registry=providers, writer=writer

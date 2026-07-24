@@ -1,5 +1,9 @@
 import { expect, test } from "@playwright/test";
 import { HOME_DATA_ROUTE, routeHomeDataStatus } from "./support/home-data-status-fixture.mjs";
+import {
+  retargetPredictionEvidence,
+  retimeSnapshotEvidence,
+} from "./support/policy-evidence-fixture.mjs";
 
 test.beforeEach(async ({ page }) => {
   await routeHomeDataStatus(page);
@@ -71,13 +75,15 @@ test("大量候選結果在手機分批顯示", async ({ page }) => {
     const response = await route.fetch();
     const payload = await response.json();
     const template = payload.predictions[0];
-    payload.predictions = Array.from({ length: 80 }, (_, index) => ({
-      ...template,
-      symbol: `T${String(index + 1).padStart(4, "0")}`,
-      global_rank: index + 1,
-      industry_rank: index + 1,
-      rank_score: 100 - index * 0.1,
-    }));
+    payload.predictions = Array.from({ length: 80 }, (_, index) =>
+      retargetPredictionEvidence({
+        ...template,
+        symbol: `T${String(index + 1).padStart(4, "0")}`,
+        global_rank: index + 1,
+        industry_rank: index + 1,
+        rank_score: 100 - index * 0.1,
+      }),
+    );
     payload.decision_counts = {
       ...payload.decision_counts,
       CANDIDATE: 80,
@@ -164,6 +170,10 @@ test("頁面重新可見時會重新驗證並顯示 API 最新快照日期", asy
         }
       };
       updateSnapshotDate(payload);
+      retimeSnapshotEvidence(payload, {
+        asOfDate: "2026-07-20",
+        decisionAt: "2026-07-20T09:00:00+00:00",
+      });
     }
     await route.fulfill({ response, json: payload });
   });

@@ -31,7 +31,43 @@ const GATE_ORDER = [
   "rank_eligibility",
   "position_capacity_limits",
 ];
-const RESEARCH_GATE_ENVELOPE_VERSION = "research-decision-gate.v1";
+const RESEARCH_GATE_ENVELOPE_VERSIONS = new Set([
+  "research-decision-gate.v1",
+  "research-decision-gate.v2",
+]);
+const REQUIRED_EVIDENCE_CATEGORIES: Record<string, string> = {
+  tradability_gate: "TRADABILITY",
+  market_exposure_cap: "MARKET_EXPOSURE",
+  position_capacity_limits: "POSITION_LIMITS",
+};
+const TRADABILITY_EVIDENCE_FIELDS = [
+  "altered_trading_method_flag",
+  "attention_flag",
+  "disposal_flag",
+  "full_cash_delivery_flag",
+  "periodic_auction_flag",
+  "suspended_flag",
+  "trading_status",
+];
+const MARKET_EVIDENCE_FIELDS = [
+  "calibrated_p_down",
+  "calibrated_p_neutral",
+  "calibrated_p_up",
+  "forecast_market_volatility",
+  "market_regime",
+  "model_version",
+  "training_end_date",
+];
+const POSITION_EVIDENCE_FIELDS = [
+  "maximum_adv_participation",
+  "maximum_industry_weight",
+  "maximum_single_name_weight",
+  "portfolio_policy_version",
+  "portfolio_state_id",
+  "proposed_adv_participation",
+  "proposed_weight",
+  "resulting_industry_weight",
+];
 const DECISIONS: Decision[] = ["CANDIDATE", "WATCH", "NO_TRADE"];
 const POLICY_STATUSES: DecisionPolicyStatus[] = [
   "EVALUATED",
@@ -49,9 +85,114 @@ function validGateSourceDate(value: unknown, asOfDate: string): boolean {
     value <= asOfDate;
 }
 
+function isRecord(value: unknown): value is JsonRecord {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasExactFields(
+  value: JsonRecord,
+  expected: string[],
+): boolean {
+  const actual = Object.keys(value).sort();
+  return actual.length === expected.length &&
+    actual.every((field, index) => field === expected[index]);
+}
+
+function finiteInRange(
+  value: unknown,
+  minimum: number,
+  maximum = Number.POSITIVE_INFINITY,
+): value is number {
+  return typeof value === "number" && Number.isFinite(value) &&
+    value >= minimum && value <= maximum;
+}
+
+function validRequiredEvidenceDetails(
+  category: string,
+  evidence: JsonRecord,
+  asOfDate: string,
+): boolean {
+  if (!isRecord(evidence.details)) return false;
+  const details = evidence.details;
+  if (category === "TRADABILITY") {
+    if (
+      !hasExactFields(details, TRADABILITY_EVIDENCE_FIELDS) ||
+      typeof details.trading_status !== "string" ||
+      details.trading_status.length === 0
+    ) return false;
+    const flags = [
+      details.attention_flag,
+      details.disposal_flag,
+      details.altered_trading_method_flag,
+      details.full_cash_delivery_flag,
+      details.periodic_auction_flag,
+      details.suspended_flag,
+    ];
+    if (flags.some((flag) => typeof flag !== "boolean")) return false;
+    const expected = details.trading_status === "ACTIVE" &&
+      details.disposal_flag === false &&
+      details.altered_trading_method_flag === false &&
+      details.full_cash_delivery_flag === false &&
+      details.periodic_auction_flag === false &&
+      details.suspended_flag === false;
+    return typeof evidence.value === "boolean" && evidence.value === expected;
+  }
+  if (category === "MARKET_EXPOSURE") {
+    if (
+      !hasExactFields(details, MARKET_EVIDENCE_FIELDS) ||
+      !finiteInRange(evidence.value, 0, 1) ||
+      typeof details.market_regime !== "string" ||
+      details.market_regime.length === 0 ||
+      typeof details.model_version !== "string" ||
+      details.model_version.length === 0 ||
+      !finiteInRange(details.forecast_market_volatility, 0) ||
+      typeof details.training_end_date !== "string" ||
+      !validGateSourceDate(details.training_end_date, asOfDate) ||
+      details.training_end_date >= asOfDate
+    ) return false;
+    const probabilities = [
+      details.calibrated_p_up,
+      details.calibrated_p_neutral,
+      details.calibrated_p_down,
+    ];
+    return probabilities.every((value) => finiteInRange(value, 0, 1)) &&
+      Math.abs(
+          probabilities.reduce((sum, value) => sum + Number(value), 0) - 1,
+        ) <= 0.000001;
+  }
+  if (category === "POSITION_LIMITS") {
+    if (
+      !hasExactFields(details, POSITION_EVIDENCE_FIELDS) ||
+      typeof evidence.value !== "boolean" ||
+      typeof details.portfolio_policy_version !== "string" ||
+      details.portfolio_policy_version.length === 0 ||
+      typeof details.portfolio_state_id !== "string" ||
+      details.portfolio_state_id.length === 0
+    ) return false;
+    const limits = [
+      details.maximum_single_name_weight,
+      details.maximum_industry_weight,
+      details.maximum_adv_participation,
+      details.proposed_weight,
+      details.resulting_industry_weight,
+      details.proposed_adv_participation,
+    ];
+    if (!limits.every((value) => finiteInRange(value, 0, 1))) return false;
+    const expected = Number(details.proposed_weight) <=
+        Number(details.maximum_single_name_weight) &&
+      Number(details.resulting_industry_weight) <=
+        Number(details.maximum_industry_weight) &&
+      Number(details.proposed_adv_participation) <=
+        Number(details.maximum_adv_participation);
+    return evidence.value === expected;
+  }
+  return false;
+}
+
 function hasCompletePolicyGateEvidence(
   prediction: JsonRecord,
   asOfDate: string,
+  decisionAt: string,
 ): boolean {
   const gates = prediction.gates as JsonRecord[];
   return gates.length === GATE_ORDER.length &&
@@ -61,8 +202,89 @@ function hasCompletePolicyGateEvidence(
       typeof gate.reason_code === "string" && gate.reason_code.length > 0 &&
       gate.actual !== null && gate.actual !== undefined &&
       gate.threshold !== null && gate.threshold !== undefined &&
-      validGateSourceDate(gate.source_date, asOfDate)
+      validGateSourceDate(gate.source_date, asOfDate) &&
+      hasRequiredEvidence(
+        gate,
+        prediction,
+        asOfDate,
+        decisionAt,
+      )
     );
+}
+
+function hasRequiredEvidence(
+  gate: JsonRecord,
+  prediction: JsonRecord,
+  asOfDate: string,
+  decisionAt: string,
+): boolean {
+  const expectedCategory = REQUIRED_EVIDENCE_CATEGORIES[String(gate.gate)];
+  if (!expectedCategory) return true;
+  const evidence = gate.evidence;
+  if (!isRecord(evidence)) return false;
+  const availableAt = typeof evidence.available_at === "string" &&
+      /(?:Z|[+-]\d{2}:\d{2})$/u.test(evidence.available_at)
+    ? Date.parse(evidence.available_at)
+    : Number.NaN;
+  const decisionTime = Date.parse(decisionAt);
+  const expectedMarket = prediction.market === "LISTED" ? "TWSE" : "TPEX";
+  const expectedSymbol = expectedCategory === "MARKET_EXPOSURE"
+    ? null
+    : prediction.symbol;
+  return evidence.contract_version ===
+      "decision-policy-required-evidence.v1" &&
+    evidence.category === expectedCategory &&
+    evidence.status === "AVAILABLE" &&
+    evidence.validation_result === "PASS" &&
+    evidence.reason_code === "PASS" &&
+    evidence.market === expectedMarket &&
+    evidence.symbol === expectedSymbol &&
+    evidence.effective_date === asOfDate &&
+    gate.source_date === evidence.effective_date &&
+    Number.isFinite(availableAt) &&
+    Number.isFinite(decisionTime) &&
+    availableAt <= decisionTime &&
+    typeof evidence.source === "string" && evidence.source.length > 0 &&
+    typeof evidence.publication_id === "string" &&
+    evidence.publication_id.length > 0 &&
+    evidence.value === gate.actual &&
+    validRequiredEvidenceDetails(expectedCategory, evidence, asOfDate) &&
+    requiredEvidenceMatchesPrediction(expectedCategory, evidence, prediction);
+}
+
+function requiredEvidenceMatchesPrediction(
+  category: string,
+  evidence: JsonRecord,
+  prediction: JsonRecord,
+): boolean {
+  if (!isRecord(evidence.details)) return false;
+  if (category === "MARKET_EXPOSURE") {
+    return evidence.value === prediction.market_exposure_cap &&
+      evidence.details.market_regime === prediction.market_regime;
+  }
+  if (category === "POSITION_LIMITS") {
+    return evidence.details.maximum_single_name_weight ===
+        prediction.max_single_position &&
+      evidence.details.maximum_industry_weight ===
+        prediction.max_industry_position;
+  }
+  return true;
+}
+
+function hasInvalidAvailableEvidence(
+  prediction: JsonRecord,
+  asOfDate: string,
+  decisionAt: string,
+): boolean {
+  if (!Array.isArray(prediction.gates)) return false;
+  return prediction.gates.some((gate) => {
+    if (!isRecord(gate)) return false;
+    const category = REQUIRED_EVIDENCE_CATEGORIES[String(gate.gate)];
+    return category !== undefined &&
+      isRecord(gate.evidence) &&
+      gate.evidence.status === "AVAILABLE" &&
+      !hasRequiredEvidence(gate, prediction, asOfDate, decisionAt);
+  });
 }
 
 function actionMatchesPolicyGates(prediction: JsonRecord): boolean {
@@ -125,7 +347,8 @@ function validateResearchGateAttachments(
   if (
     typeof expectedCount !== "number" || !Number.isInteger(expectedCount) ||
     expectedCount < 0 ||
-    expectedContract !== RESEARCH_GATE_ENVELOPE_VERSION ||
+    typeof expectedContract !== "string" ||
+    !RESEARCH_GATE_ENVELOPE_VERSIONS.has(expectedContract) ||
     typeof snapshotSha256 !== "string"
   ) {
     throw new ApiError(
@@ -166,7 +389,7 @@ function validateResearchGateAttachments(
           gate.gate_name !== GATE_ORDER[index] || actual === null ||
           typeof actual !== "object" || Array.isArray(actual)
         ) return false;
-        return actual.contract_version === RESEARCH_GATE_ENVELOPE_VERSION &&
+        return actual.contract_version === expectedContract &&
           actual.attachment_snapshot_sha256 === snapshotSha256 &&
           Object.hasOwn(actual, "value");
       });
@@ -197,6 +420,7 @@ function formalContractReady(
     return hasCompletePolicyGateEvidence(
       prediction,
       rows.run.as_of_date,
+      rows.run.decision_at,
     ) &&
       prediction.data_quality_status === "PASS" &&
       prediction.decision_policy_status === "EVALUATED" &&
@@ -403,14 +627,22 @@ export function buildSnapshot(
   }
   if (
     mapped.some((prediction) =>
-      prediction.decision_policy_status === "EVALUATED" &&
+      hasInvalidAvailableEvidence(
+        prediction,
+        rows.run.as_of_date,
+        rows.run.decision_at,
+      ) ||
       (
-        prediction.data_quality_status !== "PASS" ||
-        !hasCompletePolicyGateEvidence(
-          prediction,
-          rows.run.as_of_date,
-        ) ||
-        !actionMatchesPolicyGates(prediction)
+        prediction.decision_policy_status === "EVALUATED" &&
+        (
+          prediction.data_quality_status !== "PASS" ||
+          !hasCompletePolicyGateEvidence(
+            prediction,
+            rows.run.as_of_date,
+            rows.run.decision_at,
+          ) ||
+          !actionMatchesPolicyGates(prediction)
+        )
       )
     )
   ) {

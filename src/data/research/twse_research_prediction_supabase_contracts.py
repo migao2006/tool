@@ -41,6 +41,7 @@ class ResearchSupabasePublishResult:
     prediction_count: int
     target_environment: str
     decision_gate_count: int = 0
+    market_prediction_count: int = 0
 
 
 __all__ = ["ResearchSupabasePublishResult", "SupabaseResearchWriter"]

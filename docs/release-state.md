@@ -2,7 +2,7 @@
 
 > 此文件完全由 `release-manifest.json` 產生；請勿直接修改。
 > 最後核對日期：2026-07-24（Asia/Taipei）。
-> 證據基準：`UPLOADED_REPOSITORY_AND_RECORDED_WORKFLOW_EVIDENCE`。
+> 證據基準：`STAGING_DEPLOYMENT_AND_PRODUCTION_READ_ONLY_REVERIFICATION`。
 
 ## 模型與研究快照
 
@@ -21,28 +21,19 @@
 
 ## Migration 證據邊界
 
-Repository 目前共有 **38** 個 migration 檔案。
-本修補新增、且仍須在隔離環境驗證後才能部署：
+Repository 目前共有 **39** 個 migration 檔案。
+本修補新增 migration：
 
-- `20260720170000_prediction_snapshot_rate_limit.sql`
-- `20260720190000_prediction_snapshot_read_rpc.sql`
-- `20260721090000_prediction_snapshot_calendar_freshness.sql`
-- `20260724044115_decision_policy_status_semantics.sql`
+- `20260724085021_publish_research_market_evidence_atomically.sql`
 
-Staging 已記錄：`31` 個，最後為 `20260719152201_publish_research_snapshot_atomically.sql`，證據狀態 `DOCUMENTED_NOT_REVERIFIED_BY_THIS_PATCH`。
-Production 已記錄：`31` 個，最後為 `20260719152201_publish_research_snapshot_atomically.sql`，證據狀態 `DOCUMENTED_NOT_REVERIFIED_BY_THIS_PATCH`。
+Staging 已記錄：`39` 個，最後為 `20260724085021_publish_research_market_evidence_atomically.sql`，證據狀態 `DEPLOYED_AND_VALIDATED_2026_07_24`。
+Production 已記錄：`38` 個，最後為 `20260724044115_decision_policy_status_semantics.sql`，證據狀態 `READ_ONLY_REVERIFIED_2026_07_24`。
 
-已記錄遠端最新 migration 之後的 Repository 檔案：
+尚未套用至所有遠端環境的 Repository migration：
 
-- `20260720051630_tpex_price_index_ohlc_queue.sql`
-- `20260720061143_scope_prediction_runs_by_market.sql`
-- `20260720064801_exclude_legacy_prediction_publisher_from_lint.sql`
-- `20260720170000_prediction_snapshot_rate_limit.sql`
-- `20260720190000_prediction_snapshot_read_rpc.sql`
-- `20260721090000_prediction_snapshot_calendar_freshness.sql`
-- `20260724044115_decision_policy_status_semantics.sql`
+- `20260724085021_publish_research_market_evidence_atomically.sql`
 
-上述檔案存在不等於已套用至任何遠端環境。
+Staging 已完成本次 migration 與 Edge/API 驗證；Production 仍未套用。不得由 Staging 狀態推測 Production。
 
 ## P1／P2 執行控制
 
@@ -55,7 +46,7 @@ Production 已記錄：`31` 個，最後為 `20260719152201_publish_research_sna
 - 靜默 fallback：禁止；契約為 `EXPLICIT_LEGACY_MODE_ONLY`。
 - 基礎 RPC migration：`20260720190000_prediction_snapshot_read_rpc.sql`。
 - Calendar v2 migration：`20260721090000_prediction_snapshot_calendar_freshness.sql`。
-- 遠端狀態：`REPOSITORY_ONLY_NOT_REMOTELY_VERIFIED`。
+- 遠端狀態：`DEPLOYED_READ_ONLY_REVERIFIED_2026_07_24`。
 - Decision Policy 部署順序：`STATUS_AWARE_FRONTEND_AND_EDGE` → `DECISION_POLICY_STATUS_MIGRATION` → `STATUS_AWARE_PUBLISHER`。
 - Decision Policy 回復限制：`DO_NOT_ROLL_BACK_EDGE_BEFORE_DATABASE_CONTRACT`。
 - Freshness 首選：`TRADING_CALENDAR`。
@@ -110,11 +101,11 @@ Production 已記錄：`31` 個，最後為 `20260719152201_publish_research_sna
 
 ## 部署限制
 
-本次交付只修改 Repository。不得把下列事項描述為已完成：
+本次交付已完成 Staging migration 與 Edge/API 驗證，但尚未更新 Production。不得把下列事項描述為已完成：
 
-- Staging／Production migration 已套用。
-- Edge Function 已更新。
+- Production migration 已套用。
+- Production Edge Function 已更新。
 - Vercel Production 安全標頭已生效。
 - GitHub branch protection 已要求新的彙總 gate。
 
-Decision Policy 上線時必須先部署可同時理解 legacy 與新狀態契約的 Frontend／Edge，再套用 status migration，最後部署 status-aware publisher；migration 套用後不得先回退 Edge。基礎 RPC 與 calendar v2 migration 仍須依序套用並驗證；帳號復原上線前另須驗證 Redirect URL allowlist 與正式 SMTP。
+Production 下一步必須從受保護 `main` 執行既有 ref-gated workflow，套用同一 additive migration、部署相容 Edge、重發已在 Staging 驗證的不可變快照並完成唯讀稽核；不得繞過 ref gate。帳號復原上線前另須驗證 Redirect URL allowlist 與正式 SMTP。

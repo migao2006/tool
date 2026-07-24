@@ -37,6 +37,15 @@ def _parser() -> argparse.ArgumentParser:
             "profile date without claiming a verified trading session"
         ),
     )
+    _ = parser.add_argument(
+        "--market",
+        choices=("TWSE", "TPEX"),
+        default=None,
+        help=(
+            "Import one venue independently. Omit only for the legacy "
+            "cross-venue coherent-date operation."
+        ),
+    )
     _ = parser.add_argument("--dry-run", action="store_true")
     return parser
 
@@ -44,24 +53,19 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
-        summary = SecuritySnapshotImporter(
-            settings=ApiProviderSettings.from_env()
-        ).run(
+        summary = SecuritySnapshotImporter(settings=ApiProviderSettings.from_env()).run(
             snapshot_date=cast(date | None, args.snapshot_date),
             dry_run=cast(bool, args.dry_run),
+            market=cast(str | None, args.market),
         )
-        print(
-            json.dumps(summary.to_dict(), ensure_ascii=False, indent=2, sort_keys=True)
-        )
+        print(json.dumps(summary.to_dict(), ensure_ascii=False, indent=2, sort_keys=True))
         return 0
     except (IngestionError, ProviderError, KeyError, TypeError, ValueError) as error:
         print(
             json.dumps(
                 {
                     "status": "FAIL",
-                    "reason_code": getattr(
-                        error, "reason_code", "IMPORT_CONFIGURATION_ERROR"
-                    ),
+                    "reason_code": getattr(error, "reason_code", "IMPORT_CONFIGURATION_ERROR"),
                     "message": str(error),
                 },
                 ensure_ascii=False,

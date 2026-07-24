@@ -12,6 +12,8 @@ on:
       - "supabase/snippets/validate_prediction_snapshot_read_rpc.sql"
       - "supabase/migrations/20260721090000_prediction_snapshot_calendar_freshness.sql"
       - "supabase/snippets/validate_prediction_snapshot_calendar_freshness.sql"
+      - "supabase/migrations/20260724085021_publish_research_market_evidence_atomically.sql"
+      - "supabase/snippets/validate_research_market_evidence_publisher.sql"
       - "supabase/config.toml"
   push:
     branches:
@@ -26,6 +28,8 @@ on:
       - "supabase/snippets/validate_prediction_snapshot_read_rpc.sql"
       - "supabase/migrations/20260721090000_prediction_snapshot_calendar_freshness.sql"
       - "supabase/snippets/validate_prediction_snapshot_calendar_freshness.sql"
+      - "supabase/migrations/20260724085021_publish_research_market_evidence_atomically.sql"
+      - "supabase/snippets/validate_research_market_evidence_publisher.sql"
       - "supabase/config.toml"
   workflow_dispatch:
     inputs:
@@ -181,6 +185,7 @@ jobs:
       - name: Deploy prediction-snapshot through GitHub
         run: >-
           pnpm exec supabase functions deploy prediction-snapshot
+          --use-api
           --project-ref "$SUPABASE_PROJECT_REF"
 
       - name: Smoke-test public research contract
@@ -283,6 +288,7 @@ jobs:
       - name: Deploy prediction-snapshot through GitHub
         run: >-
           pnpm exec supabase functions deploy prediction-snapshot
+          --use-api
           --project-ref "$SUPABASE_PROJECT_REF"
 
       - name: Smoke-test public research contract

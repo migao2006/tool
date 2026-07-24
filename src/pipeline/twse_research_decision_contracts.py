@@ -15,6 +15,8 @@ from src.decision.decision_policy import (
     DecisionPolicyStatus,
 )
 
+from .research_decision_policy_evidence import RequiredPolicyEvidence
+
 
 @dataclass(frozen=True)
 class ResearchDecisionPolicyInputs:
@@ -27,6 +29,7 @@ class ResearchDecisionPolicyInputs:
     market_exposure_cap: float | None = None
     position_limits_pass: bool | None = None
     gate_source_dates: Mapping[str, date | str | None] = field(default_factory=dict)
+    required_evidence: Mapping[str, RequiredPolicyEvidence] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -37,6 +40,7 @@ class ResearchDecisionGate:
     threshold: Any
     reason_code: str
     source_date: str | None
+    evidence: RequiredPolicyEvidence | None = None
 
     def __post_init__(self) -> None:
         if self.source_date is None:
@@ -56,6 +60,9 @@ class ResearchDecisionGate:
             "threshold": self.threshold,
             "reason_code": self.reason_code,
             "source_date": self.source_date,
+            "evidence": (
+                self.evidence.to_dict() if self.evidence is not None else None
+            ),
         }
 
 
@@ -73,8 +80,6 @@ class ResearchDecisionPolicyResult:
     def __post_init__(self) -> None:
         if self.horizon != 5:
             raise ValueError("UNSUPPORTED_HORIZON")
-        if self.decision == Decision.CANDIDATE:
-            raise ValueError("research decision policy cannot emit CANDIDATE")
         if self.decision_policy_status == DecisionPolicyStatus.EVALUATED and self.decision is None:
             raise ValueError("evaluated decision policy requires a decision")
         if (

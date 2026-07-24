@@ -1,40 +1,34 @@
 {
   "schema_version": "alpha-lens-release-manifest.v1",
   "last_verified_date": "2026-07-24",
-  "verification_basis": "UPLOADED_REPOSITORY_AND_RECORDED_WORKFLOW_EVIDENCE",
+  "verification_basis": "STAGING_DEPLOYMENT_AND_PRODUCTION_READ_ONLY_REVERIFICATION",
   "repository_state": {
-    "migration_file_count": 38,
+    "migration_file_count": 39,
     "patch_added_migrations": [
-      "20260720170000_prediction_snapshot_rate_limit.sql",
-      "20260720190000_prediction_snapshot_read_rpc.sql",
-      "20260721090000_prediction_snapshot_calendar_freshness.sql",
-      "20260724044115_decision_policy_status_semantics.sql"
+      "20260724085021_publish_research_market_evidence_atomically.sql"
     ],
     "patch_requires_staging_validation": [
-      "20260720170000_prediction_snapshot_rate_limit.sql",
-      "20260720190000_prediction_snapshot_read_rpc.sql",
-      "20260721090000_prediction_snapshot_calendar_freshness.sql",
-      "20260724044115_decision_policy_status_semantics.sql"
+      "20260724085021_publish_research_market_evidence_atomically.sql"
     ],
     "migrations_after_recorded_remote_latest": [
-      "20260720051630_tpex_price_index_ohlc_queue.sql",
-      "20260720061143_scope_prediction_runs_by_market.sql",
-      "20260720064801_exclude_legacy_prediction_publisher_from_lint.sql",
-      "20260720170000_prediction_snapshot_rate_limit.sql",
-      "20260720190000_prediction_snapshot_read_rpc.sql",
-      "20260721090000_prediction_snapshot_calendar_freshness.sql",
-      "20260724044115_decision_policy_status_semantics.sql"
+      "20260724085021_publish_research_market_evidence_atomically.sql"
     ],
     "environment_migration_history": {
       "staging": {
-        "recorded_applied_count": 31,
-        "recorded_latest_migration": "20260719152201_publish_research_snapshot_atomically.sql",
-        "evidence_status": "DOCUMENTED_NOT_REVERIFIED_BY_THIS_PATCH"
+        "recorded_applied_count": 39,
+        "recorded_latest_migration": "20260724085021_publish_research_market_evidence_atomically.sql",
+        "evidence_status": "DEPLOYED_AND_VALIDATED_2026_07_24",
+        "migration_validation_status": "PASS",
+        "edge_function_version": 23,
+        "edge_function_status": "ACTIVE",
+        "edge_deployment_run_id": 30087314367,
+        "edge_deployment_commit": "5784312e5c338298c12b9f3f85c4064570d8e560",
+        "api_verification_status": "PASS"
       },
       "production": {
-        "recorded_applied_count": 31,
-        "recorded_latest_migration": "20260719152201_publish_research_snapshot_atomically.sql",
-        "evidence_status": "DOCUMENTED_NOT_REVERIFIED_BY_THIS_PATCH"
+        "recorded_applied_count": 38,
+        "recorded_latest_migration": "20260724044115_decision_policy_status_semantics.sql",
+        "evidence_status": "READ_ONLY_REVERIFIED_2026_07_24"
       }
     }
   },
@@ -246,7 +240,7 @@
       "expected_primary_postgrest_requests": 1,
       "fallback_condition": "EXPLICIT_LEGACY_MODE_ONLY",
       "migration": "20260721090000_prediction_snapshot_calendar_freshness.sql",
-      "remote_status": "REPOSITORY_ONLY_NOT_REMOTELY_VERIFIED",
+      "remote_status": "DEPLOYED_READ_ONLY_REVERIFIED_2026_07_24",
       "deployment_guard": "RPC_MIGRATION_VERIFIED_ATTESTATION_REQUIRED",
       "decision_policy_rollout_order": [
         "STATUS_AWARE_FRONTEND_AND_EDGE",

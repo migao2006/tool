@@ -188,6 +188,7 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
     histories = repository_state.get("environment_migration_history")
     require(isinstance(histories, dict), "environment migration history is required")
     assert isinstance(histories, dict)
+    remote_gaps: set[str] = set()
     for environment in ("staging", "production"):
         history = histories.get(environment)
         require(isinstance(history, dict), f"{environment} history is required")
@@ -199,10 +200,15 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
         )
         assert isinstance(latest, str)
         later_names = sorted(name for name in migration_names if name > latest)
+        remote_gaps.update(later_names)
         require(
-            later_names == repository_state["migrations_after_recorded_remote_latest"],
-            f"{environment} migration evidence gap is stale",
+            history.get("recorded_applied_count") == migration_count - len(later_names),
+            f"{environment} migration count is stale",
         )
+    require(
+        sorted(remote_gaps) == repository_state["migrations_after_recorded_remote_latest"],
+        "combined remote migration evidence gap is stale",
+    )
 
     hardening = manifest.get("platform_hardening")
     require(isinstance(hardening, dict), "platform_hardening is required")
@@ -225,12 +231,12 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
         "snapshot primary path must use one PostgREST request",
     )
     require(
-        snapshot_read.get("migration") in patch_added,
-        "snapshot RPC migration must be part of this patch",
+        snapshot_read.get("migration") in migration_names,
+        "snapshot RPC migration must exist in repository history",
     )
     require(
-        snapshot_read.get("remote_status") == "REPOSITORY_ONLY_NOT_REMOTELY_VERIFIED",
-        "snapshot RPC remote status must preserve the evidence boundary",
+        snapshot_read.get("remote_status") == "DEPLOYED_READ_ONLY_REVERIFIED_2026_07_24",
+        "snapshot RPC remote status must match the recorded evidence boundary",
     )
     require(
         snapshot_read.get("deployment_guard") == "RPC_MIGRATION_VERIFIED_ATTESTATION_REQUIRED",
@@ -260,8 +266,8 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
         "snapshot base migration is invalid",
     )
     require(
-        snapshot_read.get("base_migration") in patch_added,
-        "snapshot base migration must remain in the patch evidence set",
+        snapshot_read.get("base_migration") in migration_names,
+        "snapshot base migration must exist in repository history",
     )
     freshness = snapshot_read.get("freshness_policy")
     require(isinstance(freshness, dict), "snapshot freshness policy is required")
@@ -551,15 +557,17 @@ def render_status_header(manifest: dict[str, Any]) -> str:
             ">",
             (
                 f"> Repository 目前包含 {repository['migration_file_count']} 個 migration 檔案；"
-                f"本修補新增且待 Staging／Production 部署驗證：{patch_added}。"
+                f"本修補新增：{patch_added}。Staging 已完成 migration、權限、rollback-safe "
+                "contract 與 Edge/API 驗證；Production 尚未部署。"
             ),
             ">",
             (
-                "> Staging／Production 的既有文件最後完整紀錄均為 "
+                "> Staging／Production 遠端 migration history 已於本修補重新核對，"
+                "目前分別為 "
                 f"{staging['recorded_applied_count']}／{production['recorded_applied_count']} 筆；"
-                f"其後 Repository 共有 {len(repository['migrations_after_recorded_remote_latest'])} 檔："
-                f"{remote_gap}。本修補未連線重新驗證這些 migration 的遠端套用狀態，"
-                "不得由檔案存在與否推測已部署或未部署。"
+                f"仍未套用至所有環境的 Repository migration 共有 "
+                f"{len(repository['migrations_after_recorded_remote_latest'])} 檔：{remote_gap}。"
+                "環境狀態必須逐一判讀，不得由 Repository 或 Staging 狀態推測 Production。"
             ),
             ">",
             (
@@ -766,7 +774,7 @@ def render_release_state(manifest: dict[str, Any]) -> str:
                 "## Migration 證據邊界",
                 "",
                 f"Repository 目前共有 **{repository['migration_file_count']}** 個 migration 檔案。",
-                "本修補新增、且仍須在隔離環境驗證後才能部署：",
+                "本修補新增 migration：",
                 "",
                 *patch_rows,
                 "",
@@ -783,11 +791,12 @@ def render_release_state(manifest: dict[str, Any]) -> str:
                     f"`{histories['production']['evidence_status']}`。"
                 ),
                 "",
-                "已記錄遠端最新 migration 之後的 Repository 檔案：",
+                "尚未套用至所有遠端環境的 Repository migration：",
                 "",
                 *migration_rows,
                 "",
-                "上述檔案存在不等於已套用至任何遠端環境。",
+                "Staging 已完成本次 migration 與 Edge/API 驗證；Production 仍未套用。"
+                "不得由 Staging 狀態推測 Production。",
                 "",
                 "## P1／P2 執行控制",
                 "",
@@ -871,17 +880,18 @@ def render_release_state(manifest: dict[str, Any]) -> str:
                 "",
                 "## 部署限制",
                 "",
-                "本次交付只修改 Repository。不得把下列事項描述為已完成：",
+                "本次交付已完成 Staging migration 與 Edge/API 驗證，但尚未更新 "
+                "Production。不得把下列事項描述為已完成：",
                 "",
-                "- Staging／Production migration 已套用。",
-                "- Edge Function 已更新。",
+                "- Production migration 已套用。",
+                "- Production Edge Function 已更新。",
                 "- Vercel Production 安全標頭已生效。",
                 "- GitHub branch protection 已要求新的彙總 gate。",
                 "",
                 (
-                    "Decision Policy 上線時必須先部署可同時理解 legacy 與新狀態契約的 Frontend／Edge，"
-                    "再套用 status migration，最後部署 status-aware publisher；migration 套用後不得先回退 "
-                    "Edge。基礎 RPC 與 calendar v2 migration 仍須依序套用並驗證；帳號復原上線前另須驗證 "
+                    "Production 下一步必須從受保護 `main` 執行既有 ref-gated workflow，"
+                    "套用同一 additive migration、部署相容 Edge、重發已在 Staging 驗證的"
+                    "不可變快照並完成唯讀稽核；不得繞過 ref gate。帳號復原上線前另須驗證 "
                     "Redirect URL allowlist 與正式 SMTP。"
                 ),
             ]

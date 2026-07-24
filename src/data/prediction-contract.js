@@ -57,6 +57,13 @@ function normalizeGate(gate) {
     threshold: firstValue(gate, ["threshold", "threshold_value"]),
     reason_code: nullableString(firstValue(gate, ["reason_code", "reasonCode"])),
     source_date: nullableString(firstValue(gate, ["source_date", "sourceDate"])),
+    evidence: (
+      gate?.evidence &&
+        typeof gate.evidence === "object" &&
+        !Array.isArray(gate.evidence)
+        ? Object.freeze({ ...gate.evidence })
+        : null
+    ),
   });
 }
 

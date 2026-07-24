@@ -21,7 +21,10 @@ import {
 const RESEARCH_DATA_QUALITY_WARNING = "RESEARCH_DATA_QUALITY_WARN";
 const LEGACY_NO_POLICY_REASON = "RESEARCH_ONLY_NO_FORMAL_DECISION_POLICY";
 const REQUIRED_POLICY_DATA_MISSING = "REQUIRED_DECISION_POLICY_DATA_MISSING";
-const RESEARCH_GATE_ENVELOPE_VERSION = "research-decision-gate.v1";
+const RESEARCH_GATE_ENVELOPE_VERSIONS = new Set([
+  "research-decision-gate.v1",
+  "research-decision-gate.v2",
+]);
 const DECISIONS = new Set<Decision>(["CANDIDATE", "WATCH", "NO_TRADE"]);
 const POLICY_STATUSES = new Set<DecisionPolicyStatus>([
   "EVALUATED",
@@ -167,10 +170,12 @@ export function mapMarket(
 function unwrapGateActual(value: JsonValue): {
   actual: JsonValue;
   sourceDate: string | null;
+  evidence: JsonValue;
 } {
   if (
     value !== null && typeof value === "object" && !Array.isArray(value) &&
-    value.contract_version === RESEARCH_GATE_ENVELOPE_VERSION &&
+    typeof value.contract_version === "string" &&
+    RESEARCH_GATE_ENVELOPE_VERSIONS.has(value.contract_version) &&
     Object.hasOwn(value, "value")
   ) {
     return {
@@ -178,9 +183,10 @@ function unwrapGateActual(value: JsonValue): {
       sourceDate: typeof value.source_date === "string"
         ? value.source_date
         : null,
+      evidence: Object.hasOwn(value, "evidence") ? value.evidence : null,
     };
   }
-  return { actual: value, sourceDate: null };
+  return { actual: value, sourceDate: null, evidence: null };
 }
 
 function mapGates(rows: DecisionGateRow[]): JsonRecord[] {
@@ -194,8 +200,33 @@ function mapGates(rows: DecisionGateRow[]): JsonRecord[] {
         threshold: row.threshold_value,
         reason_code: row.reason_code,
         source_date: envelope.sourceDate,
+        evidence: envelope.evidence,
       };
     });
+}
+
+function positionLimit(
+  gates: JsonRecord[],
+  field: "maximum_single_name_weight" | "maximum_industry_weight",
+): number | null {
+  const gate = gates.find((value) => value.gate === "position_capacity_limits");
+  const evidence = gate?.evidence;
+  if (
+    evidence === null || typeof evidence !== "object" ||
+    Array.isArray(evidence)
+  ) return null;
+  if (
+    evidence.contract_version !== "decision-policy-required-evidence.v1" ||
+    evidence.category !== "POSITION_LIMITS" ||
+    evidence.status !== "AVAILABLE" ||
+    evidence.validation_result !== "PASS" ||
+    evidence.reason_code !== "PASS"
+  ) return null;
+  const details = evidence.details;
+  if (
+    details === null || typeof details !== "object" || Array.isArray(details)
+  ) return null;
+  return numberValue(details[field]);
 }
 
 export function mapPrediction(
@@ -286,8 +317,14 @@ export function mapPrediction(
     liquidity_bucket: null,
     adv20: numberValue(prediction.adv20_ntd),
     max_order_notional_ntd: numberValue(prediction.maximum_order_notional_ntd),
-    max_single_position: null,
-    max_industry_position: null,
+    max_single_position: positionLimit(
+      mappedGates,
+      "maximum_single_name_weight",
+    ),
+    max_industry_position: positionLimit(
+      mappedGates,
+      "maximum_industry_weight",
+    ),
     cost_profile: costProfileName(run.cost_profile_version),
     previous_global_rank: null,
     previous_decision: null,

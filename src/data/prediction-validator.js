@@ -12,6 +12,39 @@ const DECISION_GATE_ORDER = Object.freeze([
   "rank_eligibility",
   "position_capacity_limits",
 ]);
+const REQUIRED_EVIDENCE_CATEGORIES = Object.freeze({
+  tradability_gate: "TRADABILITY",
+  market_exposure_cap: "MARKET_EXPOSURE",
+  position_capacity_limits: "POSITION_LIMITS",
+});
+const TRADABILITY_EVIDENCE_FIELDS = Object.freeze([
+  "altered_trading_method_flag",
+  "attention_flag",
+  "disposal_flag",
+  "full_cash_delivery_flag",
+  "periodic_auction_flag",
+  "suspended_flag",
+  "trading_status",
+]);
+const MARKET_EVIDENCE_FIELDS = Object.freeze([
+  "calibrated_p_down",
+  "calibrated_p_neutral",
+  "calibrated_p_up",
+  "forecast_market_volatility",
+  "market_regime",
+  "model_version",
+  "training_end_date",
+]);
+const POSITION_EVIDENCE_FIELDS = Object.freeze([
+  "maximum_adv_participation",
+  "maximum_industry_weight",
+  "maximum_single_name_weight",
+  "portfolio_policy_version",
+  "portfolio_state_id",
+  "proposed_adv_participation",
+  "proposed_weight",
+  "resulting_industry_weight",
+]);
 
 function hasUsableVersion(value) {
   return typeof value === "string" && !UNUSABLE_VERSIONS.has(value.trim().toUpperCase());
@@ -55,6 +88,102 @@ function isFiniteInRange(value, minimum, maximum = Number.POSITIVE_INFINITY) {
   return Number.isFinite(value) && value >= minimum && value <= maximum;
 }
 
+function hasExactFields(value, expected) {
+  const actual = Object.keys(value).sort();
+  return actual.length === expected.length &&
+    actual.every((field, index) => field === expected[index]);
+}
+
+function validateRequiredEvidenceDetails(category, evidence, asOfDate) {
+  const details = evidence.details;
+  if (!details || typeof details !== "object" || Array.isArray(details)) {
+    return false;
+  }
+  if (category === "TRADABILITY") {
+    if (
+      !hasExactFields(details, TRADABILITY_EVIDENCE_FIELDS) ||
+      typeof details.trading_status !== "string" ||
+      details.trading_status.length === 0
+    ) {
+      return false;
+    }
+    const flags = [
+      details.attention_flag,
+      details.disposal_flag,
+      details.altered_trading_method_flag,
+      details.full_cash_delivery_flag,
+      details.periodic_auction_flag,
+      details.suspended_flag,
+    ];
+    if (flags.some((flag) => typeof flag !== "boolean")) return false;
+    const expected = details.trading_status === "ACTIVE" &&
+      details.disposal_flag === false &&
+      details.altered_trading_method_flag === false &&
+      details.full_cash_delivery_flag === false &&
+      details.periodic_auction_flag === false &&
+      details.suspended_flag === false;
+    return typeof evidence.value === "boolean" && evidence.value === expected;
+  }
+  if (category === "MARKET_EXPOSURE") {
+    if (
+      !hasExactFields(details, MARKET_EVIDENCE_FIELDS) ||
+      !isFiniteInRange(evidence.value, 0, 1) ||
+      typeof details.market_regime !== "string" ||
+      details.market_regime.length === 0 ||
+      typeof details.model_version !== "string" ||
+      details.model_version.length === 0 ||
+      !isFiniteInRange(details.forecast_market_volatility, 0)
+    ) {
+      return false;
+    }
+    let trainingEndDate;
+    try {
+      trainingEndDate = dateOnly(
+        details.training_end_date,
+        "market evidence training_end_date",
+      );
+    } catch {
+      return false;
+    }
+    if (trainingEndDate >= asOfDate) return false;
+    const probabilities = [
+      details.calibrated_p_up,
+      details.calibrated_p_neutral,
+      details.calibrated_p_down,
+    ];
+    return probabilities.every((value) => isFiniteInRange(value, 0, 1)) &&
+      Math.abs(probabilities.reduce((sum, value) => sum + value, 0) - 1) <=
+        0.000001;
+  }
+  if (category === "POSITION_LIMITS") {
+    if (
+      !hasExactFields(details, POSITION_EVIDENCE_FIELDS) ||
+      typeof evidence.value !== "boolean" ||
+      typeof details.portfolio_policy_version !== "string" ||
+      details.portfolio_policy_version.length === 0 ||
+      typeof details.portfolio_state_id !== "string" ||
+      details.portfolio_state_id.length === 0
+    ) {
+      return false;
+    }
+    const limits = [
+      details.maximum_single_name_weight,
+      details.maximum_industry_weight,
+      details.maximum_adv_participation,
+      details.proposed_weight,
+      details.resulting_industry_weight,
+      details.proposed_adv_participation,
+    ];
+    if (!limits.every((value) => isFiniteInRange(value, 0, 1))) return false;
+    const expected =
+      details.proposed_weight <= details.maximum_single_name_weight &&
+      details.resulting_industry_weight <= details.maximum_industry_weight &&
+      details.proposed_adv_participation <= details.maximum_adv_participation;
+    return evidence.value === expected;
+  }
+  return false;
+}
+
 function validateDecisionGateSet(record, snapshot, requireSourceDates = false) {
   if (record.gates.length === 0) {
     if (requireSourceDates) {
@@ -80,8 +209,13 @@ function validateDecisionGateSet(record, snapshot, requireSourceDates = false) {
     ) {
       throw new TypeError(`${record.symbol} 的決策 gate 實際值或門檻缺漏。`);
     }
+    const category = REQUIRED_EVIDENCE_CATEGORIES[gate.key];
+    const evidence = gate.evidence;
+    const hasAvailableEvidence = Boolean(
+      category && evidence && evidence.status === "AVAILABLE",
+    );
     if (gate.source_date === null) {
-      if (requireSourceDates) {
+      if (requireSourceDates || hasAvailableEvidence) {
         throw new TypeError(`${record.symbol} 的決策 gate 缺少來源日期。`);
       }
       return;
@@ -93,6 +227,60 @@ function validateDecisionGateSet(record, snapshot, requireSourceDates = false) {
       throw new RangeError(
         `${record.symbol} 的決策 gate 來源日期晚於資料日期。`,
       );
+    }
+    if (category && (requireSourceDates || hasAvailableEvidence)) {
+      const availableAt = evidence?.available_at;
+      const expectedSymbol = category === "MARKET_EXPOSURE"
+        ? null
+        : record.symbol;
+      if (
+        !evidence ||
+        evidence.contract_version !==
+          "decision-policy-required-evidence.v1" ||
+        evidence.category !== category ||
+        evidence.status !== "AVAILABLE" ||
+        evidence.validation_result !== "PASS" ||
+        evidence.reason_code !== "PASS" ||
+        evidence.market !== record.market ||
+        evidence.symbol !== expectedSymbol ||
+        evidence.effective_date !== snapshot.asOfDate ||
+        gate.source_date !== evidence.effective_date ||
+        evidence.value !== gate.actual ||
+        typeof evidence.source !== "string" ||
+        evidence.source.length === 0 ||
+        typeof evidence.publication_id !== "string" ||
+        evidence.publication_id.length === 0 ||
+        !validateRequiredEvidenceDetails(
+          category,
+          evidence,
+          snapshot.asOfDate,
+        ) ||
+        awareTimestamp(
+            availableAt,
+            `${record.symbol} gate evidence available_at`,
+          ) >
+          awareTimestamp(snapshot.decisionAt, "decision_at") ||
+        (
+          category === "MARKET_EXPOSURE" &&
+          (
+            evidence.value !== record.market_exposure_cap ||
+            evidence.details.market_regime !== record.market_regime
+          )
+        ) ||
+        (
+          category === "POSITION_LIMITS" &&
+          (
+            evidence.details.maximum_single_name_weight !==
+              record.max_single_position ||
+            evidence.details.maximum_industry_weight !==
+              record.max_industry_position
+          )
+        )
+      ) {
+        throw new TypeError(
+          `${record.symbol} 的必要 Decision Policy 證據不完整。`,
+        );
+      }
     }
   });
   const allGatesPassed = record.gates.every((gate) => gate.passed);

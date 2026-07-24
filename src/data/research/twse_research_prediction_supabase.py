@@ -139,9 +139,20 @@ class TwseResearchPredictionSupabasePublisher:
                 "p_stock_predictions": [
                     dict(value) for value in resolved.stock_predictions
                 ],
+                "p_market_prediction": (
+                    None
+                    if resolved.market_prediction is None
+                    else dict(resolved.market_prediction)
+                ),
             },
         )
-        run_id, prediction_count = self._parse_rpc_result(response, parsed)
+        run_id, prediction_count = self._parse_rpc_result(
+            response,
+            parsed,
+            expected_market_count=(
+                0 if resolved.market_prediction is None else 1
+            ),
+        )
         gate_count = persist_research_decision_gates(
             self.writer,
             prediction_run_id=run_id,
@@ -153,6 +164,9 @@ class TwseResearchPredictionSupabasePublisher:
             prediction_count=prediction_count,
             target_environment=self.target_environment,
             decision_gate_count=gate_count,
+            market_prediction_count=(
+                0 if resolved.market_prediction is None else 1
+            ),
         )
 
     def _security_ids(
@@ -244,18 +258,26 @@ class TwseResearchPredictionSupabasePublisher:
 
     @staticmethod
     def _parse_rpc_result(
-        response: object, parsed: ParsedResearchSnapshot
+        response: object,
+        parsed: ParsedResearchSnapshot,
+        *,
+        expected_market_count: int,
     ) -> tuple[int, int]:
         if not isinstance(response, Mapping):
             raise ValueError("Supabase atomic publisher returned an invalid response")
         try:
             run_id = int(cast(int | str, response["prediction_run_id"]))
             prediction_count = int(cast(int | str, response["prediction_count"]))
+            market_count = int(cast(int | str, response["market_prediction_count"]))
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError(
                 "Supabase atomic publisher returned an invalid response"
             ) from error
-        if run_id < 1 or prediction_count != len(parsed.predictions):
+        if (
+            run_id < 1
+            or prediction_count != len(parsed.predictions)
+            or market_count != expected_market_count
+        ):
             raise ValueError(
                 "Supabase atomic publisher returned an unexpected row count"
             )

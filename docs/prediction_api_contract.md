@@ -1,6 +1,6 @@
 # Alpha Lens 5 日預測 API 契約
 
-> 2026-07-24 現況：`supabase/functions/prediction-snapshot` 已有唯讀實作，前端 `predictionApiBaseUrl` 已指向本專案 Supabase Edge Functions。Decision Policy 狀態語意修正及 migration 已在隔離資料庫驗證，但尚未部署至 Staging／Production。Watchlist 持久化尚未上線，`watchlistPersistenceEnabled=false`，UI 必須停用寫入操作。限流 migration 已加入 repository，但在完成 Staging／Production migration 與環境設定前維持關閉。UI 不得使用示例資料冒充回應。
+> 2026-07-24 現況：`supabase/functions/prediction-snapshot` 已有唯讀實作，前端 `predictionApiBaseUrl` 已指向本專案 Supabase Edge Functions。PR #104 的 Decision Policy 狀態 migration、Edge 與 Production backfill 已完成並經唯讀驗證；本次 `decision-policy-required-evidence.v1` transport、三參數 publisher migration 與相容 Edge 已在 Staging 完成驗證，Production 尚未部署。Watchlist 持久化尚未上線，`watchlistPersistenceEnabled=false`，UI 必須停用寫入操作。限流未完成正式環境設定前維持關閉。UI 不得使用示例資料冒充回應。
 
 目前前端固定使用 `horizon=5`，並以 `market=TWSE|TPEX` 分別取得上市與上櫃資料集；契約版本為 `prediction-snapshot.v1`。缺省 `market` 時只查詢 `TWSE`，不得回傳跨市場混合資料。後端應使用 `src.api.PredictionSnapshotOutput` 產生回應，避免自行拼接欄位。
 
@@ -136,6 +136,28 @@ Validation 不以「同版本最新一筆」任意拼接。只有同一
 正式 `PASS` 契約必須保留每個 gate 的 `source_date`。Python、Edge 與前端均要求
 `EVALUATED` 列具備完整來源日期，且日期不得晚於 `as_of_date`；缺少或未來日期一律
 fail closed。
+
+`tradability_gate`、`market_exposure_cap` 與 `position_capacity_limits` 另須包含
+`evidence`，其契約版本固定為 `decision-policy-required-evidence.v1`。正式
+`EVALUATED` 列的三筆 evidence 必須同時滿足：
+
+- `status=AVAILABLE`、`validation_result=PASS`、`reason_code=PASS`。
+- source 與 publication identity 非空，market、symbol、effective date 與股票列完全
+  相符；市場曝險是場別級 evidence，`symbol=null`。
+- `available_at` 含時區且不晚於 `decision_at`，effective date 恰等於
+  `as_of_date`，每個對應 gate 的 `source_date` 也必須恰等於該 evidence effective
+  date；不得使用 stale 或 future evidence。
+- evidence `value` 等於 gate `actual`，且 details 是該 category 的完整精確欄位集；
+  derived Boolean／cap、機率總和、訓練截止日與各權重限制必須互相一致。市場曝險及
+  部位上限的 evidence 也必須分別等於股票列公開的 market／position 欄位。
+
+缺少 evidence 可保留 `MISSING` 記錄及原因碼供稽核，但不得填入政策 actual，也不得
+從股票列的 nullable market／position 欄位反推。Edge 只會從
+`AVAILABLE/PASS POSITION_LIMITS` evidence 公開 maximum single／industry limits。
+Python、Edge 與前端任一層發現缺欄、竄改、跨市場、錯誤 identity、晚到或衍生值不一致
+時，都會拒絕把該列視為 `EVALUATED`。即使股票列本身已是非 `EVALUATED`，聲稱
+`AVAILABLE` 卻不符合上述契約的 evidence 也會使整份快照驗證失敗，不會被當成可公開的
+稽核證據。
 
 只有完整且通過 `PredictionSnapshotOutput` 驗證的 `PASS` 回應，才會在前端顯示正式候選。缺欄、錯誤 horizon、非單調分位數、錯誤機率、未知契約版本或缺少稽核欄位都會轉為 `FAIL`，不會以舊資料補上。
 

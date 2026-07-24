@@ -8,9 +8,9 @@
 >
 > 系統狀態：`RESEARCH_ONLY`
 >
-> Repository 目前包含 38 個 migration 檔案；本修補新增且待 Staging／Production 部署驗證：`20260720170000_prediction_snapshot_rate_limit.sql`、`20260720190000_prediction_snapshot_read_rpc.sql`、`20260721090000_prediction_snapshot_calendar_freshness.sql`、`20260724044115_decision_policy_status_semantics.sql`。
+> Repository 目前包含 39 個 migration 檔案；本修補新增：`20260724085021_publish_research_market_evidence_atomically.sql`。Staging 已完成 migration、權限、rollback-safe contract 與 Edge/API 驗證；Production 尚未部署。
 >
-> Staging／Production 的既有文件最後完整紀錄均為 31／31 筆；其後 Repository 共有 7 檔：`20260720051630_tpex_price_index_ohlc_queue.sql`、`20260720061143_scope_prediction_runs_by_market.sql`、`20260720064801_exclude_legacy_prediction_publisher_from_lint.sql`、`20260720170000_prediction_snapshot_rate_limit.sql`、`20260720190000_prediction_snapshot_read_rpc.sql`、`20260721090000_prediction_snapshot_calendar_freshness.sql`、`20260724044115_decision_policy_status_semantics.sql`。本修補未連線重新驗證這些 migration 的遠端套用狀態，不得由檔案存在與否推測已部署或未部署。
+> Staging／Production 遠端 migration history 已於本修補重新核對，目前分別為 39／38 筆；仍未套用至所有環境的 Repository migration 共有 1 檔：`20260724085021_publish_research_market_evidence_atomically.sql`。環境狀態必須逐一判讀，不得由 Repository 或 Staging 狀態推測 Production。
 >
 > Prediction Snapshot 主要讀取路徑已改為單一 RPC `market_data.get_prediction_snapshot_rows_v2(integer,text,timestamptz)`，正常路徑預期每次快照只產生 1 次 PostgREST 請求。預設模式為 `rpc`；RPC 未部署時 fail closed，只有明確設定 `legacy` 才走緊急舊路徑。
 > Freshness 優先使用 `TRADING_CALENDAR`，要求 45 日連續可信日曆覆蓋（上限 62 日；RPC 取回 63 個曆日以涵蓋就緒時間前的邊界）；缺日或不可用時明確改採 `WALL_CLOCK_FALLBACK`，不得猜測休市日。
@@ -31,8 +31,12 @@
 - 已建立每月費用為 `$0` 的獨立 Staging 專案 `alpha-lens-staging`。
 - Project ref：`kretvnnfavndkmckyidl`。
 - 專案狀態：`ACTIVE_HEALTHY`。
-- 既有文件紀錄顯示 Staging migration history 曾與 Production 對齊，共 31 筆 migrations；
-  當時最新 migration 為 `20260719152201_publish_research_snapshot_atomically.sql`。
+- 2026-07-24 唯讀重驗後套用本次 additive migration；Staging 現有 39 筆，
+  最新為 `20260724085021_publish_research_market_evidence_atomically.sql`。
+- 三參數研究 publisher 的權限、原子性、缺證據、冪等、衝突與 rollback-safe
+  validation 全部通過，驗證資料沒有留存。
+- GitHub workflow `30087314367` 已部署 Staging Edge v23；公開 TWSE／TPEx、
+  market isolation、horizon 與 fail-closed smoke test 通過。
 - 新約束已實測允許來源日期後才取得的快照，仍拒絕未來快照日期，且驗證資料無殘留。
 - `supabase db lint --linked --level error`：0 個 schema error。
 - Supplemental task transaction RPC 與研究快照原子發布 RPC contract：`PASS`。
@@ -41,8 +45,9 @@
 
 ### Supabase Production
 
-- 既有文件紀錄顯示 Production migration history 曾與 Staging 對齊，共 31 筆 migrations；
-  當時最新 migration 為 `20260719152201_publish_research_snapshot_atomically.sql`。
+- 2026-07-24 唯讀重驗為 38 筆，最新為
+  `20260724044115_decision_policy_status_semantics.sql`；本次 additive migration
+  與 Edge 尚未部署至 Production。
 - Production `db lint` 沒有 schema error；原子發布 RPC 權限已驗證為 service-role only。
 
 ### 本機隔離環境
@@ -51,11 +56,11 @@
 - 既有文件紀錄顯示 Supabase Local 曾用 Docker 完整重建前 32 個 migrations，最後包含
   `20260720051630_tpex_price_index_ohlc_queue.sql`；相關 TPEX benchmark validation、rollback 與
   schema lint 曾通過。
-- 本修補未啟動共用 Supabase Local，也未寫入 Staging／Production；遠端 migration
-  history 未重新驗證，Repository 第 32～38 個 migration 的套用狀態不得由檔案存在推測。
-- `20260724044115_decision_policy_status_semantics.sql` 已在一次性 PostgreSQL 17
-  container 完成全 migration chain、legacy backfill、publisher/RPC、約束、權限與
-  rollback 驗證；container 與測試資料已移除。這不等於 Staging 或 Production 已部署。
+- 本修補以一次性 PostgreSQL 17 container 重建全部 39 個 migration，完成
+  publisher/RPC、約束、權限、衝突、rollback 與重新套用驗證；container 與測試資料
+  已移除。
+- 本修補只寫入隔離 Staging 的 additive migration 與 Edge 設定；Production 只有唯讀
+  稽核，沒有 migration、資料回補或 Edge 寫入。
 
 ## 二、已封存及已產生的真實資料
 
@@ -259,9 +264,9 @@ Artifact／provenance：
 這是回溯研究推論，不是新的 OOS 驗證。既有契約驗證紀錄顯示每檔恰好 8 層 gate；gate order、actual、threshold、reason code 與 attachment snapshot hash 均通過。具備真實輸入的資料品質、流動性容量、校準方向機率、淨分位數及排名資格會顯示實際值與門檻；缺少 point-in-time 可交易性、市場模型及部位配置輸入時一律 fail closed。舊資料庫欄位曾記錄 `NO_TRADE=1,068`；權威重分類為 `MISSING_REQUIRED_DATA=1,068` 且政策動作為空值。不得描述為正式候選股、即時交易訊號或獲利保證。
 <!-- release-manifest:status-snapshot:end -->
 
-### 2026-07-24 Production 唯讀狀態稽核
+### 2026-07-24 PR #104 Production 部署與唯讀驗證
 
-目前 Production 最新上市 `horizon=5` 為 `prediction_run_id=12`、
+PR #104 部署前的 Production 最新上市 `horizon=5` 為 `prediction_run_id=12`、
 `as_of_date=2026-07-20`，共有 1,068 筆排名列。資料庫與公開 API 的 legacy 欄位均為
 `CANDIDATE=0`、`WATCH=0`、`NO_TRADE=1,068`、hard fail 0，但沒有相同 run 的
 `market_predictions` 列。
@@ -270,14 +275,38 @@ Artifact／provenance：
 gate 中，formal tradability、market exposure 與 position limits 全部缺少，資料品質
 只有 research `WARN`，不是完整政策評估。1,068 列全都缺少上述三類 mandatory
 evidence；因此新契約的權威計數為 `NO_TRADE=0`、
-`MISSING_REQUIRED_DATA=1,068`。資料庫 migration 與新版 Edge Function 尚未部署前，
-正式 UI 仍可能顯示 legacy 值，不得把它描述為實際政策已決定不進場。
+`MISSING_REQUIRED_DATA=1,068`。PR #104 的 Production migration、Edge Function、
+fail-closed backfill 與公開 API 驗證其後均已完成：run 12 的 1,068 列已改為
+`MISSING_REQUIRED_DATA`、action 為空，且 `system_status=RESEARCH_ONLY`。該部署沒有把
+缺證據列描述為正式政策已決定不進場；以下 run 13 稽核是較新的 Production 基線。
 
 新契約另外要求 `EVALUATED` 必須具有 `PASS` 資料品質與完整、具來源日期的八層
 gate。`CANDIDATE` 代表全部 gate 通過且入選，`WATCH` 代表全部 gate 通過但因
 `OUTSIDE_TOP_K` 未入選，`NO_TRADE` 代表至少一項適用政策 gate 未通過；included
 與 excluded 鍵不得重疊，excluded 只承載 `HARD_FAIL`。正式 `PASS` universe 不得
 為空，但非空 universe 經完整有效評估後可如實得到 0 個正式候選。
+
+### 2026-07-24 必要證據修復（feature branch）
+
+本 Work Package 起始的最新 Production 上市 horizon-5 為
+`prediction_run_id=13`、`as_of_date=2026-07-23`，policy universe 1,067 列；
+`MISSING_REQUIRED_DATA=1,067`、其他 evaluation status 皆為 0、所有 action 為空，
+`market_predictions=0`，系統維持 `RESEARCH_ONLY`。上櫃 854 列在獨立 run，horizon
+2 仍回 `UNSUPPORTED_HORIZON`。
+
+feature branch 已建立 `decision-policy-required-evidence.v1`：evidence artifact
+固定 source、market、歷史 security identity、effective date、`available_at`、
+publication/run identity、validation 與 missing reason，並以 exact feature universe
+避免使用今日 `securities` 回填歷史身分。推論、publisher、三參數原子 RPC、Edge、
+Python API 與前端皆只接受完整一致的 `AVAILABLE` evidence；缺少或晚到 evidence
+仍為 `MISSING_REQUIRED_DATA`、`decision=null`。
+
+目前能證明的 Production 限制沒有被掩蓋：tradability 快照為晚到且
+`full_cash_delivery_flag` 不完整；market exposure 沒有正式 producer 或既有
+publication；position limits 沒有 point-in-time portfolio/policy producer。因此此
+修復接通 transport 與拒絕規則，但不回補歷史值，也不預期把現有 1,067 列變成
+`EVALUATED`。發佈與回復程序見
+[`decision-policy-evidence-release.md`](decision-policy-evidence-release.md)。
 
 ## 三、Supplemental 回補現況
 

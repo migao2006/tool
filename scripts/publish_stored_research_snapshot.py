@@ -183,6 +183,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "prediction_run_id": result.prediction_run_id,
                 "prediction_count": result.prediction_count,
                 "decision_gate_count": result.decision_gate_count,
+                "market_prediction_count": result.market_prediction_count,
             },
         }
         _write(report_path, report)

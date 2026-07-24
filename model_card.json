@@ -114,13 +114,18 @@
     "prediction_count": 672,
     "candidate_count": 0,
     "watch_count": 0,
-    "no_trade_count": 672,
+    "no_trade_count": 0,
+    "policy_input_missing_count": 672,
+    "policy_validation_failed_count": 0,
+    "policy_hard_fail_count": 0,
+    "legacy_persisted_no_trade_count": 672,
     "hard_fail_count": 0,
     "snapshot_sha256": "f4fa5a50ebaa3f4820caadaf02c70525a7b6e93fd89d1fa89fbaac21cc7840d9",
     "github_artifact_id": 8443586850,
     "github_artifact_digest": "57eb16f26d50e2408020c51a4e1bef2f179e998819baf2f550bfc088c92e6b69"
   },
   "published_research_snapshot": {
+    "evidence_scope": "LATEST_FULLY_ARTIFACT_AND_PROVENANCE_BACKED_SNAPSHOT",
     "workflow_run_id": 29701335309,
     "workflow_url": "https://github.com/migao2006/tool/actions/runs/29701335309",
     "git_commit": null,
@@ -136,7 +141,12 @@
     "prediction_count": 1068,
     "candidate_count": 0,
     "watch_count": 0,
-    "no_trade_count": 1068,
+    "no_trade_count": 0,
+    "policy_input_missing_count": 1068,
+    "policy_validation_failed_count": 0,
+    "policy_hard_fail_count": 0,
+    "legacy_persisted_no_trade_count": 1068,
+    "decision_policy_semantics": "LEGACY_NO_TRADE_RECLASSIFIED_MISSING_REQUIRED_DATA",
     "hard_fail_count": 0,
     "data_quality_warn_count": 1068,
     "industry_non_null_count": 0,
@@ -184,7 +194,7 @@
     "The research label uses unadjusted open-close returns rather than formal executable total return",
     "The rank model did not beat the 20-day momentum baseline and mean Rank IC is negative",
     "Locked holdout and complete execution backtest have not been executed",
-    "The latest snapshot is retrospective research inference rather than a new out-of-sample evaluation",
-    "Industry history and formal decision-policy gates are absent from the latest 1,068-row snapshot"
+    "The latest fully artifact- and provenance-backed snapshot is retrospective research inference rather than a new out-of-sample evaluation",
+    "Industry history and formal decision-policy inputs are incomplete in the latest fully artifact- and provenance-backed 1,068-row snapshot"
   ]
 }

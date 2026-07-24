@@ -1,7 +1,7 @@
 # Release 與部署證據狀態
 
 > 此文件完全由 `release-manifest.json` 產生；請勿直接修改。
-> 最後核對日期：2026-07-21（Asia/Taipei）。
+> 最後核對日期：2026-07-24（Asia/Taipei）。
 > 證據基準：`UPLOADED_REPOSITORY_AND_RECORDED_WORKFLOW_EVIDENCE`。
 
 ## 模型與研究快照
@@ -10,20 +10,24 @@
 | --- | --- |
 | 系統狀態 | `RESEARCH_ONLY` |
 | Model version | `twse-price-research-h5-v1` |
+| Evidence scope | `LATEST_FULLY_ARTIFACT_AND_PROVENANCE_BACKED_SNAPSHOT` |
 | Prediction run | `4` |
 | Snapshot workflow | `29701335309` |
 | Snapshot commit | 未記錄於目前可用證據（不得推測） |
 | Evaluation scope | `RETROSPECTIVE_RESEARCH_INFERENCE` |
 | Prediction count | `1068` |
+| Policy action counts | `CANDIDATE=0`, `WATCH=0`, `NO_TRADE=0` |
+| Policy status counts | `MISSING_REQUIRED_DATA=1068`, `VALIDATION_FAILED=0`, `HARD_FAIL=0` |
 
 ## Migration 證據邊界
 
-Repository 目前共有 **37** 個 migration 檔案。
+Repository 目前共有 **38** 個 migration 檔案。
 本修補新增、且仍須在隔離環境驗證後才能部署：
 
 - `20260720170000_prediction_snapshot_rate_limit.sql`
 - `20260720190000_prediction_snapshot_read_rpc.sql`
 - `20260721090000_prediction_snapshot_calendar_freshness.sql`
+- `20260724044115_decision_policy_status_semantics.sql`
 
 Staging 已記錄：`31` 個，最後為 `20260719152201_publish_research_snapshot_atomically.sql`，證據狀態 `DOCUMENTED_NOT_REVERIFIED_BY_THIS_PATCH`。
 Production 已記錄：`31` 個，最後為 `20260719152201_publish_research_snapshot_atomically.sql`，證據狀態 `DOCUMENTED_NOT_REVERIFIED_BY_THIS_PATCH`。
@@ -36,6 +40,7 @@ Production 已記錄：`31` 個，最後為 `20260719152201_publish_research_sna
 - `20260720170000_prediction_snapshot_rate_limit.sql`
 - `20260720190000_prediction_snapshot_read_rpc.sql`
 - `20260721090000_prediction_snapshot_calendar_freshness.sql`
+- `20260724044115_decision_policy_status_semantics.sql`
 
 上述檔案存在不等於已套用至任何遠端環境。
 
@@ -51,6 +56,8 @@ Production 已記錄：`31` 個，最後為 `20260719152201_publish_research_sna
 - 基礎 RPC migration：`20260720190000_prediction_snapshot_read_rpc.sql`。
 - Calendar v2 migration：`20260721090000_prediction_snapshot_calendar_freshness.sql`。
 - 遠端狀態：`REPOSITORY_ONLY_NOT_REMOTELY_VERIFIED`。
+- Decision Policy 部署順序：`STATUS_AWARE_FRONTEND_AND_EDGE` → `DECISION_POLICY_STATUS_MIGRATION` → `STATUS_AWARE_PUBLISHER`。
+- Decision Policy 回復限制：`DO_NOT_ROLL_BACK_EDGE_BEFORE_DATABASE_CONTRACT`。
 - Freshness 首選：`TRADING_CALENDAR`。
 - 日曆缺口處理：`EXPLICIT_CONSERVATIVE_FALLBACK`。
 - 預設 freshness 參數：台北 `17:00`、`45` 日連續覆蓋（上限 `62` 日；RPC 視窗 `63` 個曆日）、`72` 小時 fallback。
@@ -110,4 +117,4 @@ Production 已記錄：`31` 個，最後為 `20260719152201_publish_research_sna
 - Vercel Production 安全標頭已生效。
 - GitHub branch protection 已要求新的彙總 gate。
 
-部署時必須依序套用並驗證基礎 RPC 與 calendar v2 migration，再部署預設 `rpc` 的 Edge Function；帳號復原上線前另須驗證 Redirect URL allowlist 與正式 SMTP。
+Decision Policy 上線時必須先部署可同時理解 legacy 與新狀態契約的 Frontend／Edge，再套用 status migration，最後部署 status-aware publisher；migration 套用後不得先回退 Edge。基礎 RPC 與 calendar v2 migration 仍須依序套用並驗證；帳號復原上線前另須驗證 Redirect URL allowlist 與正式 SMTP。

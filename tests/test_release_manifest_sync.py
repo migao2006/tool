@@ -39,15 +39,15 @@ def test_model_card_is_generated_from_the_single_release_manifest() -> None:
     snapshot = model_card["published_research_snapshot"]
     assert snapshot["workflow_run_id"] == 29701335309
     assert snapshot["prediction_run_id"] == 4
+    assert snapshot["evidence_scope"] == "LATEST_FULLY_ARTIFACT_AND_PROVENANCE_BACKED_SNAPSHOT"
     assert snapshot["git_commit"] is None
-    assert (
-        snapshot["git_commit_evidence_status"]
-        == "NOT_RECORDED_IN_AVAILABLE_EVIDENCE"
-    )
+    assert snapshot["git_commit_evidence_status"] == "NOT_RECORDED_IN_AVAILABLE_EVIDENCE"
     assert snapshot["decision_gate_count"] == 8_544
     assert snapshot["decision_gates_per_prediction"] == 8
     assert snapshot["prediction_count"] == 1_068
-    assert snapshot["no_trade_count"] == 1_068
+    assert snapshot["no_trade_count"] == 0
+    assert snapshot["policy_input_missing_count"] == 1_068
+    assert snapshot["legacy_persisted_no_trade_count"] == 1_068
 
 
 def test_release_manifest_records_repository_and_remote_evidence_separately() -> None:
@@ -56,16 +56,18 @@ def test_release_manifest_records_repository_and_remote_evidence_separately() ->
     migration_files = list((ROOT / "supabase/migrations").glob("*.sql"))
 
     assert repository["migration_file_count"] == len(migration_files)
-    assert repository["migration_file_count"] == 37
+    assert repository["migration_file_count"] == 38
     assert repository["patch_added_migrations"] == [
         "20260720170000_prediction_snapshot_rate_limit.sql",
         "20260720190000_prediction_snapshot_read_rpc.sql",
         "20260721090000_prediction_snapshot_calendar_freshness.sql",
+        "20260724044115_decision_policy_status_semantics.sql",
     ]
     assert repository["patch_requires_staging_validation"] == [
         "20260720170000_prediction_snapshot_rate_limit.sql",
         "20260720190000_prediction_snapshot_read_rpc.sql",
         "20260721090000_prediction_snapshot_calendar_freshness.sql",
+        "20260724044115_decision_policy_status_semantics.sql",
     ]
     assert repository["migrations_after_recorded_remote_latest"] == [
         "20260720051630_tpex_price_index_ohlc_queue.sql",
@@ -74,6 +76,7 @@ def test_release_manifest_records_repository_and_remote_evidence_separately() ->
         "20260720170000_prediction_snapshot_rate_limit.sql",
         "20260720190000_prediction_snapshot_read_rpc.sql",
         "20260721090000_prediction_snapshot_calendar_freshness.sql",
+        "20260724044115_decision_policy_status_semantics.sql",
     ]
     for environment in ("staging", "production"):
         state = repository["environment_migration_history"][environment]
@@ -91,6 +94,7 @@ def test_generated_markdown_discloses_unknown_commit_and_has_no_old_snapshot() -
     assert "release-manifest:status-header:start" in combined
     assert "release-manifest:status-snapshot:start" in combined
     assert "未記錄於目前可用證據" in combined
+    assert "最新具完整 artifact／provenance 證據" in combined
     assert "29695406502" not in combined
     assert "b588f93a9d43639b7329155aafff3f3d31c00dd6e78875618e426f8dd8f50156" not in combined
     assert "0b1f116e64ccdfb3880acd352b95913e03fb8419c24196f6f4d6b2e1458b088a" not in combined
@@ -98,9 +102,8 @@ def test_generated_markdown_discloses_unknown_commit_and_has_no_old_snapshot() -
 
 def test_manifest_digest_matches_exact_file_bytes() -> None:
     expected = hashlib.sha256(MANIFEST.read_bytes()).hexdigest()
-    assert DIGEST.read_text(encoding="utf-8") == (
-        f"{expected}  release-manifest.json\n"
-    )
+    assert DIGEST.read_text(encoding="utf-8") == (f"{expected}  release-manifest.json\n")
+
 
 def test_manifest_records_p2_freshness_refactoring_and_auth_boundaries() -> None:
     manifest = load(MANIFEST)
@@ -110,6 +113,11 @@ def test_manifest_records_p2_freshness_refactoring_and_auth_boundaries() -> None
     assert snapshot["primary_read_path"] == (
         "market_data.get_prediction_snapshot_rows_v2(integer,text,timestamptz)"
     )
+    assert snapshot["decision_policy_rollout_order"] == [
+        "STATUS_AWARE_FRONTEND_AND_EDGE",
+        "DECISION_POLICY_STATUS_MIGRATION",
+        "STATUS_AWARE_PUBLISHER",
+    ]
     assert snapshot["freshness_policy"]["preferred_method"] == "TRADING_CALENDAR"
     assert snapshot["freshness_policy"]["calendar_gap_behavior"] == (
         "EXPLICIT_CONSERVATIVE_FALLBACK"

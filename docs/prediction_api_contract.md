@@ -1,6 +1,6 @@
 # Alpha Lens 5 日預測 API 契約
 
-> 2026-07-21 現況：`supabase/functions/prediction-snapshot` 已有唯讀實作，前端 `predictionApiBaseUrl` 已指向本專案 Supabase Edge Functions。Watchlist 持久化尚未上線，`watchlistPersistenceEnabled=false`，UI 必須停用寫入操作。限流 migration 已加入 repository，但在完成 Staging／Production migration 與環境設定前維持關閉。UI 不得使用示例資料冒充回應。
+> 2026-07-24 現況：`supabase/functions/prediction-snapshot` 已有唯讀實作，前端 `predictionApiBaseUrl` 已指向本專案 Supabase Edge Functions。Decision Policy 狀態語意修正及 migration 已在隔離資料庫驗證，但尚未部署至 Staging／Production。Watchlist 持久化尚未上線，`watchlistPersistenceEnabled=false`，UI 必須停用寫入操作。限流 migration 已加入 repository，但在完成 Staging／Production migration 與環境設定前維持關閉。UI 不得使用示例資料冒充回應。
 
 目前前端固定使用 `horizon=5`，並以 `market=TWSE|TPEX` 分別取得上市與上櫃資料集；契約版本為 `prediction-snapshot.v1`。缺省 `market` 時只查詢 `TWSE`，不得回傳跨市場混合資料。後端應使用 `src.api.PredictionSnapshotOutput` 產生回應，避免自行拼接欄位。
 
@@ -70,6 +70,7 @@ Function 以 server-side `SUPABASE_SERVICE_ROLE_KEY` 讀取私有 schema，該 k
 | `freshness` | 過期判斷方法與稽核 metadata；`method` 為 `TRADING_CALENDAR` 或 `WALL_CLOCK_FALLBACK` |
 | `data_quality_hard_fail` | 整體快照是否有系統級關鍵資料失敗；個股 hard fail 僅列於 `excluded` |
 | `reason_codes` | 可稽核原因碼陣列 |
+| `decision_counts` | 六種互斥分類的實際發布列數：三種政策動作、`MISSING_REQUIRED_DATA`、`VALIDATION_FAILED`、`HARD_FAIL` |
 | `market` | `MarketOutput.to_dict()` |
 | `predictions` | `StockPredictionOutput.to_dict()` 陣列 |
 | `watchlist` | 目前登入者的自選股預測陣列 |
@@ -78,6 +79,24 @@ Function 以 server-side `SUPABASE_SERVICE_ROLE_KEY` 讀取私有 schema，該 k
 | `training_end_date` | 訓練資料截止日 |
 | `cost_profile_version` | 成本契約版本 |
 | `validation` | Walk-forward、holdout、排名、校準與成本敏感度摘要 |
+
+每筆 `predictions`／`excluded` 列使用兩個不同欄位：
+
+- `decision_policy_status`：`EVALUATED`、`MISSING_REQUIRED_DATA`、
+  `VALIDATION_FAILED` 或 `HARD_FAIL`。
+- `decision`：只有狀態為 `EVALUATED` 時才可為 `CANDIDATE`、`WATCH` 或
+  `NO_TRADE`；其他狀態必須為 `null`。
+
+`NO_TRADE` 的唯一語意是「完整、有效的 Decision Policy 評估決定不進場」。
+它不表示證券沒有成交，也不能承載缺少必要資料。缺少 tradability、市場曝險、
+部位上限或其他 mandatory evidence 時，必須回
+`decision_policy_status=MISSING_REQUIRED_DATA`、`decision=null`，並保留安全的
+reason codes。`EVALUATED` 列必須具有 `PASS` 資料品質與完整、具來源日期的八層
+gate：`CANDIDATE` 代表全部 gate 通過且入選，`WATCH` 代表全部 gate 通過但因
+`OUTSIDE_TOP_K` 未入選，`NO_TRADE` 代表至少一項適用政策 gate 未通過。included
+與 excluded 的市場／證券鍵不得重疊，excluded 只承載 `HARD_FAIL`。六種
+`decision_counts` 的總和必須等於實際發布列數。正式 `PASS` 快照的政策列 universe
+不得為空；非空 universe 經完整有效政策評估後，`CANDIDATE=0` 仍是合法結果。
 
 研究快照可附加下列最新已發布證券主檔分類欄位：`current_industry`、
 `current_industry_code`、`industry_classification_effective_from`、
@@ -114,7 +133,9 @@ Validation 不以「同版本最新一筆」任意拼接。只有同一
 
 每個 gate 必須包含 `gate`、`passed`、`actual`、`threshold` 及 `reason_code`。
 
-正式 `PASS` 契約還必須保留每個 gate 的 `source_date`。目前 Python／前端 gate adapter 尚未完整實作此欄位，屬正式接入前必修缺口。
+正式 `PASS` 契約必須保留每個 gate 的 `source_date`。Python、Edge 與前端均要求
+`EVALUATED` 列具備完整來源日期，且日期不得晚於 `as_of_date`；缺少或未來日期一律
+fail closed。
 
 只有完整且通過 `PredictionSnapshotOutput` 驗證的 `PASS` 回應，才會在前端顯示正式候選。缺欄、錯誤 horizon、非單調分位數、錯誤機率、未知契約版本或缺少稽核欄位都會轉為 `FAIL`，不會以舊資料補上。
 
@@ -155,7 +176,9 @@ Validation 不以「同版本最新一筆」任意拼接。只有同一
 
 ## Horizon 拒絕契約
 
-後端收到 2、3 或 10 等未發布 horizon 時必須回傳 `UNSUPPORTED_HORIZON`，不得靜默改成 5。現有前端內部錯誤碼仍使用 `MODEL_NOT_RELEASED`；正式接入前需統一成 `UNSUPPORTED_HORIZON`，並補前後端 contract test。
+後端收到 2、3 或 10 等未發布 horizon 時必須回傳
+`UNSUPPORTED_HORIZON`，不得靜默改成 5。前端同樣建立空的 fail-closed snapshot，
+保留原請求 horizon 與 `UNSUPPORTED_HORIZON` reason code，不會改查 5 日資料。
 
 ## HTTP、CORS 與快取
 
@@ -181,8 +204,10 @@ Validation 不以「同版本最新一筆」任意拼接。只有同一
 1. 後端以 `PredictionSnapshotOutput.to_dict()` 產生一份真實快照。
 2. 確認 `api_contract_version`、日期、horizon、模型版本與成本版本一致。
 3. 確認所有 `available_at <= decision_at`，hard fail 不會成為 `CANDIDATE`。
-4. 分別驗證 `TWSE` 與 `TPEX`，確認任一市場為空或錯誤時不會回退或污染另一市場。
-5. 設定 `predictionApiBaseUrl`。
-6. 以未登入、已登入、逾時、401、錯誤 JSON、`RESEARCH_ONLY`、`FAIL` 與 `PASS` 各測一次。
-7. 驗證交易日、週末、國定假日、臨時休市、日曆缺日與 72 小時 fallback。
-8. 確認同一市場的總覽、候選、個股詳情及自選股都顯示相同 `as_of_date` 與模型版本。
+4. 確認只有 `EVALUATED` 列帶政策動作，六種計數等於實際發布列，缺少 mandatory
+   evidence 不會成為 `NO_TRADE`。
+5. 分別驗證 `TWSE` 與 `TPEX`，確認任一市場為空或錯誤時不會回退或污染另一市場。
+6. 設定 `predictionApiBaseUrl`。
+7. 以未登入、已登入、逾時、401、錯誤 JSON、`RESEARCH_ONLY`、`FAIL` 與 `PASS` 各測一次。
+8. 驗證交易日、週末、國定假日、臨時休市、日曆缺日與 72 小時 fallback。
+9. 確認同一市場的總覽、候選、個股詳情及自選股都顯示相同 `as_of_date` 與模型版本。

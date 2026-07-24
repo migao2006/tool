@@ -8,9 +8,9 @@
 >
 > 系統狀態：`RESEARCH_ONLY`
 >
-> Repository 目前包含 39 個 migration 檔案；本修補新增且待 Staging／Production 部署驗證：`20260724085021_publish_research_market_evidence_atomically.sql`。
+> Repository 目前包含 39 個 migration 檔案；本修補新增：`20260724085021_publish_research_market_evidence_atomically.sql`。Staging 已完成 migration、權限、rollback-safe contract 與 Edge/API 驗證；Production 尚未部署。
 >
-> Staging／Production 遠端 migration history 已於本修補唯讀重驗，完整紀錄均為 38／38 筆；其後 Repository 共有 1 檔：`20260724085021_publish_research_market_evidence_atomically.sql`。這些較新的檔案仍只存在 Repository，不得由檔案存在推測已部署。
+> Staging／Production 遠端 migration history 已於本修補重新核對，目前分別為 39／38 筆；仍未套用至所有環境的 Repository migration 共有 1 檔：`20260724085021_publish_research_market_evidence_atomically.sql`。環境狀態必須逐一判讀，不得由 Repository 或 Staging 狀態推測 Production。
 >
 > Prediction Snapshot 主要讀取路徑已改為單一 RPC `market_data.get_prediction_snapshot_rows_v2(integer,text,timestamptz)`，正常路徑預期每次快照只產生 1 次 PostgREST 請求。預設模式為 `rpc`；RPC 未部署時 fail closed，只有明確設定 `legacy` 才走緊急舊路徑。
 > Freshness 優先使用 `TRADING_CALENDAR`，要求 45 日連續可信日曆覆蓋（上限 62 日；RPC 取回 63 個曆日以涵蓋就緒時間前的邊界）；缺日或不可用時明確改採 `WALL_CLOCK_FALLBACK`，不得猜測休市日。
@@ -31,8 +31,12 @@
 - 已建立每月費用為 `$0` 的獨立 Staging 專案 `alpha-lens-staging`。
 - Project ref：`kretvnnfavndkmckyidl`。
 - 專案狀態：`ACTIVE_HEALTHY`。
-- 既有文件紀錄顯示 Staging migration history 曾與 Production 對齊，共 31 筆 migrations；
-  當時最新 migration 為 `20260719152201_publish_research_snapshot_atomically.sql`。
+- 2026-07-24 唯讀重驗後套用本次 additive migration；Staging 現有 39 筆，
+  最新為 `20260724085021_publish_research_market_evidence_atomically.sql`。
+- 三參數研究 publisher 的權限、原子性、缺證據、冪等、衝突與 rollback-safe
+  validation 全部通過，驗證資料沒有留存。
+- GitHub workflow `30087314367` 已部署 Staging Edge v23；公開 TWSE／TPEx、
+  market isolation、horizon 與 fail-closed smoke test 通過。
 - 新約束已實測允許來源日期後才取得的快照，仍拒絕未來快照日期，且驗證資料無殘留。
 - `supabase db lint --linked --level error`：0 個 schema error。
 - Supplemental task transaction RPC 與研究快照原子發布 RPC contract：`PASS`。
@@ -41,8 +45,9 @@
 
 ### Supabase Production
 
-- 既有文件紀錄顯示 Production migration history 曾與 Staging 對齊，共 31 筆 migrations；
-  當時最新 migration 為 `20260719152201_publish_research_snapshot_atomically.sql`。
+- 2026-07-24 唯讀重驗為 38 筆，最新為
+  `20260724044115_decision_policy_status_semantics.sql`；本次 additive migration
+  與 Edge 尚未部署至 Production。
 - Production `db lint` 沒有 schema error；原子發布 RPC 權限已驗證為 service-role only。
 
 ### 本機隔離環境
@@ -51,11 +56,11 @@
 - 既有文件紀錄顯示 Supabase Local 曾用 Docker 完整重建前 32 個 migrations，最後包含
   `20260720051630_tpex_price_index_ohlc_queue.sql`；相關 TPEX benchmark validation、rollback 與
   schema lint 曾通過。
-- 本修補未啟動共用 Supabase Local，也未寫入 Staging／Production；遠端 migration
-  history 未重新驗證，Repository 第 32～38 個 migration 的套用狀態不得由檔案存在推測。
-- `20260724044115_decision_policy_status_semantics.sql` 已在一次性 PostgreSQL 17
-  container 完成全 migration chain、legacy backfill、publisher/RPC、約束、權限與
-  rollback 驗證；container 與測試資料已移除。這不等於 Staging 或 Production 已部署。
+- 本修補以一次性 PostgreSQL 17 container 重建全部 39 個 migration，完成
+  publisher/RPC、約束、權限、衝突、rollback 與重新套用驗證；container 與測試資料
+  已移除。
+- 本修補只寫入隔離 Staging 的 additive migration 與 Edge 設定；Production 只有唯讀
+  稽核，沒有 migration、資料回補或 Edge 寫入。
 
 ## 二、已封存及已產生的真實資料
 

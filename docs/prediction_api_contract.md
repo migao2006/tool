@@ -1,6 +1,6 @@
 # Alpha Lens 5 日預測 API 契約
 
-> 2026-07-24 現況：`supabase/functions/prediction-snapshot` 已有唯讀實作，前端 `predictionApiBaseUrl` 已指向本專案 Supabase Edge Functions。PR #104 的 Decision Policy 狀態 migration、Edge 與 Production backfill 已完成並經唯讀驗證；本次 `decision-policy-required-evidence.v1` transport 與三參數 publisher migration 仍在 feature branch，尚未部署。Watchlist 持久化尚未上線，`watchlistPersistenceEnabled=false`，UI 必須停用寫入操作。限流未完成正式環境設定前維持關閉。UI 不得使用示例資料冒充回應。
+> 2026-07-24 現況：`supabase/functions/prediction-snapshot` 已有唯讀實作，前端 `predictionApiBaseUrl` 已指向本專案 Supabase Edge Functions。PR #104 的 Decision Policy 狀態 migration、Edge 與 Production backfill 已完成並經唯讀驗證；本次 `decision-policy-required-evidence.v1` transport、三參數 publisher migration 與相容 Edge 已在 Staging 完成驗證，Production 尚未部署。Watchlist 持久化尚未上線，`watchlistPersistenceEnabled=false`，UI 必須停用寫入操作。限流未完成正式環境設定前維持關閉。UI 不得使用示例資料冒充回應。
 
 目前前端固定使用 `horizon=5`，並以 `market=TWSE|TPEX` 分別取得上市與上櫃資料集；契約版本為 `prediction-snapshot.v1`。缺省 `market` 時只查詢 `TWSE`，不得回傳跨市場混合資料。後端應使用 `src.api.PredictionSnapshotOutput` 產生回應，避免自行拼接欄位。
 

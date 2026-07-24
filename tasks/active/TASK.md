@@ -170,6 +170,23 @@ policy action.
 - Final `git diff --check` and independent read-only review passed with no
   remaining High or Medium findings. Rank, Rank Score, probabilities, quantiles,
   gate thresholds, and model formulas were not changed.
-- Remote migration history remains 38/38 in both Staging and Production; the new
-  additive migration is repository-only. Feature-branch commits, Pull Request CI,
-  Staging deployment, and the final protected-branch boundary are still pending.
+- Pull Request #106 is ready and its latest head CI is green: 1,172 Python tests,
+  68 Playwright tests, 64 Edge tests, quality/security, Vercel, and aggregate test
+  gate passed. The first CI failure was a required CONTINUITY heading and was
+  repaired with one focused test.
+- Staging now records all 39 Repository migrations. The additive RPC passed its
+  privilege, atomicity, missing-evidence, idempotency, conflict, and rollback-safe
+  validation; Edge v23 deployed from workflow run `30087314367`, and public API
+  smoke/contract verification passed.
+- The first Staging deploy encountered an external Edge Runtime image rate limit.
+  The workflow now uses the official Management API bundler; its regression test,
+  action pin check, actionlint, retry deployment, and latest PR CI passed.
+- Post-deploy Staging and read-only Production both report TWSE 1,067 and TPEx 854
+  horizon-5 rows, all `MISSING_REQUIRED_DATA`, all actions null, zero hard-fail
+  candidates, no market row, and `RESEARCH_ONLY`; horizon 2 is
+  `UNSUPPORTED_HORIZON`. Representative ranks, probabilities, and P50 values
+  match, so no model-output drift was observed.
+- Production remains at 38 migrations and was not mutated. Its migration, Edge
+  deployment, immutable missing-evidence republication, and final verification
+  require the next operation to update protected `main`; this is the authorized
+  stop boundary.

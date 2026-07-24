@@ -66,13 +66,23 @@ def test_release_manifest_records_repository_and_remote_evidence_separately() ->
     assert repository["migrations_after_recorded_remote_latest"] == [
         "20260724085021_publish_research_market_evidence_atomically.sql",
     ]
-    for environment in ("staging", "production"):
-        state = repository["environment_migration_history"][environment]
-        assert state["recorded_applied_count"] == 38
-        assert state["recorded_latest_migration"] == (
-            "20260724044115_decision_policy_status_semantics.sql"
-        )
-        assert state["evidence_status"] == "READ_ONLY_REVERIFIED_2026_07_24"
+    staging = repository["environment_migration_history"]["staging"]
+    assert staging["recorded_applied_count"] == 39
+    assert staging["recorded_latest_migration"] == (
+        "20260724085021_publish_research_market_evidence_atomically.sql"
+    )
+    assert staging["evidence_status"] == "DEPLOYED_AND_VALIDATED_2026_07_24"
+    assert staging["migration_validation_status"] == "PASS"
+    assert staging["edge_function_version"] == 23
+    assert staging["edge_deployment_run_id"] == 30087314367
+    assert staging["api_verification_status"] == "PASS"
+
+    production = repository["environment_migration_history"]["production"]
+    assert production["recorded_applied_count"] == 38
+    assert production["recorded_latest_migration"] == (
+        "20260724044115_decision_policy_status_semantics.sql"
+    )
+    assert production["evidence_status"] == "READ_ONLY_REVERIFIED_2026_07_24"
 
 
 def test_generated_markdown_discloses_unknown_commit_and_has_no_old_snapshot() -> None:
@@ -85,7 +95,8 @@ def test_generated_markdown_discloses_unknown_commit_and_has_no_old_snapshot() -
     assert "release-manifest:status-snapshot:start" in combined
     assert "未記錄於目前可用證據" in combined
     assert "最新具完整 artifact／provenance 證據" in combined
-    assert "已於本修補唯讀重驗" in current_status
+    assert "Staging 已完成 migration" in current_status
+    assert "Production 尚未部署" in current_status
     assert "未連線重新驗證這些 migration" not in current_status
     assert "29695406502" not in combined
     assert "b588f93a9d43639b7329155aafff3f3d31c00dd6e78875618e426f8dd8f50156" not in combined

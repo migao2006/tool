@@ -1,7 +1,7 @@
 {
   "schema_version": "alpha-lens-release-manifest.v1",
   "last_verified_date": "2026-07-24",
-  "verification_basis": "READ_ONLY_REMOTE_REVERIFICATION_AND_LOCAL_PATCH_VALIDATION",
+  "verification_basis": "STAGING_DEPLOYMENT_AND_PRODUCTION_READ_ONLY_REVERIFICATION",
   "repository_state": {
     "migration_file_count": 39,
     "patch_added_migrations": [
@@ -15,9 +15,15 @@
     ],
     "environment_migration_history": {
       "staging": {
-        "recorded_applied_count": 38,
-        "recorded_latest_migration": "20260724044115_decision_policy_status_semantics.sql",
-        "evidence_status": "READ_ONLY_REVERIFIED_2026_07_24"
+        "recorded_applied_count": 39,
+        "recorded_latest_migration": "20260724085021_publish_research_market_evidence_atomically.sql",
+        "evidence_status": "DEPLOYED_AND_VALIDATED_2026_07_24",
+        "migration_validation_status": "PASS",
+        "edge_function_version": 23,
+        "edge_function_status": "ACTIVE",
+        "edge_deployment_run_id": 30087314367,
+        "edge_deployment_commit": "5784312e5c338298c12b9f3f85c4064570d8e560",
+        "api_verification_status": "PASS"
       },
       "production": {
         "recorded_applied_count": 38,

@@ -35,6 +35,26 @@
 Staging；Production workflow 若下一步要求更新 `main`，必須停在受保護分支授權邊界，
 不得繞過 ref gate 或改用未核准的直接部署。
 
+## 2026-07-24 Staging 發佈證據
+
+- Staging migration history 已精確對齊 Repository 的 39 檔，最新為
+  `20260724085021_publish_research_market_evidence_atomically.sql`。
+- Validation snippet 已通過三參數函式身分、service-role-only 權限、完整 market
+  evidence 原子寫入、缺證據 fail-closed、冪等、衝突拒絕及 transaction rollback；
+  測試資料沒有留存。
+- GitHub workflow
+  [`30087314367`](https://github.com/migao2006/tool/actions/runs/30087314367)
+  從 commit `5784312e5c338298c12b9f3f85c4064570d8e560` 部署 Staging Edge v23，
+  repository smoke test 通過。CLI 使用官方 `--use-api` bundling，以避開外部
+  Edge Runtime image rate limit。
+- 公開 API 驗證：TWSE 1,067 列與 TPEx 854 列皆為
+  `MISSING_REQUIRED_DATA`、action null、`RESEARCH_ONLY`；非法 action 與
+  hard-fail candidate 都是 0；horizon 2 回 `UNSUPPORTED_HORIZON`。
+- TWSE `6515` 與 TPEx `5475` 的 rank、Rank Score、方向機率與 P50 和 Production
+  唯讀基線一致。兩者三類必要 evidence 仍為缺少，沒有被 Staging 發佈補值。
+
+Production migration、Edge、重發及回補仍未執行。
+
 ## 回補政策
 
 - 不進行歷史「值」回補。Production 目前沒有可證明在歷史 `decision_at` 前可用的三類

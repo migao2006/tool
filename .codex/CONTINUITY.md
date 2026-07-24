@@ -5,7 +5,8 @@ and must not replace `tasks/active/TASK.md` or completed reports.
 
 ## Current Work Package
 
-- Status: ACTIVE; local implementation and verification are complete.
+- Status: ACTIVE at the protected-branch boundary; feature work, PR CI, and
+  Staging rollout are complete.
 - Outcome: restore authoritative point-in-time Decision Policy evidence transport
   while preserving fail-closed behavior.
 - Active record: `tasks/active/TASK.md`.
@@ -19,7 +20,9 @@ and must not replace `tasks/active/TASK.md` or completed reports.
   `e2ba3f54e6086082b72775a326a5fef2f54b43fb`.
 - The isolated worktree was clean at task start; all current changes belong to
   this Work Package.
-- Feature-branch commits and Pull Request are pending.
+- Head: `5784312e5c338298c12b9f3f85c4064570d8e560`.
+- Ready Pull Request:
+  [#106](https://github.com/migao2006/tool/pull/106).
 
 ## Investigation Result
 
@@ -65,28 +68,29 @@ and must not replace `tasks/active/TASK.md` or completed reports.
   privileges, idempotency/conflict rejection, rollback, and re-apply.
 - `git diff --check` and independent read-only review: PASS; no High/Medium
   findings.
+- Latest PR CI: 1,172 Python, 68 Playwright, 64 Edge, quality/security, Vercel,
+  and aggregate test gate all PASS.
+- Staging: 39 migrations, Edge v23 ACTIVE, workflow `30087314367`, RPC validation
+  and public API smoke/contract PASS.
 
 ## Remaining Work
 
-- Commit logically, push the feature branch, open a ready Pull Request, and resolve
-  CI.
-- Apply and verify the additive migration and compatible Edge contract in Staging.
-- Re-read Production baseline and document the final protected-branch boundary.
-- Production workflow requires `main`; stop before updating that protected branch
-  and request the only additional authorization at that point.
+- Production remains at 38 migrations and unchanged. Updating protected `main` is
+  the next operation and needs the only additional authorization; afterward run
+  the gated Production migration, Edge deploy, immutable republication, and
+  verification.
 
 ## Known Issues or Blockers
 
-- The first PR CI run exposed only a missing required continuity section; the
-  documentation-only repair is in progress.
-- No implementation blocker is known. Production rollout remains intentionally
-  gated on the protected branch.
+- No implementation or CI blocker is known.
+- GitHub's branch-protection API currently reports no configured protection for
+  `main`; the user's explicit protected-branch boundary still governs.
 
 ## Commit and Pull Request References
 
-- Commits: `405e828`, `df5a57a`, `1e3b6ce`, `c92d7ab`.
-- Ready Pull Request:
-  [#106](https://github.com/migao2006/tool/pull/106).
+- Commits: `405e828`, `df5a57a`, `1e3b6ce`, `c92d7ab`, `8bae944`, `5784312`.
+- Staging deployment:
+  [run 30087314367](https://github.com/migao2006/tool/actions/runs/30087314367).
 - No protected-branch update or Production data write has been performed.
 
 ## Maintenance

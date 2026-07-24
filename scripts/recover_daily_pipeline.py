@@ -21,6 +21,12 @@ from urllib.parse import urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 from zipfile import BadZipFile, ZipFile
 
+from src.pipeline.manual_full_update_contract import (
+    EvidenceContractError,
+    ImportResult,
+    parse_import_result,
+)
+
 
 API_VERSION = "2026-03-10"
 IMPORT_ARTIFACT_FILENAME = "import-market-data-result.json"
@@ -47,17 +53,6 @@ _KNOWN_CONCLUSIONS = frozenset(
 _FAILED_JOB_CONCLUSIONS = frozenset(
     {"action_required", "cancelled", "failure", "stale", "startup_failure", "timed_out"}
 )
-_IMPORT_RESULT_KEYS = frozenset(
-    {
-        "schema_version",
-        "status",
-        "reason_code",
-        "requested_as_of_date",
-        "twse_source_date",
-        "tpex_source_date",
-        "as_of_date",
-    }
-)
 _FEATURE_FAILURE_RESULT_KEYS = frozenset(
     {
         "build_status",
@@ -76,6 +71,18 @@ _PRODUCTION_FAILURE_RESULT_KEYS = frozenset(
         "message",
         "reason_codes",
         "status",
+    }
+)
+_PRODUCTION_VERIFICATION_FAILURE_RESULT_KEYS = frozenset(
+    {
+        "as_of_date",
+        "market",
+        "message",
+        "reason_codes",
+        "schema_version",
+        "status",
+        "target_environment",
+        "verified_at",
     }
 )
 _TRANSIENT_DAILY_REASON_CODES = frozenset({"SUPABASE_CONNECTION_ERROR"})
@@ -294,16 +301,6 @@ class TrustedRun:
 
 
 @dataclass(frozen=True)
-class ImportResult:
-    status: str
-    reason_code: str
-    requested_as_of_date: str | None
-    twse_source_date: str | None
-    tpex_source_date: str | None
-    as_of_date: str | None
-
-
-@dataclass(frozen=True)
 class DailyFailureResult:
     reason_code: str
 
@@ -357,21 +354,46 @@ _POLICIES = {
         allowed_events=frozenset({"push", "schedule", "workflow_dispatch", "workflow_run"}),
         maximum_attempt=3,
     ),
+    ("Manual full update", ".github/workflows/manual-full-update.yml"): WorkflowPolicy(
+        name="Manual full update",
+        path=".github/workflows/manual-full-update.yml",
+        kind="MANUAL",
+        allowed_events=frozenset({"workflow_dispatch"}),
+        maximum_attempt=2,
+    ),
 }
 
 _STAGE_NAMES = {
+    "Preflight": "PREFLIGHT",
     "import": "IMPORT",
     "Import current market data": "IMPORT",
+    "Manual market import": "IMPORT",
+    "Manual market import / import": "IMPORT",
     "resolve": "RESOLVE",
+    "Manual daily research / resolve": "RESOLVE",
     "publish-current-bars": "PUBLISH_CURRENT_BARS",
+    "Manual daily research / publish-current-bars": "PUBLISH_CURRENT_BARS",
     "build-features (TWSE)": "BUILD_FEATURES_TWSE",
     "build-features (TPEX)": "BUILD_FEATURES_TPEX",
+    "Manual daily research / build-features (TWSE)": "BUILD_FEATURES_TWSE",
+    "Manual daily research / build-features (TPEX)": "BUILD_FEATURES_TPEX",
     "export-security-catalog (TWSE)": "EXPORT_SECURITY_CATALOG_TWSE",
     "export-security-catalog (TPEX)": "EXPORT_SECURITY_CATALOG_TPEX",
+    "Manual daily research / export-security-catalog (TWSE)": (
+        "EXPORT_SECURITY_CATALOG_TWSE"
+    ),
+    "Manual daily research / export-security-catalog (TPEX)": (
+        "EXPORT_SECURITY_CATALOG_TPEX"
+    ),
     "publish-staging (TWSE)": "PUBLISH_STAGING_TWSE",
     "publish-staging (TPEX)": "PUBLISH_STAGING_TPEX",
+    "Manual daily research / publish-staging (TWSE)": "PUBLISH_STAGING_TWSE",
+    "Manual daily research / publish-staging (TPEX)": "PUBLISH_STAGING_TPEX",
     "publish-production (TWSE)": "PUBLISH_PRODUCTION_TWSE",
     "publish-production (TPEX)": "PUBLISH_PRODUCTION_TPEX",
+    "Manual daily research / publish-production (TWSE)": "PUBLISH_PRODUCTION_TWSE",
+    "Manual daily research / publish-production (TPEX)": "PUBLISH_PRODUCTION_TPEX",
+    "Final verification and summary": "MANUAL_SUMMARY",
 }
 _STAGE_ORDER = {stage: index for index, stage in enumerate(_STAGE_NAMES.values())}
 _DAILY_FAILURE_ARTIFACT_SPECS = {
@@ -797,71 +819,18 @@ def _single_reason_code(value: object) -> str:
     return value[0]
 
 
-def _parse_import_result(raw: bytes) -> ImportResult:
-    if len(raw) > MAX_ARTIFACT_RESULT_BYTES:
-        raise ArtifactValidationError("IMPORT_RESULT_TOO_LARGE")
-    try:
-        payload = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise ArtifactValidationError("INVALID_IMPORT_RESULT_JSON") from error
-    if not isinstance(payload, dict) or not set(payload).issubset(_IMPORT_RESULT_KEYS):
-        raise ArtifactValidationError("INVALID_IMPORT_RESULT_SCHEMA")
-    if type(payload.get("schema_version")) is not int or payload.get("schema_version") != 1:
-        raise ArtifactValidationError("INVALID_IMPORT_RESULT_SCHEMA")
-    status = payload.get("status")
-    reason_code = payload.get("reason_code")
-    if status not in {"PASS", "DEFERRED", "FAIL"}:
-        raise ArtifactValidationError("INVALID_IMPORT_RESULT_STATUS")
-    if not isinstance(reason_code, str) or not _SAFE_REASON_CODE.fullmatch(reason_code):
-        raise ArtifactValidationError("INVALID_IMPORT_RESULT_REASON")
-    requested = _strict_iso_date(payload.get("requested_as_of_date"))
-    twse = _strict_iso_date(payload.get("twse_source_date"))
-    tpex = _strict_iso_date(payload.get("tpex_source_date"))
-    as_of_date = _strict_iso_date(payload.get("as_of_date"))
-    if requested is None:
-        raise ArtifactValidationError("INVALID_IMPORT_RESULT_REQUESTED_DATE")
-    if status != "PASS" and as_of_date is not None:
-        raise ArtifactValidationError("INVALID_IMPORT_RESULT_AS_OF_DATE")
-    if (
-        status == "PASS"
-        and (
-            reason_code != "IMPORT_COMPLETED"
-            or as_of_date is None
-            or twse is None
-            or tpex is None
-            or twse != as_of_date
-            or tpex != as_of_date
-        )
-    ):
-        raise ArtifactValidationError("INVALID_IMPORT_RESULT_SUCCESS")
-    if (
-        status == "DEFERRED"
-        and (
-            reason_code != "SOURCE_MARKET_DATE_MISMATCH"
-            or twse is None
-            or tpex is None
-            or twse == tpex
-        )
-    ):
-        raise ArtifactValidationError("INVALID_IMPORT_RESULT_MISMATCH")
-    return ImportResult(
-        status=status,
-        reason_code=reason_code,
-        requested_as_of_date=requested,
-        twse_source_date=twse,
-        tpex_source_date=tpex,
-        as_of_date=as_of_date,
-    )
-
-
-def _load_attempt_artifact_file(
+def _load_attempt_artifact_files(
     client: GitHubClient,
     repository: str,
     run: TrustedRun,
     *,
     artifact_name: str,
-    filename: str,
-) -> bytes:
+    allowed_filename_sets: Sequence[frozenset[str]],
+) -> dict[str, bytes]:
+    if not allowed_filename_sets or any(
+        not filename_set for filename_set in allowed_filename_sets
+    ):
+        raise RecoveryError("INVALID_EXPECTED_ARTIFACT_FILES")
     matches: list[Mapping[str, Any]] = []
     for page in range(1, 101):
         payload = _mapping(
@@ -902,17 +871,40 @@ def _load_attempt_artifact_file(
     try:
         with ZipFile(io.BytesIO(archive)) as zipped:
             entries = zipped.infolist()
+            filenames = [entry.filename for entry in entries]
             if (
-                len(entries) != 1
-                or entries[0].filename != filename
-                or entries[0].is_dir()
-                or entries[0].file_size > MAX_ARTIFACT_RESULT_BYTES
+                any(entry.is_dir() for entry in entries)
+                or len(filenames) != len(set(filenames))
+                or frozenset(filenames) not in allowed_filename_sets
+                or any(
+                    entry.file_size > MAX_ARTIFACT_RESULT_BYTES for entry in entries
+                )
             ):
                 raise ArtifactValidationError("INVALID_ATTEMPT_RESULT_ARCHIVE")
-            raw = zipped.read(entries[0])
+            raw_by_filename = {
+                entry.filename: zipped.read(entry)
+                for entry in entries
+            }
     except (BadZipFile, RuntimeError) as error:
         raise ArtifactValidationError("INVALID_ATTEMPT_RESULT_ARCHIVE") from error
-    return raw
+    return raw_by_filename
+
+
+def _load_attempt_artifact_file(
+    client: GitHubClient,
+    repository: str,
+    run: TrustedRun,
+    *,
+    artifact_name: str,
+    filename: str,
+) -> bytes:
+    return _load_attempt_artifact_files(
+        client,
+        repository,
+        run,
+        artifact_name=artifact_name,
+        allowed_filename_sets=(frozenset({filename}),),
+    )[filename]
 
 
 def _load_import_result(
@@ -927,7 +919,10 @@ def _load_import_result(
         artifact_name=f"import-market-data-result-{run.run_id}-{run.attempt}",
         filename=IMPORT_ARTIFACT_FILENAME,
     )
-    return _parse_import_result(raw)
+    try:
+        return parse_import_result(raw)
+    except EvidenceContractError as error:
+        raise ArtifactValidationError(error.reason_code) from error
 
 
 def _parse_daily_failure_result(
@@ -945,8 +940,8 @@ def _parse_daily_failure_result(
     if not isinstance(payload, dict):
         raise ArtifactValidationError("INVALID_DAILY_RESULT_SCHEMA")
     reason_code = _single_reason_code(payload.get("reason_codes"))
-    _strict_timestamp(payload.get("generated_at"))
     if kind == "FEATURE":
+        _strict_timestamp(payload.get("generated_at"))
         if (
             set(payload) != _FEATURE_FAILURE_RESULT_KEYS
             or payload.get("build_status") != "FAIL"
@@ -956,6 +951,7 @@ def _parse_daily_failure_result(
         ):
             raise ArtifactValidationError("INVALID_DAILY_FEATURE_RESULT")
     elif kind == "PRODUCTION":
+        _strict_timestamp(payload.get("generated_at"))
         message = payload.get("message")
         if (
             set(payload) != _PRODUCTION_FAILURE_RESULT_KEYS
@@ -966,6 +962,23 @@ def _parse_daily_failure_result(
             or len(message) > 1_024
         ):
             raise ArtifactValidationError("INVALID_DAILY_PRODUCTION_RESULT")
+    elif kind == "VERIFICATION":
+        _strict_timestamp(payload.get("verified_at"))
+        message = payload.get("message")
+        if (
+            set(payload) != _PRODUCTION_VERIFICATION_FAILURE_RESULT_KEYS
+            or type(payload.get("schema_version")) is not int
+            or payload.get("schema_version") != 1
+            or payload.get("status") != "FAIL"
+            or payload.get("target_environment") != "production"
+            or payload.get("market") != market
+            or _strict_iso_date(payload.get("as_of_date")) is None
+            or not isinstance(message, str)
+            or len(message) > 1_024
+        ):
+            raise ArtifactValidationError(
+                "INVALID_DAILY_PRODUCTION_VERIFICATION_RESULT"
+            )
     else:
         raise ArtifactValidationError("INVALID_DAILY_RESULT_KIND")
     return DailyFailureResult(reason_code=reason_code)
@@ -982,13 +995,36 @@ def _load_daily_failure_result(
     if specification is None:
         raise ArtifactValidationError("DAILY_STAGE_HAS_NO_TRANSIENT_RESULT")
     artifact_prefix, filename, kind, market = specification
-    raw = _load_attempt_artifact_file(
-        client,
-        repository,
-        run,
-        artifact_name=f"{artifact_prefix}-{run.run_id}-{run.attempt}",
-        filename=filename,
-    )
+    artifact_name = f"{artifact_prefix}-{run.run_id}-{run.attempt}"
+    if kind == "PRODUCTION":
+        verification_filename = (
+            f"{market.lower()}-production-verification.json"
+        )
+        files = _load_attempt_artifact_files(
+            client,
+            repository,
+            run,
+            artifact_name=artifact_name,
+            allowed_filename_sets=(
+                frozenset({filename}),
+                frozenset({filename, verification_filename}),
+            ),
+        )
+        if verification_filename in files:
+            return _parse_daily_failure_result(
+                files[verification_filename],
+                kind="VERIFICATION",
+                market=market,
+            )
+        raw = files[filename]
+    else:
+        raw = _load_attempt_artifact_file(
+            client,
+            repository,
+            run,
+            artifact_name=artifact_name,
+            filename=filename,
+        )
     return _parse_daily_failure_result(raw, kind=kind, market=market)
 
 
@@ -1107,8 +1143,45 @@ def process_workflow_run(
     reason_code: str
     terminal_decision: str | None = None
     delay_seconds: int | None = None
+    recovery_kind = run.workflow.kind
+    daily_failure_scope = failure_scope
 
-    if run.workflow.kind == "IMPORT":
+    if recovery_kind == "MANUAL":
+        if run.conclusion == "timed_out":
+            recovery_kind = "DAILY"
+        elif run.conclusion == "failure":
+            if failure_scope is None:
+                raise RecoveryError("MISSING_MANUAL_FAILURE_SCOPE")
+            substantive_stages = tuple(
+                failed_stage
+                for failed_stage in failure_scope.stages
+                if failed_stage != "MANUAL_SUMMARY"
+            )
+            if failure_scope.has_unknown:
+                reason_code = "MANUAL_RESULT_UNVERIFIED"
+                terminal_decision = "UNVERIFIED_MANUAL_RESULT"
+            elif not substantive_stages:
+                reason_code = "MANUAL_SUMMARY_FAILED"
+                terminal_decision = "NON_RETRYABLE"
+            elif "PREFLIGHT" in substantive_stages:
+                reason_code = "MANUAL_PREFLIGHT_FAILED"
+                terminal_decision = "NON_RETRYABLE"
+            elif substantive_stages == ("IMPORT",):
+                recovery_kind = "IMPORT"
+            elif "IMPORT" in substantive_stages:
+                reason_code = "MANUAL_RESULT_UNVERIFIED"
+                terminal_decision = "UNVERIFIED_MANUAL_RESULT"
+            else:
+                recovery_kind = "DAILY"
+                daily_failure_scope = FailureScope(
+                    report_stage=substantive_stages[0],
+                    stages=substantive_stages,
+                    has_unknown=False,
+                )
+
+    if terminal_decision is not None:
+        pass
+    elif recovery_kind == "IMPORT":
         if run.conclusion != "failure":
             reason_code = f"CONCLUSION_{run.conclusion.upper()}"
             terminal_decision = "INELIGIBLE"
@@ -1141,9 +1214,9 @@ def process_workflow_run(
             reason_code = "WORKFLOW_TIMED_OUT"
             delay_seconds = 300 if run.attempt == 1 else 900
         elif run.conclusion == "failure":
-            if failure_scope is None:
+            if daily_failure_scope is None:
                 raise RecoveryError("MISSING_DAILY_FAILURE_SCOPE")
-            if failure_scope.has_unknown:
+            if daily_failure_scope.has_unknown:
                 reason_code = "DAILY_RESULT_UNVERIFIED"
                 terminal_decision = "UNVERIFIED_DAILY_RESULT"
             else:
@@ -1155,7 +1228,7 @@ def process_workflow_run(
                             run,
                             stage=failed_stage,
                         )
-                        for failed_stage in failure_scope.stages
+                        for failed_stage in daily_failure_scope.stages
                     ]
                 except ArtifactValidationError:
                     reason_code = "DAILY_RESULT_UNVERIFIED"

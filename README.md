@@ -12,6 +12,7 @@
 - 原始歷史行情：private Cloudflare R2 的 ZSTD Parquet
 - 任務、manifest、稽核 metadata 與 UI 摘要：Supabase
 - 排程與發布入口：GitHub Actions；不直接以 Vercel CLI 發布 Production
+- Owner 一鍵每日完整更新：[`docs/manual-full-update.md`](docs/manual-full-update.md)
 
 代理工作規範以根 [`AGENTS.md`](AGENTS.md) 為入口；目前 Work Package 位於
 [`tasks/active/TASK.md`](tasks/active/TASK.md)，跨 session 精簡狀態位於
@@ -38,6 +39,7 @@
 
 - [`docs/api_sources.md`](docs/api_sources.md)
 - [`docs/data_import.md`](docs/data_import.md)
+- [`docs/manual-full-update.md`](docs/manual-full-update.md)
 - [`docs/historical_daily_bar_landing.md`](docs/historical_daily_bar_landing.md)
 - [`docs/r2-historical-archive.md`](docs/r2-historical-archive.md)
 - [`docs/historical_calendar_import.md`](docs/historical_calendar_import.md)

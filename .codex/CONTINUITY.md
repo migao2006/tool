@@ -6,91 +6,76 @@ and must not replace `tasks/active/TASK.md` or completed reports.
 ## Current Work Package
 
 - Status: COMPLETE
-- Outcome: Production stale-snapshot repair and bounded daily recovery are
-  merged, deployed, and verified on `main`.
-- Record:
-  `tasks/completed/2026-07-24-record-daily-pipeline-recovery-main-release.md`.
+- Outcome: add one owner-triggered, fail-closed full daily update workflow.
+- Active record: `tasks/active/TASK.md` is `NONE`.
+- Completed record:
+  `tasks/completed/2026-07-24-add-safe-manual-full-update-workflow.md`.
+- Authorization: `FULL_AUTONOMY_UNTIL_MAIN_UPDATE`.
 
 ## Current Branch
 
-- `main`
-- PR #101 release merge:
-  `2525001ad47700682de90bbc0de6246cdb378625`.
-- Implementation head:
-  `d50b60a76e86e234e5d14de9f672e01587d74e0e`.
-
-## Verified Production State
-
-- PR #101 is merged. Main Project tests `30051830601`, Pages deployment
-  `30051829711`, Daily Research `30051830757`, and recovery controller
-  `30051865693` all completed successfully at the exact release merge.
-- Vercel deployment `dpl_F7idY3QB9zNBfk7wuP2KNNkEGYN5` is READY,
-  Production-targeted, and bound to the exact release merge; the one-hour
-  post-deploy runtime error scan was clean.
-- Main Daily Research resolved aligned `2026-07-20`, found both markets already
-  complete, and correctly no-op'd. The main recovery controller then completed
-  without requesting an unnecessary rerun.
-- Live TWSE/TPEx APIs both return validated `2026-07-20`,
-  `decision_at=2026-07-20T17:00:00+08:00`, horizon 5, `RESEARCH_ONLY`, and
-  `no-store`.
-- GitHub Pages and Vercel Production both return HTTP 200.
+- Branch: `codex/manual-full-update`.
+- Base: `main` / `origin/main`
+  `e0bcf074aed92d14dc52e003cd2ea701efd2c2ab`.
+- Protected `main` has not been updated by this Work Package.
 
 ## Completed Work
 
-- Proved repeated TWSE REST reads crossed the fixed 30-second client timeout.
-- Proved partial TWSE run 11 had 1,068 predictions but zero of 8,544 gates; API
-  failed closed, while the old date-only resolver would have skipped repair.
-- Added 60-second, exact-connection-error-only bounded publish/read recovery.
-- Resolver now requires complete rows, counts, venue/status, and all eight gates
-  per prediction before a market is current.
-- Added sanitized deterministic Issues and bounded full reruns for trusted,
-  current-main-only import mismatch or verified transient Daily failures.
-- Attempt-qualified artifacts prevent immutable rerun evidence collisions.
-- Import runs at 19:45 Asia/Taipei on weekdays. A successful import triggers
-  Daily Research, with a weekday 21:15 fallback schedule.
-- Focused (128), Full (1,086 Python + 66 Playwright), lint, type, diff, Fast,
-  actionlint, pin/lock, and independent review all passed.
-
-## Remaining Work
-
-- None for this release.
-
-## Key Decisions
-
-- Never compare freshness with today's date. Select only the newest valid,
-  aligned, fully published snapshot.
-- Import mismatch: four in-job checks plus at most one full rerun.
-- Daily timeout: at most three total attempts. Other Daily failures rerun only
-  from exact allowlisted artifacts proving sole `SUPABASE_CONNECTION_ERROR`.
-- Stale, untrusted, malformed, mixed, or permanent failures remain report-only.
+- Added `manual-full-update.yml`, dispatch-only with defaults
+  `dry_run=false`, `publish_production=true`, blank `as_of_date`.
+- Added main/date preflight and named-secret reusable calls into existing Import
+  and Daily workflows.
+- Dry-run executes Import validation plus Daily resolver without mutation.
+- Existing Import and Daily concurrency groups remain active; Manual uses a
+  distinct group to avoid reusable caller/callee self-cancellation.
+- Resolver now preserves already-computed validated Production run, prediction,
+  and gate counts without adding a second database query.
+- Final summary composes only sanitized Import, resolver, and Production
+  verifier evidence, and fails closed on missing or inconsistent artifacts.
+- Existing recovery now recognizes the Manual wrapper, keeps trusted-main
+  checks and persistent Issues, and permits at most two total attempts.
+- Added workflow/summary/recovery tests and operator documentation.
 
 ## Validation Already Passed
 
-- PR implementation-head Project tests, Test gate, frontend/browser,
-  quality/security, Vercel, and Preview checks passed.
-- Final independent review: zero BLOCKER/HIGH/MEDIUM/LOW findings.
-- Post-merge main Project tests, Vercel Production, GitHub Pages, Daily
-  Research, recovery controller, and live API verification passed.
+- Focused workflow, resolver, import, recovery, and summary tests: 112 passed.
+- Ruff and affected actionlint passed; basedpyright: 0 errors, 0 warnings.
+- Complete quality/security suite and `git diff --check` passed.
+- Fast passed. Full passed: 1,114 Python and 66 Playwright tests.
+- Independent final read-only review: zero findings at every severity.
+- Implementation-head GitHub Actions and Vercel checks passed.
+
+## Key Decisions
+
+- Never derive snapshot freshness from today's calendar date.
+- Missing markets come only from the existing resolver.
+- No-op requires complete resolver evidence for both markets.
+- Required-market final evidence comes only from the existing Production
+  verifier; publish reports are not treated as success evidence.
+- Manual failures participate in bounded recovery instead of bypassing the
+  existing Issue/reporting controller.
+- Horizon 5, ranking, point-in-time, venue/asset isolation, `RESEARCH_ONLY`,
+  and `HARD_FAIL` semantics remain unchanged.
+
+## Remaining Work
+
+- Push this terminal record, observe its checks, mark PR #102 ready, then stop
+  immediately before protected-main update and ask once for authorization.
 
 ## Known Issues or Blockers
 
-- 2026-07-23 was not a valid joint source date (TWSE `2026-07-22`, TPEx
-  `2026-07-23`); serving validated `2026-07-20` is therefore correct.
-- Browser-controller infrastructure could not initialize its local kernel
-  assets; live API/deployed source plus 66 Playwright tests provide verification.
-- No implementation, deployment, migration, or authorization blocker remains.
+- GitHub concurrency retains at most one pending run per group with the pinned
+  actionlint-supported syntax; a newer third pending request can replace the
+  previous pending request, but cannot overlap mutation.
+- Manual workflow cannot be safely Production-executed until merged to `main`;
+  PR validation is syntax, contract, and CI only.
 
 ## Commit and Pull Request References
 
-- Release merge: `2525001ad47700682de90bbc0de6246cdb378625`.
-- Original Bug PR: https://github.com/migao2006/tool/pull/100
-- Merged recovery Bug PR: https://github.com/migao2006/tool/pull/101
-- Production reconciliation:
-  https://github.com/migao2006/tool/actions/runs/30033947665
-- Post-merge main tests:
-  https://github.com/migao2006/tool/actions/runs/30051830601
-- Post-merge Daily Research:
-  https://github.com/migao2006/tool/actions/runs/30051830757
+- Implementation commit:
+  `eaceb9d24881f01948c427fb214ad4a87ff55021`.
+- Feature branch: `origin/codex/manual-full-update`.
+- Pull Request: #102, target `main`, unmerged.
 
 ## Maintenance
 

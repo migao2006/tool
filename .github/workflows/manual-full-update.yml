@@ -1,0 +1,181 @@
+name: Manual full update
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Validate import and resolution without writing market or research data
+        required: true
+        default: false
+        type: boolean
+      publish_production:
+        description: Publish the Staging-verified immutable snapshot to Production
+        required: true
+        default: true
+        type: boolean
+      as_of_date:
+        description: Optional exact aligned daily-bar date (YYYY-MM-DD); blank resolves automatically
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  # Keep this different from both called workflow groups to avoid a reusable
+  # caller/callee self-cancellation while their own mutation locks stay active.
+  group: manual-full-update
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: Preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require main and a canonical optional date
+        env:
+          GITHUB_REF_VALUE: ${{ github.ref }}
+          REQUESTED_AS_OF_DATE: ${{ inputs.as_of_date }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF_VALUE" != "refs/heads/main" ]]; then
+            echo "::error::Manual full update may run only from main."
+            exit 1
+          fi
+          if [[
+            -n "$REQUESTED_AS_OF_DATE" &&
+            ! "$REQUESTED_AS_OF_DATE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$
+          ]]; then
+            echo "::error::as_of_date must be blank or canonical YYYY-MM-DD."
+            exit 1
+          fi
+          if [[ -n "$REQUESTED_AS_OF_DATE" ]]; then
+            python3 - <<'PY'
+          from datetime import date
+          import os
+
+          value = os.environ["REQUESTED_AS_OF_DATE"]
+          if date.fromisoformat(value).isoformat() != value:
+              raise SystemExit("as_of_date is not canonical")
+          PY
+          fi
+
+  import:
+    name: Manual market import
+    needs: preflight
+    uses: ./.github/workflows/import-market-data.yml
+    with:
+      dry_run: ${{ inputs.dry_run }}
+    secrets:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
+  research:
+    name: Manual daily research
+    needs:
+      - preflight
+      - import
+    uses: ./.github/workflows/daily-research-model.yml
+    with:
+      as_of_date: ${{ inputs.as_of_date }}
+      dry_run: ${{ inputs.dry_run }}
+      manual_full_update: true
+      publish_production: ${{ inputs.publish_production }}
+    secrets:
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
+  summary:
+    name: Final verification and summary
+    if: always()
+    needs:
+      - preflight
+      - import
+      - research
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Download sanitized import evidence
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: import-market-data-result-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/import
+          digest-mismatch: error
+
+      - name: Download aligned-date resolution evidence
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: daily-research-resolution-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/resolution
+          digest-mismatch: error
+
+      - name: Download TWSE Production verification evidence
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: daily-research-production-TWSE-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/production/TWSE
+          digest-mismatch: error
+
+      - name: Download TPEx Production verification evidence
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: daily-research-production-TPEX-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/production/TPEX
+          digest-mismatch: error
+
+      - name: Build fail-closed final summary
+        env:
+          PRODUCTION_PUBLISH_ENABLED: ${{ vars.DAILY_RESEARCH_PRODUCTION_PUBLISH_ENABLED }}
+          REQUESTED_AS_OF_DATE: ${{ inputs.as_of_date }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          production_publish_enabled=true
+          if [[ "$PRODUCTION_PUBLISH_ENABLED" == "false" ]]; then
+            production_publish_enabled=false
+          fi
+          python -m scripts.summarize_manual_full_update \
+            --import-result evidence/import/import-market-data-result.json \
+            --resolution-result evidence/resolution/daily-research-resolution.json \
+            --twse-production-verification evidence/production/TWSE/twse-production-verification.json \
+            --tpex-production-verification evidence/production/TPEX/tpex-production-verification.json \
+            --actor "${{ github.actor }}" \
+            --repository "${{ github.repository }}" \
+            --branch "${{ github.ref_name }}" \
+            --sha "${{ github.sha }}" \
+            --run-id "${{ github.run_id }}" \
+            --run-attempt "${{ github.run_attempt }}" \
+            --requested-as-of-date "$REQUESTED_AS_OF_DATE" \
+            --dry-run "${{ inputs.dry_run }}" \
+            --publish-production "${{ inputs.publish_production }}" \
+            --production-publish-enabled "$production_publish_enabled" \
+            --preflight-result "${{ needs.preflight.result }}" \
+            --import-job-result "${{ needs.import.result }}" \
+            --research-job-result "${{ needs.research.result }}" \
+            --output manual-full-update-summary.json \
+            --markdown-output "$GITHUB_STEP_SUMMARY"
+
+      - name: Preserve final update evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: manual-full-update-summary-${{ github.run_id }}-${{ github.run_attempt }}
+          path: manual-full-update-summary.json
+          if-no-files-found: error
+          retention-days: 90

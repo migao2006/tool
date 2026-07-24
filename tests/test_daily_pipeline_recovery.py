@@ -28,6 +28,8 @@ IMPORT_NAME = "Import market data"
 IMPORT_PATH = ".github/workflows/import-market-data.yml"
 DAILY_NAME = "Daily research model"
 DAILY_PATH = ".github/workflows/daily-research-model.yml"
+MANUAL_NAME = "Manual full update"
+MANUAL_PATH = ".github/workflows/manual-full-update.yml"
 
 
 def _workflow_run(
@@ -37,6 +39,7 @@ def _workflow_run(
     conclusion: str = "failure",
     attempt: int = 1,
     sha: str = CURRENT_SHA,
+    event_name: str = "schedule",
 ) -> dict[str, Any]:
     return {
         "id": RUN_ID,
@@ -45,7 +48,7 @@ def _workflow_run(
         "conclusion": conclusion,
         "name": name,
         "path": path,
-        "event": "schedule",
+        "event": event_name,
         "head_branch": "main",
         "head_sha": sha,
         "repository": {"full_name": REPOSITORY},
@@ -161,6 +164,23 @@ def _daily_failure_artifact(
             },
         }
     raise AssertionError(f"unsupported test stage: {stage}")
+
+
+def _production_verification_failure(
+    *,
+    market: str = "TWSE",
+    reason_code: str = "SUPABASE_CONNECTION_ERROR",
+) -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "status": "FAIL",
+        "verified_at": "2026-07-23T17:06:47.534013+00:00",
+        "target_environment": "production",
+        "market": market,
+        "as_of_date": "2026-07-20",
+        "reason_codes": [reason_code],
+        "message": "untrusted verification detail must not be reported",
+    }
 
 
 class FakeGitHubClient:
@@ -442,6 +462,140 @@ def test_import_mismatch_persists_issue_then_delays_and_requests_full_rerun(
     assert "2026-07-23" in body
     assert "RECONCILE_LATEST_VALID" in body
     assert "RERUN_REQUESTED" in summary.read_text(encoding="utf-8")
+
+
+def test_manual_wrapper_import_mismatch_uses_the_existing_bounded_recovery() -> None:
+    event = _event(
+        name=MANUAL_NAME,
+        path=MANUAL_PATH,
+        event_name="workflow_dispatch",
+    )
+    client = _client_for(
+        event,
+        jobs=[
+            {"name": "Manual market import / import", "conclusion": "failure"},
+            {"name": "Final verification and summary", "conclusion": "failure"},
+        ],
+        artifact_payload=_artifact_payload(),
+    )
+    delays: list[int] = []
+
+    result = process_workflow_run(
+        event,
+        client=client,
+        repository=REPOSITORY,
+        sleep=delays.append,
+    )
+
+    assert result.workflow == MANUAL_NAME
+    assert result.decision == "RERUN_REQUESTED"
+    assert result.rerun_requested is True
+    assert delays == [900]
+
+
+def test_manual_wrapper_daily_transient_failure_reuses_daily_evidence_policy() -> None:
+    event = _event(
+        name=MANUAL_NAME,
+        path=MANUAL_PATH,
+        event_name="workflow_dispatch",
+    )
+    client = _client_for(
+        event,
+        jobs=[
+            {
+                "name": "Manual daily research / publish-production (TWSE)",
+                "conclusion": "failure",
+            },
+            {"name": "Final verification and summary", "conclusion": "failure"},
+        ],
+        **_daily_failure_artifact("PUBLISH_PRODUCTION_TWSE"),
+    )
+    delays: list[int] = []
+
+    result = process_workflow_run(
+        event,
+        client=client,
+        repository=REPOSITORY,
+        sleep=delays.append,
+    )
+
+    assert result.workflow == MANUAL_NAME
+    assert result.decision == "RERUN_REQUESTED"
+    assert result.rerun_requested is True
+    assert delays == [300]
+
+
+@pytest.mark.parametrize(
+    ("jobs", "decision"),
+    [
+        (
+            [
+                {"name": "Preflight", "conclusion": "failure"},
+                {"name": "Final verification and summary", "conclusion": "failure"},
+            ],
+            "NON_RETRYABLE",
+        ),
+        (
+            [{"name": "Final verification and summary", "conclusion": "failure"}],
+            "NON_RETRYABLE",
+        ),
+        (
+            [
+                {"name": "unexpected reusable child", "conclusion": "failure"},
+                {"name": "Final verification and summary", "conclusion": "failure"},
+            ],
+            "UNVERIFIED_MANUAL_RESULT",
+        ),
+    ],
+)
+def test_manual_wrapper_never_reruns_unverified_or_preflight_failures(
+    jobs: list[dict[str, str]],
+    decision: str,
+) -> None:
+    event = _event(
+        name=MANUAL_NAME,
+        path=MANUAL_PATH,
+        event_name="workflow_dispatch",
+    )
+    client = _client_for(event, jobs=jobs)
+
+    result = process_workflow_run(
+        event,
+        client=client,
+        repository=REPOSITORY,
+        sleep=lambda _: pytest.fail("ineligible manual failure must not sleep"),
+    )
+
+    assert result.decision == decision
+    assert result.rerun_requested is False
+    assert not any(path.endswith("/rerun") for _, path, _ in client.calls)
+
+
+def test_manual_wrapper_retry_is_exhausted_after_two_total_attempts() -> None:
+    event = _event(
+        name=MANUAL_NAME,
+        path=MANUAL_PATH,
+        event_name="workflow_dispatch",
+        attempt=2,
+    )
+    client = _client_for(
+        event,
+        jobs=[
+            {"name": "Manual market import / import", "conclusion": "failure"},
+            {"name": "Final verification and summary", "conclusion": "failure"},
+        ],
+        artifact_payload=_artifact_payload(),
+    )
+
+    result = process_workflow_run(
+        event,
+        client=client,
+        repository=REPOSITORY,
+        sleep=lambda _: pytest.fail("exhausted manual failure must not sleep"),
+    )
+
+    assert result.decision == "EXHAUSTED"
+    assert result.rerun_requested is False
 
 
 @pytest.mark.parametrize(
@@ -809,16 +963,44 @@ def test_invalid_daily_failure_artifact_is_report_only(mutation: str) -> None:
     assert not any(path.endswith("/rerun") for _, path, _ in client.calls)
 
 
-def test_production_publish_and_verification_files_are_not_ambiguously_parsed() -> None:
+def test_production_verification_transient_failure_requests_bounded_rerun() -> None:
     event = _event(name=DAILY_NAME, path=DAILY_PATH)
     client = _client_for(
         event,
         jobs=[{"name": "publish-production (TWSE)", "conclusion": "failure"}],
         artifact_extra_files={
-            "twse-production-verification.json": {
-                "status": "FAIL",
-                "reason_codes": ["SUPABASE_CONNECTION_ERROR"],
-            }
+            "twse-production-verification.json": (
+                _production_verification_failure()
+            )
+        },
+        **_daily_failure_artifact("PUBLISH_PRODUCTION_TWSE"),
+    )
+    delays: list[int] = []
+
+    result = process_workflow_run(
+        event,
+        client=client,
+        repository=REPOSITORY,
+        sleep=delays.append,
+    )
+
+    assert result.decision == "RERUN_REQUESTED"
+    assert result.rerun_requested is True
+    assert delays == [300]
+    assert any(path.endswith("/rerun") for _, path, _ in client.calls)
+
+
+def test_production_verification_permanent_failure_is_report_only() -> None:
+    event = _event(name=DAILY_NAME, path=DAILY_PATH)
+    client = _client_for(
+        event,
+        jobs=[{"name": "publish-production (TWSE)", "conclusion": "failure"}],
+        artifact_extra_files={
+            "twse-production-verification.json": (
+                _production_verification_failure(
+                    reason_code="DAILY_RESEARCH_PERSISTED_COUNTS_MISMATCH"
+                )
+            )
         },
         **_daily_failure_artifact("PUBLISH_PRODUCTION_TWSE"),
     )
@@ -827,7 +1009,33 @@ def test_production_publish_and_verification_files_are_not_ambiguously_parsed() 
         event,
         client=client,
         repository=REPOSITORY,
-        sleep=lambda _: pytest.fail("ambiguous two-file artifact must not sleep"),
+        sleep=lambda _: pytest.fail("permanent verification failure must not sleep"),
+    )
+
+    assert result.decision == "NON_RETRYABLE"
+    assert result.rerun_requested is False
+    assert not any(path.endswith("/rerun") for _, path, _ in client.calls)
+
+
+def test_production_verification_archive_rejects_unexpected_third_file() -> None:
+    event = _event(name=DAILY_NAME, path=DAILY_PATH)
+    client = _client_for(
+        event,
+        jobs=[{"name": "publish-production (TWSE)", "conclusion": "failure"}],
+        artifact_extra_files={
+            "twse-production-verification.json": (
+                _production_verification_failure()
+            ),
+            "unexpected.json": {"status": "FAIL"},
+        },
+        **_daily_failure_artifact("PUBLISH_PRODUCTION_TWSE"),
+    )
+
+    result = process_workflow_run(
+        event,
+        client=client,
+        repository=REPOSITORY,
+        sleep=lambda _: pytest.fail("unexpected artifact member must not sleep"),
     )
 
     assert result.decision == "UNVERIFIED_DAILY_RESULT"

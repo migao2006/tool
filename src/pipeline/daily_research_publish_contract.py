@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 
 MIN_DAILY_RESEARCH_PREDICTIONS = {"TWSE": 500, "TPEX": 500}
+DAILY_RESEARCH_GATES_PER_PREDICTION = 8
 
 
 @dataclass(frozen=True)
@@ -76,6 +77,7 @@ def require_daily_research_coverage(
 
 
 __all__ = [
+    "DAILY_RESEARCH_GATES_PER_PREDICTION",
     "DailyResearchCoverage",
     "DailyResearchPublishContractError",
     "MIN_DAILY_RESEARCH_PREDICTIONS",

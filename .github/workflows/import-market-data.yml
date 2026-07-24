@@ -1,6 +1,18 @@
 name: Import market data
 
 on:
+  workflow_call:
+    inputs:
+      dry_run:
+        description: Fetch and normalize without writing to Supabase
+        required: false
+        default: false
+        type: boolean
+    secrets:
+      SUPABASE_URL:
+        required: true
+      SUPABASE_SERVICE_ROLE_KEY:
+        required: true
   workflow_dispatch:
     inputs:
       dry_run:
@@ -44,7 +56,7 @@ jobs:
           while (( attempt <= max_attempts )); do
             rm -f import-market-data-result.json
             set +e
-            if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.dry_run }}" == "true" ]]; then
+            if [[ "${{ inputs.dry_run }}" == "true" ]]; then
               python -m scripts.import_market_data \
                 --dry-run \
                 --result-output import-market-data-result.json

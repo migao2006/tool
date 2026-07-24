@@ -5,6 +5,7 @@ on:
     workflows:
       - Import market data
       - Daily research model
+      - Manual full update
     types:
       - completed
 

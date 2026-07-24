@@ -20,10 +20,9 @@ add_project_root()
 
 from src.data.ingestion.supabase_writer import SupabaseWriter  # noqa: E402
 from src.pipeline.daily_research_publish_contract import (  # noqa: E402
+    DAILY_RESEARCH_GATES_PER_PREDICTION,
     MIN_DAILY_RESEARCH_PREDICTIONS,
 )
-
-GATES_PER_PREDICTION = 8
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -158,10 +157,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         if (
             prediction_count != reported_count
             or prediction_count != manifest_count
-            or gate_count != prediction_count * GATES_PER_PREDICTION
+            or gate_count
+            != prediction_count * DAILY_RESEARCH_GATES_PER_PREDICTION
         ):
             raise ValueError("DAILY_RESEARCH_PERSISTED_COUNTS_MISMATCH")
         result: dict[str, object] = {
+            "schema_version": 1,
             "status": "PASS",
             "verified_at": datetime.now(timezone.utc).isoformat(),
             "target_environment": target,
@@ -178,6 +179,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         _write(
             output,
             {
+                "schema_version": 1,
                 "status": "FAIL",
                 "verified_at": datetime.now(timezone.utc).isoformat(),
                 "target_environment": target,

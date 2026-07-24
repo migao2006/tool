@@ -64,7 +64,7 @@ data contracts / domain types
 ## 三、歷史資料儲存與執行邊界
 
 ```text
-GitHub Actions scheduler
+GitHub Actions scheduler／owner-dispatched orchestrator
   ↓
 provider client → ingestion / validation
   ├─→ private Cloudflare R2：immutable Parquet 原始封存
@@ -72,6 +72,10 @@ provider client → ingestion / validation
 ```
 
 - 多年歷史行情不得經由瀏覽器或 Vercel 前端直接寫入；只有 GitHub Actions 後端 worker 可以執行回補。
+- Owner 手動完整更新只由 `manual-full-update.yml` 呼叫既有 Import 與 Daily reusable workflows；
+  aligned-date resolution、missing-market selection、ranking、Staging／Production publication
+  與 validation 仍由既有實作負責。操作與 fail-closed 摘要契約見
+  [`manual-full-update.md`](manual-full-update.md)。
 - R2 client 只負責 object I/O；Supabase repository 只負責任務、manifest 與摘要，不得互相複製實作。
 - 三個 FinMind credential worker 可並行下載，但共用任務清單只能由 primary worker 建立，首頁摘要只能由單一 finalizer 更新。
 - 瀏覽器頁面及元件模組只能透過 service/API 取得已授權的聚合結果，不得直接讀取 R2 object、Supabase SQL 或機密。

@@ -30,6 +30,13 @@ def test_daily_model_reusable_inputs_resolve_one_canonical_write_policy() -> Non
 
     assert "manual_full_update:" in workflow
     assert "dry_run:" in workflow
+    workflow_call = workflow[workflow.index("  workflow_call:") : workflow.index("  # Bootstrap")]
+    assert "should_run:" in workflow_call
+    assert "value: ${{ jobs.resolve.outputs.should_run }}" in workflow_call
+    assert "markets:" in workflow_call
+    assert "value: ${{ jobs.resolve.outputs.markets }}" in workflow_call
+    assert "production_requested:" in workflow_call
+    assert "value: ${{ jobs.resolve.outputs.production_requested }}" in workflow_call
     assert "Resolve canonical mutation policy" in workflow
     assert "mutation_requested: ${{ steps.policy.outputs.mutation_requested }}" in workflow
     assert "production_requested: ${{ steps.policy.outputs.production_requested }}" in workflow

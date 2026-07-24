@@ -35,7 +35,7 @@ and must not replace `tasks/active/TASK.md` or completed reports.
   state. Config values cannot establish a pass.
 - Evidence matrix: `docs/decision-policy-required-evidence.md`.
 
-## Implemented Work
+## Completed Work
 
 - Added immutable `decision-policy-required-evidence.v1`, exact feature-universe
   export, strict availability/identity/market/freshness validation, validated
@@ -47,6 +47,13 @@ and must not replace `tasks/active/TASK.md` or completed reports.
   substitution is allowed.
 - Release and rollback procedure:
   `docs/decision-policy-evidence-release.md`.
+
+## Key Decisions
+
+- Only validated `AVAILABLE` evidence may supply formal policy inputs.
+- Unavailable evidence remains `MISSING_REQUIRED_DATA` with a null action.
+- No historical value backfill, current-identity substitution, default position
+  limit, or cross-market fallback is permitted.
 
 ## Validation Already Passed
 
@@ -67,6 +74,20 @@ and must not replace `tasks/active/TASK.md` or completed reports.
 - Re-read Production baseline and document the final protected-branch boundary.
 - Production workflow requires `main`; stop before updating that protected branch
   and request the only additional authorization at that point.
+
+## Known Issues or Blockers
+
+- The first PR CI run exposed only a missing required continuity section; the
+  documentation-only repair is in progress.
+- No implementation blocker is known. Production rollout remains intentionally
+  gated on the protected branch.
+
+## Commit and Pull Request References
+
+- Commits: `405e828`, `df5a57a`, `1e3b6ce`, `c92d7ab`.
+- Ready Pull Request:
+  [#106](https://github.com/migao2006/tool/pull/106).
+- No protected-branch update or Production data write has been performed.
 
 ## Maintenance
 

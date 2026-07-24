@@ -185,6 +185,7 @@ jobs:
       - name: Deploy prediction-snapshot through GitHub
         run: >-
           pnpm exec supabase functions deploy prediction-snapshot
+          --use-api
           --project-ref "$SUPABASE_PROJECT_REF"
 
       - name: Smoke-test public research contract
@@ -287,6 +288,7 @@ jobs:
       - name: Deploy prediction-snapshot through GitHub
         run: >-
           pnpm exec supabase functions deploy prediction-snapshot
+          --use-api
           --project-ref "$SUPABASE_PROJECT_REF"
 
       - name: Smoke-test public research contract

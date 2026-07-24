@@ -6,76 +6,80 @@ and must not replace `tasks/active/TASK.md` or completed reports.
 ## Current Work Package
 
 - Status: COMPLETE
-- Outcome: add one owner-triggered, fail-closed full daily update workflow.
+- Outcome: one safe owner-triggered full daily update workflow is released on
+  `main`.
 - Active record: `tasks/active/TASK.md` is `NONE`.
-- Completed record:
+- Implementation record:
   `tasks/completed/2026-07-24-add-safe-manual-full-update-workflow.md`.
-- Authorization: `FULL_AUTONOMY_UNTIL_MAIN_UPDATE`.
+- Release record:
+  `tasks/completed/2026-07-24-record-manual-full-update-main-release.md`.
+- Authorization: the user explicitly authorized merging PR #102 and updating
+  protected `main`.
 
 ## Current Branch
 
-- Branch: `codex/manual-full-update`.
-- Base: `main` / `origin/main`
-  `e0bcf074aed92d14dc52e003cd2ea701efd2c2ab`.
-- Protected `main` has not been updated by this Work Package.
+- Branch: `main`.
+- Local `main` and `origin/main`:
+  `53d16233c1ffd494ccb18cc5b53ec550585f8689`.
+- PR #102 merged by normal merge commit with exact head guard.
 
-## Completed Work
+## Released Outcome
 
-- Added `manual-full-update.yml`, dispatch-only with defaults
-  `dry_run=false`, `publish_production=true`, blank `as_of_date`.
-- Added main/date preflight and named-secret reusable calls into existing Import
-  and Daily workflows.
-- Dry-run executes Import validation plus Daily resolver without mutation.
-- Existing Import and Daily concurrency groups remain active; Manual uses a
-  distinct group to avoid reusable caller/callee self-cancellation.
-- Resolver now preserves already-computed validated Production run, prediction,
-  and gate counts without adding a second database query.
-- Final summary composes only sanitized Import, resolver, and Production
-  verifier evidence, and fails closed on missing or inconsistent artifacts.
-- Existing recovery now recognizes the Manual wrapper, keeps trusted-main
-  checks and persistent Issues, and permits at most two total attempts.
-- Added workflow/summary/recovery tests and operator documentation.
+- `Manual full update` is active at
+  `.github/workflows/manual-full-update.yml` and remains dispatch-only.
+- Defaults are `dry_run=false`, `publish_production=true`, and blank
+  `as_of_date`; no calendar date is substituted for a validated snapshot.
+- Existing Import and Daily concurrency, resolver, ranking, Staging,
+  Production, validation, bounded recovery, and persistent Issue logic remain
+  the sole implementation paths.
+- Final summaries fail closed on missing or inconsistent source, resolution,
+  prediction, gate, market, date, or environment evidence.
 
-## Validation Already Passed
+## Post-Merge Verification
 
-- Focused workflow, resolver, import, recovery, and summary tests: 112 passed.
-- Ruff and affected actionlint passed; basedpyright: 0 errors, 0 warnings.
+- Main Project tests `30060574075`: all jobs and Test gate passed.
+- GitHub Pages `30060573707`: build and deployment passed; public status is
+  `built` from `main`, and the site returns HTTP 200.
+- Vercel Production `dpl_HN6RSztSXDD6Qy14Sa5J5Yx6h6sH`: READY, exact merge
+  SHA, production target, HTTP 200, and no runtime errors in the one-hour scan.
+- Daily Research `30060574102`: PASS no-op at aligned/target `2026-07-20`,
+  `markets=[]`; no publication stage ran.
+- Resolver evidence: TWSE run 12 has 1,068 predictions and 8,544 gates; TPEx
+  run 10 has 863 predictions and 6,904 gates; both are `RESEARCH_ONLY`.
+- Recovery controller `30060603248` completed successfully without a rerun.
+- Live TWSE/TPEx APIs return HTTP 200, horizon 5, validated
+  `2026-07-20`, `decision_at=2026-07-20T17:00:00+08:00`,
+  `RESEARCH_ONLY`, exact venue scope, and `Cache-Control: no-store,max-age=0`.
+
+## Validation
+
+- Focused affected tests: 112 passed.
+- Ruff and actionlint passed; basedpyright: 0 errors, 0 warnings.
 - Complete quality/security suite and `git diff --check` passed.
-- Fast passed. Full passed: 1,114 Python and 66 Playwright tests.
-- Independent final read-only review: zero findings at every severity.
-- Implementation-head GitHub Actions and Vercel checks passed.
+- Full: 1,114 Python and 66 Playwright tests passed.
+- Independent final review found zero findings at every severity.
+- Final PR head and all post-merge deployment checks passed.
 
-## Key Decisions
+## Public Contracts
 
-- Never derive snapshot freshness from today's calendar date.
-- Missing markets come only from the existing resolver.
-- No-op requires complete resolver evidence for both markets.
-- Required-market final evidence comes only from the existing Production
-  verifier; publish reports are not treated as success evidence.
-- Manual failures participate in bounded recovery instead of bypassing the
-  existing Issue/reporting controller.
-- Horizon 5, ranking, point-in-time, venue/asset isolation, `RESEARCH_ONLY`,
-  and `HARD_FAIL` semantics remain unchanged.
-
-## Remaining Work
-
-- Push this terminal record, observe its checks, mark PR #102 ready, then stop
-  immediately before protected-main update and ask once for authorization.
+- Horizon 5 only; other horizons remain `UNSUPPORTED_HORIZON`.
+- Ranking remains the sole final ranking source.
+- TWSE/TPEx and ETF/common-stock partitions remain isolated.
+- `available_at <= decision_at`, `RESEARCH_ONLY`, `HARD_FAIL`, no look-ahead,
+  no survivorship bias, and no-placeholder policies remain unchanged.
 
 ## Known Issues or Blockers
 
-- GitHub concurrency retains at most one pending run per group with the pinned
-  actionlint-supported syntax; a newer third pending request can replace the
-  previous pending request, but cannot overlap mutation.
-- Manual workflow cannot be safely Production-executed until merged to `main`;
-  PR validation is syntax, contract, and CI only.
+- No implementation or release blocker.
+- A valid no-op means the newest aligned, complete Production snapshots are
+  already current; it must not be replaced with today's calendar date.
 
-## Commit and Pull Request References
+## References
 
-- Implementation commit:
-  `eaceb9d24881f01948c427fb214ad4a87ff55021`.
-- Feature branch: `origin/codex/manual-full-update`.
-- Pull Request: #102, target `main`, unmerged.
+- Pull Request: https://github.com/migao2006/tool/pull/102
+- Merge commit: `53d16233c1ffd494ccb18cc5b53ec550585f8689`
+- Feature head: `6c856910260b243bf81ee26261351c8012ab181b`
+- Daily Research: https://github.com/migao2006/tool/actions/runs/30060574102
 
 ## Maintenance
 

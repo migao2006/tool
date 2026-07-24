@@ -30,6 +30,9 @@ from src.pipeline.daily_research_publish_contract import (  # noqa: E402
     require_daily_research_coverage,
 )
 from src.pipeline.orchestrator import PipelineOrchestrator  # noqa: E402
+from src.pipeline.research_decision_policy_evidence import (  # noqa: E402
+    DecisionPolicyEvidenceSnapshot,
+)
 from src.pipeline.twse_latest_feature_repository import (  # noqa: E402
     LatestTwseFeatureRepository,
 )
@@ -59,6 +62,7 @@ def _parser() -> argparse.ArgumentParser:
     _ = parser.add_argument("--prepared-audit", required=True, type=Path)
     _ = parser.add_argument("--feature-input", required=True, type=Path)
     _ = parser.add_argument("--feature-audit", required=True, type=Path)
+    _ = parser.add_argument("--policy-evidence", type=Path)
     _ = parser.add_argument("--artifact-root", type=Path, default=Path("artifacts"))
     _ = parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH)
     _ = parser.add_argument("--report", type=Path)
@@ -87,6 +91,17 @@ def _write_report(path: Path | None, payload: Mapping[str, object]) -> None:
     print(rendered)
 
 
+def _policy_evidence(path: Path | None) -> DecisionPolicyEvidenceSnapshot | None:
+    if path is None:
+        return None
+    value = cast(object, json.loads(path.read_text(encoding="utf-8")))
+    if not isinstance(value, Mapping):
+        raise ValueError("Decision Policy evidence artifact must be an object")
+    return DecisionPolicyEvidenceSnapshot.from_mapping(
+        cast(Mapping[str, object], value)
+    )
+
+
 def _publish(payload: Mapping[str, object]) -> dict[str, object]:
     result = TwseResearchPredictionSupabasePublisher(
         SupabaseWriter(
@@ -108,6 +123,7 @@ def _publish(payload: Mapping[str, object]) -> dict[str, object]:
         "prediction_run_id": result.prediction_run_id,
         "prediction_count": result.prediction_count,
         "decision_gate_count": result.decision_gate_count,
+        "market_prediction_count": result.market_prediction_count,
     }
 
 
@@ -162,6 +178,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             features,
             bundle,
             load_mvp_config(config_path),
+            policy_evidence=_policy_evidence(
+                cast(Path | None, arguments.policy_evidence)
+            ),
         )
         require_daily_research_coverage(
             "TWSE",

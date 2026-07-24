@@ -9,6 +9,7 @@ from src.config import load_mvp_config
 from src.core.horizon import require_production_horizon, require_supported_horizon
 from src.features import load_feature_catalog
 from src.models.metadata import ModelMetadata
+from tests.support.policy_evidence import required_policy_evidence
 
 
 def test_mvp_config_is_five_day_research_only() -> None:
@@ -122,28 +123,41 @@ def _prediction(**overrides: float) -> StockPredictionOutput:
     }
     values.update(overrides)
     decision_at = datetime(2026, 1, 2, 10, tzinfo=timezone.utc)
+    as_of_date = date(2026, 1, 2)
+    gate_names = (
+        "data_quality_hard_gate",
+        "tradability_gate",
+        "liquidity_capacity_gate",
+        "market_exposure_cap",
+        "calibrated_direction_probabilities",
+        "net_quantile_thresholds",
+        "rank_eligibility",
+        "position_capacity_limits",
+    )
     gates = tuple(
         DecisionGateOutput(
             gate=name,
             passed=True,
-            actual="PASS",
+            actual=evidence["value"] if evidence is not None else "PASS",
             threshold="PASS",
             reason_code="PASS",
-            source_date=date(2026, 1, 2),
+            source_date=as_of_date,
+            evidence=evidence,
         )
-        for name in (
-            "data_quality_hard_gate",
-            "tradability_gate",
-            "liquidity_capacity_gate",
-            "market_exposure_cap",
-            "calibrated_direction_probabilities",
-            "net_quantile_thresholds",
-            "rank_eligibility",
-            "position_capacity_limits",
+        for name in gate_names
+        for evidence in (
+            required_policy_evidence(
+                name,
+                as_of_date=as_of_date,
+                decision_at=decision_at,
+                symbol="TEST",
+                market_regime="RANGE_NORMAL_VOL",
+                market_exposure_cap=0.5,
+            ),
         )
     )
     return StockPredictionOutput(
-        as_of_date=date(2026, 1, 2),
+        as_of_date=as_of_date,
         decision_at=decision_at,
         symbol="TEST",
         name="測試股票",
@@ -171,6 +185,8 @@ def _prediction(**overrides: float) -> StockPredictionOutput:
         downside_risk=0.02,
         market_regime="RANGE_NORMAL_VOL",
         market_exposure_cap=0.5,
+        max_single_position=0.1,
+        max_industry_position=0.25,
         estimated_round_trip_cost=0.006,
         data_quality_status="PASS",
         decision="WATCH",

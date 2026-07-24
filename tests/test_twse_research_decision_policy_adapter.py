@@ -14,8 +14,11 @@ from src.decision.decision_policy import (
     Decision,
     DecisionPolicyStatus,
 )
+from src.pipeline.research_decision_policy_evidence import (
+    RequiredEvidenceCategory,
+    RequiredPolicyEvidence,
+)
 from src.pipeline.twse_research_decision_policy_adapter import (
-    RESEARCH_ONLY_POLICY_REASON,
     ResearchDecisionPolicyInputs,
     TwseResearchDecisionPolicyAdapter,
 )
@@ -68,6 +71,71 @@ def _prediction() -> TwseOosResearchPrediction:
 
 
 def _complete_inputs() -> ResearchDecisionPolicyInputs:
+    available_at = datetime(
+        2026,
+        7,
+        17,
+        16,
+        tzinfo=ZoneInfo("Asia/Taipei"),
+    )
+    tradability = RequiredPolicyEvidence.available(
+        category=RequiredEvidenceCategory.TRADABILITY,
+        value=True,
+        source="TWSE_MOPS_SNAPSHOT",
+        market="TWSE",
+        symbol="2330",
+        effective_date=AS_OF_DATE,
+        available_at=available_at,
+        publication_id="security-state-2330",
+        details={
+            "trading_status": "ACTIVE",
+            "attention_flag": False,
+            "disposal_flag": False,
+            "altered_trading_method_flag": False,
+            "full_cash_delivery_flag": False,
+            "periodic_auction_flag": False,
+            "suspended_flag": False,
+        },
+    )
+    market = RequiredPolicyEvidence.available(
+        category=RequiredEvidenceCategory.MARKET_EXPOSURE,
+        value=0.6,
+        source="TWSE_MARKET_MODEL",
+        market="TWSE",
+        symbol=None,
+        effective_date=AS_OF_DATE,
+        available_at=available_at,
+        publication_id="market-run-17",
+        details={
+            "calibrated_p_up": 0.55,
+            "calibrated_p_neutral": 0.30,
+            "calibrated_p_down": 0.15,
+            "market_regime": "UPTREND_LOW_VOL_BROAD",
+            "forecast_market_volatility": 0.012,
+            "model_version": "twse-market-h5-v1",
+            "training_end_date": "2026-07-16",
+        },
+    )
+    position = RequiredPolicyEvidence.available(
+        category=RequiredEvidenceCategory.POSITION_LIMITS,
+        value=True,
+        source="PORTFOLIO_POLICY_ENGINE",
+        market="TWSE",
+        symbol="2330",
+        effective_date=AS_OF_DATE,
+        available_at=available_at,
+        publication_id="portfolio-state-2330",
+        details={
+            "portfolio_policy_version": "portfolio-h5-v1",
+            "portfolio_state_id": "portfolio-20260717-1600",
+            "maximum_single_name_weight": 0.10,
+            "maximum_industry_weight": 0.25,
+            "maximum_adv_participation": 0.01,
+            "proposed_weight": 0.04,
+            "resulting_industry_weight": 0.18,
+            "proposed_adv_participation": 0.005,
+        },
+    )
     return ResearchDecisionPolicyInputs(
         data_quality_hard_fail=False,
         tradable=True,
@@ -76,23 +144,26 @@ def _complete_inputs() -> ResearchDecisionPolicyInputs:
         market_exposure_cap=0.6,
         position_limits_pass=True,
         gate_source_dates={gate: AS_OF_DATE for gate in DECISION_GATE_ORDER},
+        required_evidence={
+            item.gate: item for item in (tradability, market, position)
+        },
     )
 
 
-def test_research_boundary_does_not_relabel_candidate_as_no_trade() -> None:
+def test_complete_authoritative_evidence_produces_an_evaluated_candidate() -> None:
     result = TwseResearchDecisionPolicyAdapter(load_mvp_config()).evaluate(
         _prediction(),
         _complete_inputs(),
     )
 
-    assert result.decision is None
-    assert result.decision_policy_status == DecisionPolicyStatus.VALIDATION_FAILED
+    assert result.decision == Decision.CANDIDATE
+    assert result.decision_policy_status == DecisionPolicyStatus.EVALUATED
     assert [gate.gate for gate in result.gates] == list(DECISION_GATE_ORDER)
     assert all(gate.passed for gate in result.gates)
     assert {gate.source_date for gate in result.gates} == {"2026-07-17"}
-    assert RESEARCH_ONLY_POLICY_REASON in result.reason_codes
-    assert result.to_dict()["decision"] is None
-    assert result.to_dict()["decision_policy_status"] == "VALIDATION_FAILED"
+    assert "RESEARCH_ONLY_DECISION_POLICY_NO_CANDIDATE" not in result.reason_codes
+    assert result.to_dict()["decision"] == "CANDIDATE"
+    assert result.to_dict()["decision_policy_status"] == "EVALUATED"
     assert all("source_date" in gate for gate in result.to_dict()["gates"])
 
 
@@ -153,13 +224,15 @@ def test_warn_quality_is_not_misreported_as_a_known_hard_fail() -> None:
 def test_gate_with_future_source_date_is_failed_closed() -> None:
     inputs = _complete_inputs()
     source_dates = dict(inputs.gate_source_dates)
-    source_dates["tradability_gate"] = date(2026, 7, 18)
+    source_dates["liquidity_capacity_gate"] = date(2026, 7, 18)
 
     result = TwseResearchDecisionPolicyAdapter(load_mvp_config()).evaluate(
         _prediction(),
         replace(inputs, gate_source_dates=source_dates),
     )
-    gate = next(value for value in result.gates if value.gate == "tradability_gate")
+    gate = next(
+        value for value in result.gates if value.gate == "liquidity_capacity_gate"
+    )
 
     assert not gate.passed
     assert gate.source_date == "2026-07-18"

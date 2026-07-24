@@ -85,6 +85,10 @@ class TwseOosResearchPrediction:
     industry: str | None = None
     adv20_ntd: float | None = None
     maximum_order_notional_ntd: float | None = None
+    market_regime: str | None = None
+    market_exposure_cap: float | None = None
+    maximum_single_position: float | None = None
+    maximum_industry_position: float | None = None
     market: str = "TWSE"
     evaluation_scope: str = "OUT_OF_SAMPLE_TEST"
     gates: tuple[ResearchDecisionGate, ...] = ()
@@ -143,6 +147,16 @@ class TwseOosResearchPrediction:
             not isfinite(self.maximum_order_notional_ntd) or self.maximum_order_notional_ntd <= 0
         ):
             raise ValueError("maximum_order_notional_ntd must be positive when present")
+        if self.market_exposure_cap is not None and (
+            not isfinite(self.market_exposure_cap) or not 0 <= self.market_exposure_cap <= 1
+        ):
+            raise ValueError("market_exposure_cap must be within [0, 1]")
+        for value in (
+            self.maximum_single_position,
+            self.maximum_industry_position,
+        ):
+            if value is not None and (not isfinite(value) or not 0 <= value <= 1):
+                raise ValueError("position limits must be within [0, 1]")
         if self.data_quality_status not in {"PASS", "WARN", "HARD_FAIL"}:
             raise ValueError("research data quality must be PASS, WARN, or HARD_FAIL")
         if (
@@ -161,6 +175,7 @@ class TwseOosResearchPrediction:
             and self.decision is not None
         ):
             raise ValueError("unevaluated decision policy cannot emit a decision")
+        decision = self.decision
         _require_text(self.calibration_version, "calibration_version")
         _require_text(self.calibration_status, "calibration_status")
         if not self.reason_codes or any(not value for value in self.reason_codes):
@@ -176,12 +191,32 @@ class TwseOosResearchPrediction:
             ):
                 raise ValueError("evaluated research decision gates require complete evidence")
             all_gates_passed = all(gate.passed for gate in self.gates)
-            if self.decision in {Decision.CANDIDATE, Decision.WATCH} and not all_gates_passed:
-                raise ValueError(f"{self.decision.value} cannot contain a failed decision gate")
-            if self.decision == Decision.WATCH and "OUTSIDE_TOP_K" not in self.reason_codes:
+            if decision is None:
+                raise ValueError("evaluated decision policy requires a decision")
+            if decision in {Decision.CANDIDATE, Decision.WATCH} and not all_gates_passed:
+                raise ValueError(f"{decision.value} cannot contain a failed decision gate")
+            if decision == Decision.WATCH and "OUTSIDE_TOP_K" not in self.reason_codes:
                 raise ValueError("WATCH requires OUTSIDE_TOP_K evidence")
-            if self.decision == Decision.NO_TRADE and all_gates_passed:
+            if decision == Decision.NO_TRADE and all_gates_passed:
                 raise ValueError("NO_TRADE requires at least one failed decision gate")
+            by_gate = {gate.gate: gate for gate in self.gates}
+            for gate_name in (
+                "tradability_gate",
+                "market_exposure_cap",
+                "position_capacity_limits",
+            ):
+                gate = by_gate[gate_name]
+                if (
+                    gate.evidence is None
+                    or gate.evidence.status != "AVAILABLE"
+                    or gate.evidence.value != gate.actual
+                    or gate.evidence.effective_date is None
+                    or gate.evidence.effective_date.isoformat() != gate.source_date
+                ):
+                    raise ValueError(
+                        "evaluated research decision policy requires "
+                        "authoritative required evidence"
+                    )
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -213,6 +248,10 @@ class TwseOosResearchPrediction:
             "estimated_round_trip_cost": self.estimated_round_trip_cost,
             "adv20_ntd": self.adv20_ntd,
             "maximum_order_notional_ntd": self.maximum_order_notional_ntd,
+            "market_regime": self.market_regime,
+            "market_exposure_cap": self.market_exposure_cap,
+            "maximum_single_position": self.maximum_single_position,
+            "maximum_industry_position": self.maximum_industry_position,
             "latest_available_at": self.latest_available_at,
             "data_quality_status": self.data_quality_status,
             "decision": self.decision.value if self.decision is not None else None,

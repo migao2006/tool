@@ -4,12 +4,12 @@ from __future__ import annotations
 
 # pyright: reportAny=false, reportExplicitAny=false, reportUnknownVariableType=false
 
+from dataclasses import replace
 from datetime import date, datetime
-from typing import final
+from typing import cast, final
 
 from src.config.types import MvpConfig
 from src.decision.decision_policy import (
-    Decision,
     DecisionPolicy,
     DecisionPolicyConfig,
     DecisionPolicyStatus,
@@ -17,6 +17,7 @@ from src.decision.decision_policy import (
     GateResult,
 )
 
+from .research_decision_policy_evidence import RequiredPolicyEvidence
 from .twse_research_decision_contracts import (
     ResearchDecisionGate,
     ResearchDecisionPolicyInputs,
@@ -25,7 +26,13 @@ from .twse_research_decision_contracts import (
 from .twse_research_prediction_contracts import TwseOosResearchPrediction
 
 
-RESEARCH_ONLY_POLICY_REASON = "RESEARCH_ONLY_DECISION_POLICY_NO_CANDIDATE"
+_REQUIRED_EVIDENCE_GATES = frozenset(
+    {
+        "tradability_gate",
+        "market_exposure_cap",
+        "position_capacity_limits",
+    }
+)
 
 _DEFAULT_RESEARCH_SOURCE_GATES = frozenset(
     {
@@ -84,6 +91,9 @@ def _missing_input_reason(
     gate: str,
     inputs: ResearchDecisionPolicyInputs,
 ) -> str | None:
+    evidence = inputs.required_evidence.get(gate)
+    if evidence is not None and evidence.status == "MISSING":
+        return evidence.reason_code
     required = {
         "data_quality_hard_gate": (
             inputs.data_quality_hard_fail,
@@ -112,6 +122,55 @@ def _missing_input_reason(
     return value_and_reason[1]
 
 
+def _resolved_required_evidence(
+    prediction: TwseOosResearchPrediction,
+    inputs: ResearchDecisionPolicyInputs,
+) -> ResearchDecisionPolicyInputs:
+    unexpected = set(inputs.required_evidence).difference(_REQUIRED_EVIDENCE_GATES)
+    if unexpected:
+        raise ValueError("required Decision Policy evidence contains an unsupported gate")
+    for gate, evidence in inputs.required_evidence.items():
+        if evidence.gate != gate:
+            raise ValueError("required Decision Policy evidence gate does not match its key")
+        expected_symbol = None if gate == "market_exposure_cap" else prediction.symbol
+        if evidence.market != prediction.market or evidence.symbol != expected_symbol:
+            raise ValueError("required Decision Policy evidence identity mismatch")
+        if evidence.status == "AVAILABLE" and (
+            evidence.effective_date != prediction.decision_date
+            or evidence.available_at is None
+            or evidence.available_at > prediction.decision_at
+        ):
+            raise ValueError("required Decision Policy evidence is not point-in-time safe")
+
+    source_dates = dict(inputs.gate_source_dates)
+
+    def resolve(
+        gate: str,
+        supplied: bool | float | None,
+    ) -> bool | float | None:
+        evidence = inputs.required_evidence.get(gate)
+        if evidence is None or evidence.status != "AVAILABLE":
+            return None
+        if supplied is not None and supplied != evidence.value:
+            raise ValueError("required Decision Policy evidence value mismatch")
+        source_dates[gate] = evidence.effective_date
+        return evidence.value
+
+    tradable = resolve("tradability_gate", inputs.tradable)
+    market_exposure = resolve("market_exposure_cap", inputs.market_exposure_cap)
+    position_limits = resolve(
+        "position_capacity_limits",
+        inputs.position_limits_pass,
+    )
+    return replace(
+        inputs,
+        tradable=cast(bool | None, tradable),
+        market_exposure_cap=cast(float | None, market_exposure),
+        position_limits_pass=cast(bool | None, position_limits),
+        gate_source_dates=source_dates,
+    )
+
+
 @final
 class TwseResearchDecisionPolicyAdapter:
     """Run the existing policy while preserving the RESEARCH_ONLY boundary."""
@@ -127,7 +186,10 @@ class TwseResearchDecisionPolicyAdapter:
     ) -> ResearchDecisionPolicyResult:
         if prediction.horizon != 5:
             raise ValueError("UNSUPPORTED_HORIZON")
-        resolved_inputs = inputs or ResearchDecisionPolicyInputs()
+        resolved_inputs = _resolved_required_evidence(
+            prediction,
+            inputs or ResearchDecisionPolicyInputs(),
+        )
         policy_result = self._policy.evaluate(self._policy_row(prediction, resolved_inputs))
         gates, adapter_reasons, decision_policy_status = self._adapt_gates(
             prediction,
@@ -139,17 +201,11 @@ class TwseResearchDecisionPolicyAdapter:
             if decision_policy_status == DecisionPolicyStatus.EVALUATED
             else None
         )
-        boundary_reasons: tuple[str, ...] = ()
-        if decision == Decision.CANDIDATE:
-            decision = None
-            decision_policy_status = DecisionPolicyStatus.VALIDATION_FAILED
-            boundary_reasons = (RESEARCH_ONLY_POLICY_REASON,)
         reason_codes = tuple(
             dict.fromkeys(
                 (
                     *prediction.reason_codes,
                     *adapter_reasons,
-                    *boundary_reasons,
                 )
             )
         )
@@ -226,6 +282,11 @@ class TwseResearchDecisionPolicyAdapter:
             missing_reason = _missing_input_reason(gate.gate, inputs)
             if source_date is None and source_reason is None:
                 source_reason = "DECISION_GATE_SOURCE_DATE_MISSING"
+            if (
+                missing_reason is not None
+                and source_reason == "DECISION_GATE_SOURCE_DATE_MISSING"
+            ):
+                source_reason = None
             if missing_reason is not None or (source_reason == "DECISION_GATE_SOURCE_DATE_MISSING"):
                 decision_policy_status = _merge_status(
                     decision_policy_status,
@@ -252,6 +313,7 @@ class TwseResearchDecisionPolicyAdapter:
                     actual="MISSING" if missing_reason is not None else gate.actual,
                     reason_code=reason_code,
                     source_date=source_date,
+                    evidence=inputs.required_evidence.get(gate.gate),
                 )
             )
             if missing_reason is not None:
@@ -274,6 +336,7 @@ def _research_gate(
     actual: object,
     reason_code: str,
     source_date: str | None,
+    evidence: RequiredPolicyEvidence | None = None,
 ) -> ResearchDecisionGate:
     return ResearchDecisionGate(
         gate=gate.gate,
@@ -282,11 +345,11 @@ def _research_gate(
         threshold=gate.threshold,
         reason_code=reason_code,
         source_date=source_date,
+        evidence=evidence,
     )
 
 
 __all__ = [
-    "RESEARCH_ONLY_POLICY_REASON",
     "ResearchDecisionGate",
     "ResearchDecisionPolicyInputs",
     "ResearchDecisionPolicyResult",

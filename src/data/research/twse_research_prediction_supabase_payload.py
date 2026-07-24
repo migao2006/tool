@@ -17,6 +17,9 @@ from src.core.research_prediction_contract import (
     research_prediction_contract_version,
 )
 from src.decision.decision_policy import Decision, DecisionPolicyStatus
+from src.pipeline.research_decision_policy_evidence import (
+    RequiredPolicyEvidence,
+)
 from src.data.research.twse_research_prediction_value_validation import (
     validate_prediction_numbers,
 )
@@ -145,6 +148,7 @@ class ResolvedResearchSnapshot:
     run: Mapping[str, object]
     stock_predictions: tuple[Mapping[str, object], ...]
     decision_gates: tuple[Mapping[str, object], ...]
+    market_prediction: Mapping[str, object] | None
 
 
 def _normalized_policy_contract(
@@ -177,25 +181,77 @@ def _normalized_policy_contract(
         raise ValueError("evaluated research decision policy requires a decision")
     if status != DecisionPolicyStatus.EVALUATED and decision is not None:
         raise ValueError("unevaluated research decision policy cannot emit a decision")
-    if decision == Decision.CANDIDATE:
-        raise ValueError("RESEARCH_ONLY prediction cannot publish CANDIDATE")
     return decision, status, False
 
 
-def _validate_evaluated_policy_evidence(
+def _validate_policy_evidence(
     prediction: Mapping[str, object],
     *,
     decision: Decision | None,
     status: DecisionPolicyStatus,
     snapshot_date: date,
+    decision_at: datetime,
+    market: str,
+    symbol: str,
 ) -> None:
-    if status != DecisionPolicyStatus.EVALUATED:
-        return
-    if prediction.get("data_quality_status") != "PASS":
+    is_evaluated = status == DecisionPolicyStatus.EVALUATED
+    if is_evaluated and prediction.get("data_quality_status") != "PASS":
         raise ValueError("evaluated research decision policy requires PASS data quality")
     gates = parse_prediction_gates(prediction, snapshot_date=snapshot_date)
-    if not gates or any(gate.get("source_date") is None for gate in gates):
+    if not gates:
+        if is_evaluated:
+            raise ValueError(
+                "evaluated research decision policy requires complete gate evidence"
+            )
+        return
+    if is_evaluated and any(gate.get("source_date") is None for gate in gates):
         raise ValueError("evaluated research decision policy requires complete gate evidence")
+    by_gate = {str(gate["gate"]): gate for gate in gates}
+    for gate_name in (
+        "tradability_gate",
+        "market_exposure_cap",
+        "position_capacity_limits",
+    ):
+        gate = by_gate[gate_name]
+        raw_evidence = gate.get("evidence")
+        if raw_evidence is None:
+            if is_evaluated:
+                raise ValueError(
+                    "evaluated research decision policy requires authoritative "
+                    "required evidence"
+                )
+            continue
+        if not isinstance(raw_evidence, Mapping):
+            raise ValueError("research decision policy required evidence is invalid")
+        evidence = RequiredPolicyEvidence.from_mapping(
+            cast(Mapping[str, object], raw_evidence)
+        )
+        expected_symbol = None if gate_name == "market_exposure_cap" else symbol
+        effective_date = evidence.effective_date
+        available_at = evidence.available_at
+        if (
+            evidence.gate != gate_name
+            or evidence.market != market
+            or evidence.symbol != expected_symbol
+        ):
+            raise ValueError(
+                "research decision policy required evidence is invalid"
+            )
+        if evidence.status == "AVAILABLE" and (
+            effective_date is None
+            or effective_date != snapshot_date
+            or effective_date.isoformat() != gate.get("source_date")
+            or available_at is None
+            or available_at > decision_at
+            or evidence.value != gate.get("actual")
+        ):
+            raise ValueError(
+                "research decision policy required evidence is invalid"
+            )
+        if is_evaluated and evidence.status != "AVAILABLE":
+            raise ValueError(
+                "evaluated research decision policy requires available required evidence"
+            )
     all_gates_passed = all(gate["passed"] is True for gate in gates)
     if decision == Decision.WATCH:
         reasons = cast(list[object], prediction["reason_codes"])
@@ -281,11 +337,14 @@ def parse_research_snapshot(
         decision, decision_policy_status, legacy_policy_contract = _normalized_policy_contract(
             prediction
         )
-        _validate_evaluated_policy_evidence(
+        _validate_policy_evidence(
             prediction,
             decision=decision,
             status=decision_policy_status,
             snapshot_date=snapshot_date,
+            decision_at=decision_at,
+            market=market,
+            symbol=symbol,
         )
         if (decision_policy_status == DecisionPolicyStatus.HARD_FAIL) != (
             prediction.get("data_quality_status") == "HARD_FAIL"
@@ -338,8 +397,14 @@ def resolve_research_snapshot(
         _aware_datetime(_required(value, "latest_available_at"), "latest_available_at")
         for value in parsed.predictions
     ).isoformat()
+    market_prediction = _market_prediction(parsed)
     rows = tuple(
-        _stock_row(prediction, security_ids, market=parsed.market)
+        _stock_row(
+            prediction,
+            security_ids,
+            market=parsed.market,
+            market_prediction=market_prediction,
+        )
         for prediction in parsed.predictions
     )
     gates = resolve_gate_rows(
@@ -395,7 +460,49 @@ def resolve_research_snapshot(
         run=run,
         stock_predictions=rows,
         decision_gates=gates,
+        market_prediction=market_prediction,
     )
+
+
+def _market_prediction(
+    parsed: ParsedResearchSnapshot,
+) -> Mapping[str, object] | None:
+    records: list[RequiredPolicyEvidence | None] = []
+    snapshot_date = _date(_required(parsed.payload, "as_of_date"), "as_of_date")
+    for prediction in parsed.predictions:
+        gates = parse_prediction_gates(prediction, snapshot_date=snapshot_date)
+        if not gates:
+            records.append(None)
+            continue
+        raw = gates[3].get("evidence")
+        records.append(
+            RequiredPolicyEvidence.from_mapping(cast(Mapping[str, object], raw))
+            if isinstance(raw, Mapping)
+            else None
+        )
+    available = [record for record in records if record is not None and record.status == "AVAILABLE"]
+    if not available:
+        return None
+    if len(available) != len(records):
+        raise ValueError("research snapshot has inconsistent market exposure evidence")
+    canonical = available[0].to_dict()
+    if any(record.to_dict() != canonical for record in available[1:]):
+        raise ValueError("research snapshot mixes market exposure publications")
+    evidence = available[0]
+    if evidence.category.value != "MARKET_EXPOSURE":
+        raise ValueError("research snapshot market evidence category is invalid")
+    details = evidence.details
+    return {
+        "market": parsed.market,
+        "calibrated_p_up": details["calibrated_p_up"],
+        "calibrated_p_neutral": details["calibrated_p_neutral"],
+        "calibrated_p_down": details["calibrated_p_down"],
+        "market_regime": details["market_regime"],
+        "forecast_market_volatility": details["forecast_market_volatility"],
+        "market_exposure_cap": evidence.value,
+        "model_version": details["model_version"],
+        "training_end_date": details["training_end_date"],
+    }
 
 
 def _stock_row(
@@ -403,6 +510,7 @@ def _stock_row(
     security_ids: Mapping[str, int],
     *,
     market: str,
+    market_prediction: Mapping[str, object] | None,
 ) -> Mapping[str, object]:
     symbol = str(_required(prediction, "symbol"))
     original_quality = str(_required(prediction, "data_quality_status"))
@@ -410,6 +518,29 @@ def _stock_row(
     reason_codes = [str(value) for value in reasons]
     if original_quality == "WARN":
         reason_codes.append("RESEARCH_DATA_QUALITY_WARN")
+    market_regime = prediction.get("market_regime")
+    market_exposure_cap = prediction.get("market_exposure_cap")
+    if market_prediction is None:
+        if market_regime is not None or market_exposure_cap is not None:
+            raise ValueError(
+                "research prediction market fields require a market evidence publication"
+            )
+    else:
+        evidence_regime = _required(market_prediction, "market_regime")
+        evidence_cap = _required(market_prediction, "market_exposure_cap")
+        if market_regime is not None and market_regime != evidence_regime:
+            raise ValueError(
+                "research prediction market regime conflicts with market evidence"
+            )
+        if market_exposure_cap is not None and abs(
+            float(cast(float | int | str, market_exposure_cap))
+            - float(cast(float | int | str, evidence_cap))
+        ) > 0.00000001:
+            raise ValueError(
+                "research prediction market exposure conflicts with market evidence"
+            )
+        market_regime = evidence_regime
+        market_exposure_cap = evidence_cap
     return {
         "security_id": security_ids[symbol],
         "market": market,
@@ -439,8 +570,8 @@ def _stock_row(
         "downside_risk": prediction.get("downside_risk"),
         "adv20_ntd": prediction.get("adv20_ntd"),
         "maximum_order_notional_ntd": prediction.get("maximum_order_notional_ntd"),
-        "market_regime": prediction.get("market_regime"),
-        "market_exposure_cap": prediction.get("market_exposure_cap"),
+        "market_regime": market_regime,
+        "market_exposure_cap": market_exposure_cap,
         "estimated_round_trip_cost": _required(prediction, "estimated_round_trip_cost"),
         "data_quality_status": original_quality,
         "decision": prediction.get("decision"),

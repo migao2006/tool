@@ -23,6 +23,11 @@ from src.trading.cost_contracts import TransactionCostConfig
 from src.trading.transaction_cost import TransactionCostModel
 
 from .twse_latest_feature_repository import LatestTwseFeatureCrossSection
+from .research_decision_policy_evidence import (
+    DecisionPolicyEvidenceSnapshot,
+    RequiredEvidenceCategory,
+    RequiredPolicyEvidence,
+)
 from .twse_research_decision_contracts import ResearchDecisionPolicyInputs
 from .twse_research_decision_policy_adapter import (
     TwseResearchDecisionPolicyAdapter,
@@ -120,11 +125,18 @@ class TwseDailyResearchInference:
         cross_section: LatestTwseFeatureCrossSection,
         bundle: LoadedTwseResearchBundle,
         config: MvpConfig,
+        *,
+        policy_evidence: DecisionPolicyEvidenceSnapshot | None = None,
     ) -> TwseResearchPredictionSnapshot:
         manifest = bundle.manifest
         frame = cross_section.frame.reset_index(drop=True)
         self._validate_contract(cross_section, manifest, config, frame)
         context = self._inference_context(frame, manifest)
+        self._validate_policy_evidence(
+            policy_evidence,
+            cross_section=cross_section,
+            context=context,
+        )
         outputs = self._model_outputs(frame, bundle, manifest)
         costs = self._cost_assessments(frame, manifest, config)
         ranked = self._ranked_rows(
@@ -141,6 +153,7 @@ class TwseDailyResearchInference:
             cross_section=cross_section,
             bundle=bundle,
             config=config,
+            policy_evidence=policy_evidence,
         )
         return self._snapshot(
             cross_section=cross_section,
@@ -148,7 +161,33 @@ class TwseDailyResearchInference:
             predictions=predictions,
             context=context,
             config=config,
+            policy_evidence=policy_evidence,
         )
+
+    def _validate_policy_evidence(
+        self,
+        evidence: DecisionPolicyEvidenceSnapshot | None,
+        *,
+        cross_section: LatestTwseFeatureCrossSection,
+        context: _InferenceContext,
+    ) -> None:
+        if evidence is None:
+            return
+        if (
+            evidence.market != self.market
+            or evidence.as_of_date != cross_section.as_of_date
+            or evidence.decision_at != context.decision_at
+            or evidence.horizon != 5
+        ):
+            raise ValueError("required Decision Policy evidence snapshot scope mismatch")
+        feature_symbols = {str(value) for value in cross_section.frame["symbol"].tolist()}
+        evidence_symbols = {
+            str(item.symbol)
+            for item in evidence.evidence
+            if item.category is RequiredEvidenceCategory.TRADABILITY and item.symbol is not None
+        }
+        if evidence_symbols != feature_symbols:
+            raise ValueError("required Decision Policy evidence universe identity mismatch")
 
     def _validate_contract(
         self,
@@ -270,11 +309,12 @@ class TwseDailyResearchInference:
         cross_section: LatestTwseFeatureCrossSection,
         bundle: LoadedTwseResearchBundle,
         config: MvpConfig,
+        policy_evidence: DecisionPolicyEvidenceSnapshot | None,
     ) -> tuple[TwseOosResearchPrediction, ...]:
         predictions: list[TwseOosResearchPrediction] = []
         policy_adapter = TwseResearchDecisionPolicyAdapter(config)
         for ranked_row in ranked:
-            position = int(ranked_row["position"])
+            position = int(cast(int | str, ranked_row["position"]))
             source = frame.iloc[position]
             prediction = self._prediction(
                 source=source,
@@ -288,6 +328,55 @@ class TwseDailyResearchInference:
                 cross_section=cross_section,
                 bundle=bundle,
             )
+            required_evidence = self._required_evidence_for_symbol(
+                policy_evidence,
+                prediction.symbol,
+            )
+            available_evidence = tuple(
+                item
+                for item in required_evidence.values()
+                if item.status == "AVAILABLE" and item.available_at is not None
+            )
+            market_evidence = required_evidence.get("market_exposure_cap")
+            position_evidence = required_evidence.get("position_capacity_limits")
+            if available_evidence:
+                prediction = replace(
+                    prediction,
+                    latest_available_at=max(
+                        prediction.latest_available_at,
+                        *(cast(datetime, item.available_at) for item in available_evidence),
+                    ),
+                    market_regime=(
+                        str(market_evidence.details["market_regime"])
+                        if market_evidence is not None and market_evidence.status == "AVAILABLE"
+                        else None
+                    ),
+                    market_exposure_cap=(
+                        float(cast(float, market_evidence.value))
+                        if market_evidence is not None and market_evidence.status == "AVAILABLE"
+                        else None
+                    ),
+                    maximum_single_position=(
+                        float(
+                            cast(
+                                float | int | str,
+                                position_evidence.details["maximum_single_name_weight"],
+                            )
+                        )
+                        if position_evidence is not None and position_evidence.status == "AVAILABLE"
+                        else None
+                    ),
+                    maximum_industry_position=(
+                        float(
+                            cast(
+                                float | int | str,
+                                position_evidence.details["maximum_industry_weight"],
+                            )
+                        )
+                        if position_evidence is not None and position_evidence.status == "AVAILABLE"
+                        else None
+                    ),
+                )
             policy = policy_adapter.evaluate(
                 prediction,
                 ResearchDecisionPolicyInputs(
@@ -298,6 +387,7 @@ class TwseDailyResearchInference:
                         "data_quality_hard_gate": cross_section.as_of_date,
                         "liquidity_capacity_gate": cross_section.as_of_date,
                     },
+                    required_evidence=required_evidence,
                 ),
             )
             predictions.append(
@@ -317,6 +407,24 @@ class TwseDailyResearchInference:
                 )
             )
         return tuple(predictions)
+
+    @staticmethod
+    def _required_evidence_for_symbol(
+        snapshot: DecisionPolicyEvidenceSnapshot | None,
+        symbol: str,
+    ) -> dict[str, RequiredPolicyEvidence]:
+        if snapshot is None:
+            return {}
+        selected: dict[str, RequiredPolicyEvidence] = {}
+        for category, evidence_symbol in (
+            (RequiredEvidenceCategory.TRADABILITY, symbol),
+            (RequiredEvidenceCategory.MARKET_EXPOSURE, None),
+            (RequiredEvidenceCategory.POSITION_LIMITS, symbol),
+        ):
+            item = snapshot.get(category, symbol=evidence_symbol)
+            if item is not None:
+                selected[item.gate] = item
+        return selected
 
     def _prediction(
         self,
@@ -349,10 +457,12 @@ class TwseDailyResearchInference:
             decision_at=context.decision_at,
             horizon=5,
             fold_number=bundle.manifest.fold_number,
-            model_raw_score=float(ranked_row["model_raw_score"]),
-            rank_score=float(ranked_row["rank_score"]),
-            global_rank=int(ranked_row["global_rank"]),
-            global_rank_percentile=float(ranked_row["global_rank_percentile"]),
+            model_raw_score=float(cast(float | int | str, ranked_row["model_raw_score"])),
+            rank_score=float(cast(float | int | str, ranked_row["rank_score"])),
+            global_rank=int(cast(int | str, ranked_row["global_rank"])),
+            global_rank_percentile=float(
+                cast(float | int | str, ranked_row["global_rank_percentile"])
+            ),
             calibrated_p_up=direction.up,
             calibrated_p_neutral=direction.neutral,
             calibrated_p_down=direction.down,
@@ -383,7 +493,26 @@ class TwseDailyResearchInference:
         predictions: tuple[TwseOosResearchPrediction, ...],
         context: _InferenceContext,
         config: MvpConfig,
+        policy_evidence: DecisionPolicyEvidenceSnapshot | None,
     ) -> TwseResearchPredictionSnapshot:
+        required_evidence_reasons = self._required_evidence_reasons(
+            policy_evidence,
+            predictions,
+        )
+        available_count = (
+            0
+            if policy_evidence is None
+            else sum(item.status == "AVAILABLE" for item in policy_evidence.evidence)
+        )
+        missing_count = (
+            0
+            if policy_evidence is None
+            else sum(item.status == "MISSING" for item in policy_evidence.evidence)
+        )
+        evaluated_count = sum(
+            prediction.decision_policy_status == DecisionPolicyStatus.EVALUATED
+            for prediction in predictions
+        )
         return TwseResearchPredictionSnapshot(
             as_of_date=cross_section.as_of_date,
             decision_at=context.decision_at,
@@ -406,7 +535,16 @@ class TwseDailyResearchInference:
                 "evaluation_scope": context.evaluation_scope,
                 "locked_holdout_executed": False,
                 "research_decision_policy_executed": True,
-                "formal_decision_policy_executed": False,
+                "formal_decision_policy_executed": evaluated_count > 0,
+                "evaluated_policy_row_count": evaluated_count,
+                "required_evidence_snapshot_sha256": (
+                    policy_evidence.snapshot_sha256 if policy_evidence is not None else None
+                ),
+                "required_evidence_publication_id": (
+                    policy_evidence.publication_id if policy_evidence is not None else None
+                ),
+                "required_evidence_available_count": available_count,
+                "required_evidence_missing_count": missing_count,
                 "source_model_test_end_date": (manifest.evaluated_test_end_date.isoformat()),
             },
             reason_codes=(
@@ -416,13 +554,49 @@ class TwseDailyResearchInference:
                 "POINT_IN_TIME_UNVERIFIED",
                 "LOCKED_HOLDOUT_NOT_EXECUTED",
                 "RESEARCH_DECISION_POLICY_EXECUTED_FAIL_CLOSED",
-                "FORMAL_TRADABILITY_INPUT_MISSING",
-                "FORMAL_MARKET_EXPOSURE_INPUT_MISSING",
-                "FORMAL_POSITION_LIMIT_INPUT_MISSING",
+                *required_evidence_reasons,
             ),
             market=self.market,
             artifact_contract_version=research_prediction_contract_version(self.market),
         )
+
+    @staticmethod
+    def _required_evidence_reasons(
+        snapshot: DecisionPolicyEvidenceSnapshot | None,
+        predictions: Sequence[TwseOosResearchPrediction],
+    ) -> tuple[str, ...]:
+        if snapshot is None:
+            return (
+                "FORMAL_TRADABILITY_INPUT_MISSING",
+                "FORMAL_MARKET_EXPOSURE_INPUT_MISSING",
+                "FORMAL_POSITION_LIMIT_INPUT_MISSING",
+            )
+        reasons: list[str] = []
+        market = snapshot.get(
+            RequiredEvidenceCategory.MARKET_EXPOSURE,
+            symbol=None,
+        )
+        if market is None:
+            reasons.append("FORMAL_MARKET_EXPOSURE_INPUT_MISSING")
+        elif market.status == "MISSING":
+            reasons.append(market.reason_code)
+        for prediction in predictions:
+            for category, generic in (
+                (
+                    RequiredEvidenceCategory.TRADABILITY,
+                    "FORMAL_TRADABILITY_INPUT_MISSING",
+                ),
+                (
+                    RequiredEvidenceCategory.POSITION_LIMITS,
+                    "FORMAL_POSITION_LIMIT_INPUT_MISSING",
+                ),
+            ):
+                item = snapshot.get(category, symbol=prediction.symbol)
+                if item is None:
+                    reasons.append(generic)
+                elif item.status == "MISSING":
+                    reasons.append(item.reason_code)
+        return tuple(dict.fromkeys(reasons))
 
     @staticmethod
     def _model_metadata(

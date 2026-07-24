@@ -83,8 +83,19 @@ def test_daily_model_syncs_sanitized_market_identity_before_staging_inference() 
     build = workflow.index("build-features:")
     feature_upload = workflow.index("Preserve exact-date feature artifact", build)
     catalog_job = workflow.index("export-security-catalog:")
+    evidence_feature_download = workflow.index(
+        "Download exact-date feature universe for evidence resolution",
+        catalog_job,
+    )
     export = workflow.index("scripts.export_research_security_catalog", catalog_job)
-    catalog_upload = workflow.index("Preserve immutable security catalog", catalog_job)
+    evidence_export = workflow.index(
+        "scripts.export_research_decision_policy_evidence",
+        catalog_job,
+    )
+    catalog_upload = workflow.index(
+        "Preserve immutable Production research inputs",
+        catalog_job,
+    )
     staging = workflow.index("publish-staging:")
     feature_download = workflow.index(
         "Download exact-date feature artifact from this workflow", staging
@@ -97,7 +108,16 @@ def test_daily_model_syncs_sanitized_market_identity_before_staging_inference() 
         "Train and publish exact-date snapshot to Staging", staging
     )
 
-    assert build < feature_upload < catalog_job < export < catalog_upload < staging
+    assert (
+        build
+        < feature_upload
+        < catalog_job
+        < evidence_feature_download
+        < export
+        < evidence_export
+        < catalog_upload
+        < staging
+    )
     assert staging < feature_download < catalog_download < sync < inference
     assert "environment: production" in workflow[catalog_job:staging]
     assert "- export-security-catalog" in workflow[staging:inference]
@@ -109,6 +129,16 @@ def test_daily_model_syncs_sanitized_market_identity_before_staging_inference() 
     )
     assert (
         "--catalog \"inputs/security-catalog/${slug}-research-security-catalog.json\""
+        in workflow
+    )
+    assert (
+        "--policy-evidence "
+        "\"inputs/security-catalog/${slug}-decision-policy-evidence.json\""
+        in workflow
+    )
+    assert (
+        "--feature-input "
+        "\"inputs/evidence-features/${slug}-research-features.parquet\""
         in workflow
     )
 

@@ -7,9 +7,12 @@ from datetime import date
 from typing import cast
 
 from src.decision.decision_policy import DECISION_GATE_ORDER
+from src.pipeline.research_decision_policy_evidence import (
+    RequiredPolicyEvidence,
+)
 
 
-GATE_ENVELOPE_VERSION = "research-decision-gate.v1"
+GATE_ENVELOPE_VERSION = "research-decision-gate.v2"
 
 
 def parse_prediction_gates(
@@ -44,6 +47,15 @@ def parse_prediction_gates(
         reason_code = gate.get("reason_code")
         if not isinstance(reason_code, str) or not reason_code.strip():
             raise ValueError("research decision gate reason_code is required")
+        evidence = gate.get("evidence")
+        if evidence is not None:
+            if not isinstance(evidence, Mapping):
+                raise ValueError("research decision gate evidence must be an object")
+            parsed_evidence = RequiredPolicyEvidence.from_mapping(
+                cast(Mapping[str, object], evidence)
+            )
+            if parsed_evidence.gate != gate["gate"]:
+                raise ValueError("research decision gate evidence category is invalid")
         source_date = gate.get("source_date")
         if source_date is None:
             continue
@@ -86,6 +98,7 @@ def resolve_gate_rows(
                         "contract_version": GATE_ENVELOPE_VERSION,
                         "value": gate["actual"],
                         "source_date": gate.get("source_date"),
+                        "evidence": gate.get("evidence"),
                         "attachment_snapshot_sha256": snapshot_sha256,
                     },
                     "threshold_value": gate["threshold"],

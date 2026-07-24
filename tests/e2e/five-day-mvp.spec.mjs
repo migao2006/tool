@@ -78,6 +78,10 @@ test("大量候選結果在手機分批顯示", async ({ page }) => {
       industry_rank: index + 1,
       rank_score: 100 - index * 0.1,
     }));
+    payload.decision_counts = {
+      ...payload.decision_counts,
+      CANDIDATE: 80,
+    };
     await route.fulfill({ response, json: payload });
   });
 
@@ -194,7 +198,7 @@ test("API 契約錯誤時顯示 FAIL，且不把 fixture 當成候選", async ({
   await expect(page.locator("[data-candidate-list]")).toContainText("無正式候選股");
 });
 
-test("研究快照顯示已完成欄位，缺值維持破折號", async ({ page }) => {
+test("無缺失證據的研究快照會驗證失敗且缺值維持破折號", async ({ page }) => {
   await page.goto("/?api_mode=research", { waitUntil: "domcontentloaded" });
 
   await expect(page.locator("body")).toHaveAttribute("data-ui-state", "research_only");
@@ -206,7 +210,8 @@ test("研究快照顯示已完成欄位，缺值維持破折號", async ({ page 
   await expect(page.locator('[data-overview-field="market_p_up"]')).toHaveText("62.0%");
   await expect(page.locator('[data-overview-field="market_p_neutral"]')).toHaveText("—");
   await expect(page.locator("[data-market-state]")).toHaveText("部分更新");
-  await expect(page.locator('[data-overview-count="CANDIDATE"]')).toHaveText("—");
+  await expect(page.locator('[data-overview-count="CANDIDATE"]')).toHaveText("0");
+  await expect(page.locator('[data-overview-count="VALIDATION_FAILED"]')).toHaveText("1");
   await expect(page.locator('[data-overview-candidates] .candidate-card[data-symbol="RESEARCH1"]')).toBeVisible();
 
   const navigation = page.getByRole("navigation", { name: "主要導覽" });
@@ -215,11 +220,12 @@ test("研究快照顯示已完成欄位，缺值維持破折號", async ({ page 
   const researchCard = page.locator('[data-candidate-list] .candidate-card[data-symbol="RESEARCH1"]');
   await expect(researchCard).toBeVisible();
   await expect(researchCard).toContainText("94.0");
-  await expect(researchCard.locator(".decision-badge")).toHaveText("—");
+  await expect(researchCard.locator(".decision-badge")).toHaveText("政策驗證未通過");
 
   await researchCard.getByRole("button", { name: "查看決策詳情" }).click();
   await expect(page.getByRole("heading", { name: "RESEARCH1" })).toBeVisible();
-  await expect(page.locator('[data-stock-field="decision"]')).toHaveText("—");
+  await expect(page.locator('[data-stock-field="decision"]')).toHaveText("政策驗證未通過");
+  await expect(page.locator('[data-stock-field="decision_policy_status"]')).toHaveText("政策驗證未通過");
   await expect(page.locator('[data-stock-field="rank_score"]')).toHaveText("94.0");
   await expect(page.locator('[data-stock-field="net_q10"]')).toHaveText("—");
   await expect(page.locator('[data-stock-field="net_q50"]')).toHaveText("1.2%");
@@ -229,10 +235,10 @@ test("研究快照顯示已完成欄位，缺值維持破折號", async ({ page 
   const watchCard = page.locator('[data-watchlist-results] .watchlist-card');
   await expect(watchCard).toBeVisible();
   await expect(watchCard).toContainText("RESEARCH1");
-  await expect(watchCard.locator(".decision-badge")).toHaveText("—");
+  await expect(watchCard.locator(".decision-badge")).toHaveText("政策驗證未通過");
 });
 
-test("歷史 OOS 研究快照的 NO_TRADE 排序與已完成輸出仍可檢視", async ({ page }) => {
+test("歷史 OOS 舊快照的缺失政策資料與已完成模型輸出仍可檢視", async ({ page }) => {
   await page.goto("/?api_mode=stale-oos-research", { waitUntil: "domcontentloaded" });
 
   await expect(page.locator("body")).toHaveAttribute("data-ui-state", "research_only");
@@ -247,7 +253,8 @@ test("歷史 OOS 研究快照的 NO_TRADE 排序與已完成輸出仍可檢視",
   await expect(overviewCard).toContainText("校準後 UP 61.0%");
   await expect(overviewCard).toContainText("條件 P50 1.3%");
   await expect(overviewCard).not.toContainText("FORMAL_LABEL_FACTORY_NOT_USED");
-  await expect(page.locator('[data-overview-count="NO_TRADE"]')).toHaveText("1");
+  await expect(page.locator('[data-overview-count="NO_TRADE"]')).toHaveText("0");
+  await expect(page.locator('[data-overview-count="MISSING_REQUIRED_DATA"]')).toHaveText("1");
 
   const navigation = page.getByRole("navigation", { name: "主要導覽" });
   await navigation.getByRole("button", { name: "5 日候選" }).click();
@@ -258,7 +265,7 @@ test("歷史 OOS 研究快照的 NO_TRADE 排序與已完成輸出仍可檢視",
   await expect(page.locator("[data-candidate-list-title]")).toHaveText("上市 5 日歷史研究結果");
   const researchCard = page.locator('[data-candidate-list] .candidate-card[data-symbol="OOS1"]');
   await expect(researchCard).toBeVisible();
-  await expect(researchCard.locator(".decision-badge")).toHaveText("NO_TRADE");
+  await expect(researchCard.locator(".decision-badge")).toHaveText("政策資料未完整");
   await expect(researchCard).toContainText("97.0");
   await expect(researchCard).toContainText("61.0%／27.0%／12.0%");
   await expect(researchCard).toContainText("-2.4%／1.3%／4.6%");
@@ -269,16 +276,17 @@ test("歷史 OOS 研究快照的 NO_TRADE 排序與已完成輸出仍可檢視",
 
   await researchCard.getByRole("button", { name: "查看決策詳情" }).click();
   await expect(page.getByRole("heading", { name: /OOS1/u })).toBeVisible();
-  await expect(page.locator('[data-stock-field="decision"]')).toHaveText("NO_TRADE");
+  await expect(page.locator('[data-stock-field="decision"]')).toHaveText("政策資料未完整");
+  await expect(page.locator('[data-stock-field="decision_policy_status"]')).toHaveText("政策資料未完整");
   await expect(page.locator('[data-stock-field="rank_score"]')).toHaveText("97.0");
   await expect(page.locator('[data-stock-field="calibrated_p_up"]')).toHaveText("61.0%");
   await expect(page.locator('[data-stock-field="net_q10"]')).toHaveText("-2.4%");
   await expect(page.locator('[data-stock-field="net_q50"]')).toHaveText("1.3%");
   await expect(page.locator('[data-stock-field="net_q90"]')).toHaveText("4.6%");
   await expect(page.locator(".decision-gates code")).toHaveText(
-    Array(8).fill("RESEARCH_ONLY_NO_FORMAL_DECISION_POLICY"),
+    Array(8).fill("REQUIRED_DECISION_POLICY_DATA_MISSING"),
   );
-  await expect(page.locator("[data-stock-gate-state]")).toHaveText("正式決策政策尚未執行");
+  await expect(page.locator("[data-stock-gate-state]")).toHaveText("必要政策資料未完整");
   await expect(page.locator('[data-stock-field="reason_codes"]')).toHaveText(
     "RESEARCH_ONLY_NO_FORMAL_DECISION_POLICY · UNADJUSTED_PRICE_RESEARCH_ONLY · 另 3 項稽核資訊",
   );
@@ -290,7 +298,7 @@ test("歷史 OOS 研究快照的 NO_TRADE 排序與已完成輸出仍可檢視",
   );
 });
 
-test("研究決策政策會顯示八層真實 gate 並維持 NO_TRADE", async ({ page }) => {
+test("研究決策政策會顯示八層真實 gate 並明示必要資料缺失", async ({ page }) => {
 	await page.goto("/?api_mode=gated-research", {
 		waitUntil: "domcontentloaded",
 	});
@@ -305,11 +313,11 @@ test("研究決策政策會顯示八層真實 gate 並維持 NO_TRADE", async ({
 		'[data-candidate-list] .candidate-card[data-symbol="GATED1"]',
 	);
 	await expect(card).toBeVisible();
-	await expect(card.locator(".decision-badge")).toHaveText("NO_TRADE");
+	await expect(card.locator(".decision-badge")).toHaveText("政策資料未完整");
 	await card.getByRole("button", { name: "查看決策詳情" }).click();
 
 	await expect(page.locator("[data-stock-gate-state]")).toHaveText(
-		"研究決策 gate 已評估",
+		"必要政策資料未完整",
 	);
 	const gates = page.locator(".decision-gates > li");
 	await expect(gates).toHaveCount(8);

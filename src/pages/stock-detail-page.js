@@ -1,6 +1,10 @@
 import { createDecisionGates, renderDecisionGates } from "../components/decision-gates.js?v=api-5";
 import { createStockAuditSection } from "../components/stock-audit-section.js";
 import {
+  decisionPolicyStatusLabel,
+  decisionPresentation,
+} from "../core/decision-policy.js";
+import {
   formatCurrency,
   formatDateTime,
   formatPercent,
@@ -23,6 +27,7 @@ export function createStockDetailPage({ horizon }) {
       <section class="decision-hero" aria-label="決策摘要">
         <div><span>資料狀態</span><span class="system-badge" data-system-status-label>RESEARCH_ONLY</span></div>
         <div><span>決策 <small>decision</small></span><strong data-stock-field="decision">—</strong></div>
+        <div><span>政策評估狀態 <small>decision_policy_status</small></span><strong data-stock-field="decision_policy_status">—</strong></div>
         <div class="decision-reasons"><span>主要原因 <small>reason_codes</small></span><code data-stock-field="reason_codes">NO_STOCK_SELECTED</code></div>
         <dl><div><dt>資料日期 <small>as_of_date</small></dt><dd data-stock-field="as_of_date">—</dd></div><div><dt>決策時間 <small>decision_at</small></dt><dd data-stock-field="decision_at">—</dd></div><div><dt>期間 <small>horizon</small></dt><dd data-stock-field="horizon">${horizon}</dd></div></dl>
       </section>
@@ -97,16 +102,28 @@ export function renderStockDetailPage(
       ? ""
       : "自選股儲存功能尚未上線。";
   }
-  const noFormalDecisionPolicy = prediction.reason_codes?.includes("RESEARCH_ONLY_NO_FORMAL_DECISION_POLICY");
+  const policyStatus = prediction.decision_policy_status;
+  const gateState = {
+    EVALUATED: prediction.gates?.length ? "政策 gate 已評估" : "政策已評估",
+    MISSING_REQUIRED_DATA: "必要政策資料未完整",
+    VALIDATION_FAILED: "政策驗證未通過",
+    HARD_FAIL: "資料硬性失敗",
+  }[policyStatus] ?? "未評估";
   setText(
     root,
     "[data-stock-gate-state]",
-    prediction.gates?.length ? "研究決策 gate 已評估" : noFormalDecisionPolicy ? "正式決策政策尚未執行" : "未評估",
+    gateState,
   );
-  const directFields = ["decision", "as_of_date", "horizon", "calibration_version", "calibration_status", "cost_profile"];
+  const directFields = ["as_of_date", "horizon", "calibration_version", "calibration_status", "cost_profile"];
   directFields.forEach((field) => {
     setText(root, `[data-stock-field="${field}"]`, prediction[field]);
   });
+  setText(root, '[data-stock-field="decision"]', decisionPresentation(prediction));
+  setText(
+    root,
+    '[data-stock-field="decision_policy_status"]',
+    decisionPolicyStatusLabel(policyStatus),
+  );
   setText(root, '[data-stock-field="decision_at"]', formatDateTime(prediction.decision_at));
   setText(root, '[data-stock-field="reason_codes"]', formatReasonCodeSummary(prediction.reason_codes));
   setText(root, '[data-stock-field="rank_score"]', formatRankScore(prediction.rank_score));
@@ -117,9 +134,11 @@ export function renderStockDetailPage(
   });
   setText(root, '[data-stock-field="adv20"]', formatCurrency(prediction.adv20));
   setText(root, '[data-stock-field="max_order_notional_ntd"]', formatCurrency(prediction.max_order_notional_ntd));
-  const fallbackGateReasonCode = noFormalDecisionPolicy
-    ? "RESEARCH_ONLY_NO_FORMAL_DECISION_POLICY"
-    : "GATE_NOT_EVALUATED";
+  const fallbackGateReasonCode = {
+    MISSING_REQUIRED_DATA: "REQUIRED_DECISION_POLICY_DATA_MISSING",
+    VALIDATION_FAILED: "DECISION_POLICY_VALIDATION_FAILED",
+    HARD_FAIL: "DATA_QUALITY_HARD_FAIL",
+  }[policyStatus] ?? "GATE_NOT_EVALUATED";
   renderDecisionGates(prediction.gates, { fallbackReasonCode: fallbackGateReasonCode });
 
   const auditValues = {

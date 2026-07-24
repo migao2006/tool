@@ -1,14 +1,23 @@
-import { CURRENT_HORIZON, SYSTEM_STATUS, normalizeHorizon } from "../core/five-day-contract.js";
 import {
-  DEFAULT_MARKET_SCOPE,
+  DECISION_ACTIONS,
+  DECISION_POLICY_STATUSES,
+  decisionCategory,
+  normalizeDecisionPolicy,
+} from "../core/decision-policy.js";
+import { CURRENT_HORIZON, normalizeHorizon, SYSTEM_STATUS } from "../core/five-day-contract.js";
+import {
   createStockKey,
+  DEFAULT_MARKET_SCOPE,
   normalizeMarketScope,
 } from "../core/market-scope.js";
 import { validateFormalSnapshot } from "./prediction-validator.js?v=api-5";
 
-const DECISIONS = new Set(["CANDIDATE", "WATCH", "NO_TRADE"]);
 const SYSTEM_STATUSES = new Set(Object.values(SYSTEM_STATUS));
 const API_CONTRACT_VERSION = "prediction-snapshot.v1";
+const DECISION_COUNT_KEYS = Object.freeze([
+  ...DECISION_ACTIONS,
+  ...DECISION_POLICY_STATUSES.filter((status) => status !== "EVALUATED"),
+]);
 
 function firstValue(source, keys, fallback = null) {
   for (const key of keys) {
@@ -51,7 +60,11 @@ function normalizeGate(gate) {
   });
 }
 
-export function normalizePrediction(record, snapshotHorizon = CURRENT_HORIZON) {
+export function normalizePrediction(
+  record,
+  snapshotHorizon = CURRENT_HORIZON,
+  systemStatus = null,
+) {
   if (!record || typeof record !== "object") throw new TypeError("預測紀錄格式不正確。");
   const horizon = normalizeHorizon(firstValue(record, ["horizon"], snapshotHorizon));
   if (horizon !== CURRENT_HORIZON) throw new RangeError("目前只接受 5 個交易日模型輸出。");
@@ -62,9 +75,41 @@ export function normalizePrediction(record, snapshotHorizon = CURRENT_HORIZON) {
     : String(rawDataQualityStatus).toUpperCase();
   const hardFail = Boolean(firstValue(record, ["data_quality_hard_fail", "hard_fail", "isHardFail"], false))
     || ["FAIL", "HARD_FAIL"].includes(dataQualityStatus);
-  const rawDecision = firstValue(record, ["decision"]);
-  const decisionValue = rawDecision === null || rawDecision === undefined ? "" : String(rawDecision).toUpperCase();
   const rawAssetType = firstValue(record, ["asset_type", "assetType"]);
+  const reasonCodes = Object.freeze(
+    stringList(firstValue(record, ["reason_codes", "reasonCodes"], [])),
+  );
+  const gates = Object.freeze(
+    (Array.isArray(record.gates) ? record.gates : []).map(normalizeGate),
+  );
+  const rawPolicyStatus = firstValue(
+    record,
+    ["decision_policy_status", "decisionPolicyStatus"],
+  );
+  const suppliedPolicyStatus = rawPolicyStatus === null ||
+      rawPolicyStatus === undefined
+    ? null
+    : String(rawPolicyStatus).trim().toUpperCase() || null;
+  if (
+    suppliedPolicyStatus !== null &&
+    (suppliedPolicyStatus === "HARD_FAIL") !== hardFail
+  ) {
+    throw new RangeError("HARD_FAIL 政策狀態與資料品質狀態不一致。");
+  }
+  const policy = normalizeDecisionPolicy({
+    decision: firstValue(record, ["decision"]),
+    status: rawPolicyStatus,
+    reasonCodes,
+    gates,
+    hardFail,
+    systemStatus,
+  });
+  if ((policy.status === "HARD_FAIL") !== hardFail) {
+    throw new RangeError("HARD_FAIL 政策狀態與資料品質狀態不一致。");
+  }
+  if (policy.status === "EVALUATED" && dataQualityStatus !== "PASS") {
+    throw new RangeError("政策已評估的股票必須通過資料品質驗證。");
+  }
 
   return Object.freeze({
     as_of_date: nullableString(firstValue(record, ["as_of_date", "asOfDate"])),
@@ -112,8 +157,12 @@ export function normalizePrediction(record, snapshotHorizon = CURRENT_HORIZON) {
     cost_profile_version: nullableString(firstValue(record, ["cost_profile_version", "costProfileVersion"])),
     data_quality_status: dataQualityStatus,
     data_quality_hard_fail: hardFail,
-    decision: DECISIONS.has(decisionValue) ? decisionValue : null,
-    reason_codes: Object.freeze(stringList(firstValue(record, ["reason_codes", "reasonCodes"], []))),
+    decision: policy.decision,
+    decision_policy_status: policy.status,
+    decision_category: policy.status === "EVALUATED"
+      ? policy.decision
+      : policy.status,
+    reason_codes: reasonCodes,
     model_version: nullableString(firstValue(record, ["model_version", "modelVersion"])),
     feature_schema_hash: nullableString(firstValue(record, ["feature_schema_hash", "featureSchemaHash"])),
     training_end_date: nullableString(firstValue(record, ["training_end_date", "trainingEndDate"])),
@@ -121,8 +170,48 @@ export function normalizePrediction(record, snapshotHorizon = CURRENT_HORIZON) {
     latest_available_at: nullableString(firstValue(record, ["latest_available_at", "latestAvailableAt"])),
     previous_global_rank: nullableNumber(firstValue(record, ["previous_global_rank", "previousGlobalRank"])),
     previous_decision: nullableString(firstValue(record, ["previous_decision", "previousDecision"])),
-    gates: Object.freeze((Array.isArray(record.gates) ? record.gates : []).map(normalizeGate)),
+    gates,
   });
+}
+
+function emptyDecisionCounts() {
+  return Object.fromEntries(DECISION_COUNT_KEYS.map((key) => [key, 0]));
+}
+
+function deriveDecisionCounts(predictions, excluded) {
+  const unique = new Map();
+  [...predictions, ...excluded].forEach((record, index) => {
+    const key = createStockKey(record) || `row-${index}`;
+    unique.set(key, record);
+  });
+  const counts = emptyDecisionCounts();
+  unique.forEach((record) => {
+    const category = decisionCategory(record);
+    if (category && Object.hasOwn(counts, category)) counts[category] += 1;
+  });
+  return counts;
+}
+
+function normalizeDecisionCounts(rawCounts, actualCounts) {
+  if (
+    rawCounts === null ||
+    typeof rawCounts !== "object" ||
+    Array.isArray(rawCounts)
+  ) {
+    return Object.freeze(actualCounts);
+  }
+  const supplied = emptyDecisionCounts();
+  for (const key of DECISION_COUNT_KEYS) {
+    const value = rawCounts[key];
+    if (!Number.isInteger(value) || value < 0) {
+      throw new TypeError(`decision_counts.${key} 必須是非負整數。`);
+    }
+    supplied[key] = value;
+    if (value !== actualCounts[key]) {
+      throw new RangeError("決策狀態計數與實際發布列不一致。");
+    }
+  }
+  return Object.freeze(supplied);
 }
 
 function normalizeMarketSnapshot(raw = {}) {
@@ -178,15 +267,47 @@ export function normalizePredictionSnapshot(
   if (marketScope !== requestedMarketScope) {
     throw new RangeError("預測 API 回傳的市場與請求不一致。");
   }
+  const statusValue = String(
+    firstValue(
+      payload,
+      ["system_status", "systemStatus"],
+      SYSTEM_STATUS.RESEARCH_ONLY,
+    ),
+  ).toUpperCase();
+  const systemStatus = SYSTEM_STATUSES.has(statusValue)
+    ? statusValue
+    : SYSTEM_STATUS.FAIL;
 
   const rawPredictions = firstValue(payload, ["predictions", "candidates", "stock_predictions"], []);
   const rawWatchlist = firstValue(payload, ["watchlist", "watchlist_predictions"], []);
-  const predictions = (Array.isArray(rawPredictions) ? rawPredictions : []).map((record) => normalizePrediction(record, horizon));
-  const watchlist = (Array.isArray(rawWatchlist) ? rawWatchlist : []).map((record) => normalizePrediction(record, horizon));
+  const normalizedPredictions = (Array.isArray(rawPredictions) ? rawPredictions : [])
+    .map((record) => normalizePrediction(record, horizon, systemStatus));
+  const normalizedWatchlist = (Array.isArray(rawWatchlist) ? rawWatchlist : [])
+    .map((record) => normalizePrediction(record, horizon, systemStatus));
+  const predictions = normalizedPredictions.filter(
+    (record) => !record.data_quality_hard_fail,
+  );
+  const watchlist = normalizedWatchlist.filter(
+    (record) => !record.data_quality_hard_fail,
+  );
   const explicitExcluded = firstValue(payload, ["excluded", "excluded_securities"], []);
+  const normalizedExplicitExcluded = Array.isArray(explicitExcluded)
+    ? explicitExcluded.map((record) =>
+      normalizePrediction(record, horizon, systemStatus)
+    )
+    : [];
+  if (
+    normalizedExplicitExcluded.some((record) =>
+      !record.data_quality_hard_fail ||
+      record.decision_policy_status !== "HARD_FAIL"
+    )
+  ) {
+    throw new RangeError("排除清單只能包含 HARD_FAIL 股票。");
+  }
   const excluded = [
-    ...(Array.isArray(explicitExcluded) ? explicitExcluded.map((record) => normalizePrediction(record, horizon)) : []),
-    ...predictions.filter((record) => record.data_quality_hard_fail),
+    ...normalizedExplicitExcluded,
+    ...normalizedPredictions.filter((record) => record.data_quality_hard_fail),
+    ...normalizedWatchlist.filter((record) => record.data_quality_hard_fail),
   ];
   const allRecords = [...predictions, ...watchlist, ...excluded];
   if (allRecords.some((record) => record.market !== marketScope)) {
@@ -195,22 +316,40 @@ export function normalizePredictionSnapshot(
   const uniqueExcluded = [
     ...new Map(excluded.map((record) => [createStockKey(record), record])).values(),
   ];
-  const statusValue = String(firstValue(payload, ["system_status", "systemStatus"], SYSTEM_STATUS.RESEARCH_ONLY)).toUpperCase();
+  const includedKeys = new Set(
+    [...predictions, ...watchlist].map((record) => createStockKey(record)),
+  );
+  if (
+    uniqueExcluded.some((record) =>
+      includedKeys.has(createStockKey(record))
+    )
+  ) {
+    throw new RangeError("同一股票不得同時出現在預測與排除清單。");
+  }
   const apiContractVersion = nullableString(firstValue(payload, ["api_contract_version", "apiContractVersion"]));
   if (apiContractVersion && apiContractVersion !== API_CONTRACT_VERSION) {
     throw new RangeError("預測 API 契約版本不受支援。");
   }
 
+  const actualDecisionCounts = deriveDecisionCounts(
+    predictions,
+    uniqueExcluded,
+  );
+  const decisionCounts = normalizeDecisionCounts(
+    firstValue(payload, ["decision_counts", "decisionCounts"]),
+    actualDecisionCounts,
+  );
   const snapshot = Object.freeze({
     apiContractVersion,
     horizon,
     marketScope,
-    systemStatus: SYSTEM_STATUSES.has(statusValue) ? statusValue : SYSTEM_STATUS.FAIL,
+    systemStatus,
     asOfDate: nullableString(firstValue(payload, ["as_of_date", "asOfDate"])),
     decisionAt: nullableString(firstValue(payload, ["decision_at", "decisionAt"])),
     stale: Boolean(firstValue(payload, ["stale", "is_stale"], false)),
     dataQualityHardFail: Boolean(firstValue(payload, ["data_quality_hard_fail", "dataQualityHardFail"], false)),
     reasonCodes: Object.freeze(stringList(firstValue(payload, ["reason_codes", "reasonCodes"], []))),
+    decisionCounts,
     market: normalizeMarketSnapshot(firstValue(payload, ["market", "market_snapshot"], payload)),
     predictions: Object.freeze(predictions),
     candidates: Object.freeze(predictions.filter((record) => !record.data_quality_hard_fail)),
@@ -246,6 +385,7 @@ export function createUnavailableSnapshot({
       stale: false,
       dataQualityHardFail: false,
       reasonCodes: Object.freeze(["UNSUPPORTED_HORIZON"]),
+      decisionCounts: Object.freeze(emptyDecisionCounts()),
       market: normalizeMarketSnapshot({ horizon: normalizedHorizon }),
       predictions: emptyRecords,
       candidates: emptyRecords,

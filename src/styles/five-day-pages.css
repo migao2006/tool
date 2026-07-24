@@ -269,8 +269,12 @@
 }
 
 .decision-counts {
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 4rem), 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   margin-top: 12px;
+}
+
+.decision-counts small {
+  overflow-wrap: anywhere;
 }
 
 .decision-hero {
@@ -353,6 +357,7 @@
   .inline-fields { grid-template-columns: 1fr; }
   .watch-filters { display: grid; overflow: visible; }
   .watch-filters button { min-width: 0; }
+  .decision-counts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (max-width: 480px) {

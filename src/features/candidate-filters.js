@@ -1,8 +1,12 @@
 import { initializeChoiceSheet } from "../components/choice-sheet.js";
+import { decisionCategory } from "../core/decision-policy.js";
 
 const FILTER_VALUE_LABELS = Object.freeze({
   CANDIDATE: "正式候選",
-  NO_TRADE: "不交易",
+  NO_TRADE: "政策不進場",
+  MISSING_REQUIRED_DATA: "政策資料未完整",
+  VALIDATION_FAILED: "政策驗證未通過",
+  HARD_FAIL: "資料硬性失敗",
   PASS: "通過",
   WARN: "注意",
   WATCH: "觀察",
@@ -77,7 +81,7 @@ export function filterCandidateRecords(records, filters) {
       if (!searchableText.includes(searchQuery)) return false;
     }
     if (filters.industry && recordIndustry(record) !== filters.industry) return false;
-    if (filters.decision && record.decision !== filters.decision) return false;
+    if (filters.decision && decisionCategory(record) !== filters.decision) return false;
     if (filters.dataQuality && record.data_quality_status !== filters.dataQuality) return false;
     if (filters.liquidityBucket && record.liquidity_bucket !== filters.liquidityBucket) return false;
     if (filters.costProfile && record.cost_profile !== filters.costProfile) return false;
@@ -148,7 +152,7 @@ export function initializeCandidateFilters({ onChange } = {}) {
     getFilters: () => currentFilters(root),
     setRecords: (records) => {
       replaceOptions(root.querySelector('[name="industry"]'), records.map(recordIndustry), "全部最新產業", "尚無產業分類");
-      replaceOptions(root.querySelector('[name="decision"]'), records.map((record) => record.decision), "全部決策", "尚無決策分類");
+      replaceOptions(root.querySelector('[name="decision"]'), records.map(decisionCategory), "全部決策／政策狀態", "尚無決策或政策狀態");
       replaceOptions(root.querySelector('[name="data_quality"]'), records.map((record) => record.data_quality_status), "全部資料品質", "尚無資料品質分類");
       replaceOptions(root.querySelector('[name="liquidity_bucket"]'), records.map((record) => record.liquidity_bucket), "全部流動性", "尚無流動性分類");
       replaceOptions(root.querySelector('[name="cost_profile"]'), records.map((record) => record.cost_profile), "全部成本設定", "尚無成本設定");

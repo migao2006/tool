@@ -95,11 +95,21 @@ function validateDecisionGateSet(record, snapshot, requireSourceDates = false) {
       );
     }
   });
+  const allGatesPassed = record.gates.every((gate) => gate.passed);
   if (
-    record.decision === "CANDIDATE" &&
-    record.gates.some((gate) => !gate.passed)
+    ["CANDIDATE", "WATCH"].includes(record.decision) &&
+    !allGatesPassed
   ) {
     throw new TypeError(`${record.symbol} 的決策與 gate 結果不一致。`);
+  }
+  if (
+    record.decision === "WATCH" &&
+    !record.reason_codes.includes("OUTSIDE_TOP_K")
+  ) {
+    throw new TypeError(`${record.symbol} 的 WATCH 缺少 Top-K 排除證據。`);
+  }
+  if (record.decision === "NO_TRADE" && allGatesPassed) {
+    throw new TypeError(`${record.symbol} 的 NO_TRADE 缺少未通過的政策 gate。`);
   }
 }
 
@@ -118,7 +128,11 @@ function validateFormalRecord(record, snapshot, decisionTimestamp) {
     || record.training_end_date !== snapshot.trainingEndDate) {
     throw new TypeError(`${record.symbol} 的模型或成本版本與快照不一致。`);
   }
-  if (!record.decision || !hasUsableVersion(record.feature_schema_hash)) {
+  if (
+    record.decision_policy_status !== "EVALUATED" ||
+    !record.decision ||
+    !hasUsableVersion(record.feature_schema_hash)
+  ) {
     throw new TypeError(`${record.symbol} 的決策或特徵版本無效。`);
   }
   if (record.market_regime !== snapshot.market.regime
@@ -191,11 +205,18 @@ function validateFormalRecord(record, snapshot, decisionTimestamp) {
 export function validateFormalSnapshot(snapshot) {
   [...snapshot.predictions, ...snapshot.watchlist, ...snapshot.excluded]
     .forEach((record) => {
-      validateDecisionGateSet(record, snapshot);
+      validateDecisionGateSet(
+        record,
+        snapshot,
+        record.decision_policy_status === "EVALUATED",
+      );
     });
   if (snapshot.systemStatus !== "PASS") return;
   if (snapshot.stale || snapshot.dataQualityHardFail) {
     throw new TypeError("PASS 快照不得為 stale 或 data quality hard fail。");
+  }
+  if (snapshot.predictions.length === 0) {
+    throw new TypeError("PASS 快照必須包含至少一筆正式政策列。");
   }
   if (snapshot.apiContractVersion !== API_CONTRACT_VERSION) {
     throw new TypeError("PASS 快照缺少或使用不支援的 API 契約版本。");

@@ -68,7 +68,7 @@ for (const viewport of MOBILE_VIEWPORTS) {
       });
       return { buttons, left: container.left, right: container.right };
     });
-    expect(watchFilterLayout.buttons).toHaveLength(4);
+    expect(watchFilterLayout.buttons).toHaveLength(6);
     watchFilterLayout.buttons.forEach((button) => {
       expect(button.left).toBeGreaterThanOrEqual(watchFilterLayout.left - 1);
       expect(button.right).toBeLessThanOrEqual(watchFilterLayout.right + 1);

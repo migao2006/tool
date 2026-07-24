@@ -78,6 +78,7 @@ def build_snapshot() -> dict[str, object]:
         estimated_round_trip_cost=0.01,
         data_quality_status="PASS",
         decision="CANDIDATE",
+        decision_policy_status="EVALUATED",
         reason_codes=(),
         model_version="rank-5d-v1",
         feature_schema_hash="schema-sha256-v1",
@@ -183,6 +184,7 @@ def build_research_snapshot() -> dict[str, object]:
         "cost_profile",
         "previous_global_rank",
         "previous_decision",
+        "decision_policy_status",
         "gates",
     ):
         prediction.pop(missing_field, None)
@@ -191,6 +193,7 @@ def build_research_snapshot() -> dict[str, object]:
     payload["predictions"] = [prediction]
     payload["watchlist"] = [dict(prediction)]
     payload["excluded"] = []
+    payload.pop("decision_counts", None)
     payload["reason_codes"] = ["RESEARCH_OUTPUT"]
     payload["market"] = {
         "as_of_date": payload["as_of_date"],
@@ -232,11 +235,13 @@ def build_stale_oos_research_snapshot() -> dict[str, object]:
             "gates": [],
         }
     )
+    prediction.pop("decision_policy_status", None)
     payload["system_status"] = "RESEARCH_ONLY"
     payload["stale"] = True
     payload["predictions"] = [prediction]
     payload["watchlist"] = []
     payload["excluded"] = []
+    payload.pop("decision_counts", None)
     payload["reason_codes"] = ["RESEARCH_ONLY", "STALE_PREDICTION_SNAPSHOT"]
     return payload
 
@@ -308,10 +313,12 @@ def build_gated_research_snapshot() -> dict[str, object]:
             ],
         }
     )
+    prediction.pop("decision_policy_status", None)
     payload["system_status"] = "RESEARCH_ONLY"
     payload["predictions"] = [prediction]
     payload["watchlist"] = []
     payload["excluded"] = []
+    payload.pop("decision_counts", None)
     payload["reason_codes"] = ["RESEARCH_DECISION_POLICY_EXECUTED_FAIL_CLOSED"]
     return payload
 
@@ -380,12 +387,8 @@ class FixtureHandler(SimpleHTTPRequestHandler):
             if len(market) != 1 or market[0] not in {"TWSE", "TPEX"}:
                 self._send(422, b'{"code":"UNSUPPORTED_MARKET"}', "application/json")
                 return
-            payload = (
-                build_snapshot() if market[0] == "TWSE" else build_empty_tpex_snapshot()
-            )
-            body = json.dumps(
-                payload, ensure_ascii=False, allow_nan=False
-            ).encode()
+            payload = build_snapshot() if market[0] == "TWSE" else build_empty_tpex_snapshot()
+            body = json.dumps(payload, ensure_ascii=False, allow_nan=False).encode()
             self._send(200, body, "application/json; charset=utf-8")
             return
         if parsed.path == "/contract-test":

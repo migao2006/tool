@@ -178,6 +178,23 @@ def test_resolver_selects_both_markets_missing_the_aligned_date(
     assert payload["should_run"] is True
     assert payload["as_of_date"] == "2026-07-20"
     assert payload["markets"] == ["TWSE", "TPEX"]
+    assert payload["schema_version"] == 1
+    assert payload["validated_production_snapshots"] == {
+        "TWSE": {
+            "as_of_date": "2026-07-17",
+            "prediction_run_id": 1,
+            "prediction_count": 500,
+            "decision_gate_count": 4_000,
+            "system_status": "RESEARCH_ONLY",
+        },
+        "TPEX": {
+            "as_of_date": "2026-07-17",
+            "prediction_run_id": 2,
+            "prediction_count": 500,
+            "decision_gate_count": 4_000,
+            "system_status": "RESEARCH_ONLY",
+        },
+    }
     assert 'markets=["TWSE","TPEX"]' in outputs
 
 

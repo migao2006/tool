@@ -13,6 +13,8 @@ def test_import_workflow_preserves_sanitized_attempt_result() -> None:
     workflow = IMPORT_WORKFLOW.read_text(encoding="utf-8")
 
     assert "max_attempts=4" in workflow
+    assert "workflow_call:" in workflow
+    assert 'if [[ "${{ inputs.dry_run }}" == "true" ]]' in workflow
     assert "status != 75" in workflow
     assert "delay_seconds=$((attempt * 180))" in workflow
     loop = workflow.index("while (( attempt <= max_attempts ))")
@@ -66,6 +68,7 @@ def test_recovery_workflow_has_exact_privileged_boundary_and_no_recursion() -> N
     assert "workflow_run:" in workflow
     assert "- Import market data" in workflow
     assert "- Daily research model" in workflow
+    assert "- Manual full update" in workflow
     assert "- Recover daily pipelines" not in workflow
     assert "types:" in workflow
     assert "- completed" in workflow

@@ -15,6 +15,7 @@ def test_daily_model_is_triggered_after_import_with_a_fallback_schedule() -> Non
     assert "- main" in workflow
     assert "- .github/workflows/daily-research-model.yml" in workflow
     assert "workflow_run:" in workflow
+    assert "workflow_call:" in workflow
     assert "- Import market data" in workflow
     assert 'cron: "15 13 * * 1-5"' in workflow
     assert "github.event.workflow_run.conclusion == 'success'" in workflow
@@ -22,6 +23,19 @@ def test_daily_model_is_triggered_after_import_with_a_fallback_schedule() -> Non
     assert "concurrency:" in workflow
     assert "group: daily-research-model" in workflow
     assert "cancel-in-progress: false" in workflow
+
+
+def test_daily_model_reusable_inputs_resolve_one_canonical_write_policy() -> None:
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+
+    assert "manual_full_update:" in workflow
+    assert "dry_run:" in workflow
+    assert "Resolve canonical mutation policy" in workflow
+    assert "mutation_requested: ${{ steps.policy.outputs.mutation_requested }}" in workflow
+    assert "production_requested: ${{ steps.policy.outputs.production_requested }}" in workflow
+    assert "needs.resolve.outputs.mutation_requested == 'true'" in workflow
+    assert "needs.resolve.outputs.production_requested == 'true'" in workflow
+    assert "(github.event_name != 'workflow_dispatch'" not in workflow
 
 
 def test_daily_model_publishes_current_bars_and_requires_one_exact_date() -> None:

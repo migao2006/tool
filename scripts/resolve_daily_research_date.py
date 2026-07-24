@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from datetime import date, datetime
 import json
 import os
@@ -22,11 +23,13 @@ add_project_root()
 
 from src.data.ingestion.contracts import IngestionError  # noqa: E402
 from src.data.ingestion.supabase_writer import SupabaseWriter  # noqa: E402
+from src.pipeline.daily_research_publish_contract import (  # noqa: E402
+    DAILY_RESEARCH_GATES_PER_PREDICTION,
+)
 
 
 TAIPEI = ZoneInfo("Asia/Taipei")
 MIN_ROWS = {"TWSE": 500, "TPEX": 500}
-GATES_PER_PREDICTION = 8
 MAX_PREDICTIONS = 5_000
 RESOLUTION_TIMEOUT_SECONDS = 60.0
 RESOLUTION_RETRY_DELAYS_SECONDS = (1.0, 2.0)
@@ -59,7 +62,27 @@ def _integer(value: object, field_name: str) -> int:
     return parsed
 
 
-def _latest_prediction_date(writer: SupabaseWriter, market: str) -> date | None:
+@dataclass(frozen=True)
+class ValidatedProductionSnapshot:
+    as_of_date: date
+    prediction_run_id: int
+    prediction_count: int
+    decision_gate_count: int
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "as_of_date": self.as_of_date.isoformat(),
+            "prediction_run_id": self.prediction_run_id,
+            "prediction_count": self.prediction_count,
+            "decision_gate_count": self.decision_gate_count,
+            "system_status": "RESEARCH_ONLY",
+        }
+
+
+def _latest_prediction_snapshot(
+    writer: SupabaseWriter,
+    market: str,
+) -> ValidatedProductionSnapshot | None:
     rows = writer.select_rows(
         "prediction_runs",
         select=(
@@ -138,9 +161,21 @@ def _latest_prediction_date(writer: SupabaseWriter, market: str) -> date | None:
             "decision_gate_results",
             filters={"stock_prediction_id": f"in.({values})"},
         )
-    if gate_count != prediction_count * GATES_PER_PREDICTION:
+    if gate_count != prediction_count * DAILY_RESEARCH_GATES_PER_PREDICTION:
         return None
-    return as_of_date
+    return ValidatedProductionSnapshot(
+        as_of_date=as_of_date,
+        prediction_run_id=run_id,
+        prediction_count=prediction_count,
+        decision_gate_count=gate_count,
+    )
+
+
+def _latest_prediction_date(writer: SupabaseWriter, market: str) -> date | None:
+    """Compatibility helper for callers that only need the validated date."""
+
+    snapshot = _latest_prediction_snapshot(writer, market)
+    return snapshot.as_of_date if snapshot is not None else None
 
 
 def _reason_code(error: Exception) -> str:
@@ -214,15 +249,19 @@ def _resolve_once(
         ),
     }
     market_data = _resolution_writer()
-    latest_predictions = {
-        market: _latest_prediction_date(market_data, market)
+    latest_snapshots = {
+        market: _latest_prediction_snapshot(market_data, market)
         for market in ("TWSE", "TPEX")
     }
     missing = [
         market
         for market in ("TWSE", "TPEX")
-        if latest_predictions[market] is None
-        or cast(date, latest_predictions[market]) < target
+        if latest_snapshots[market] is None
+        or cast(
+            ValidatedProductionSnapshot,
+            latest_snapshots[market],
+        ).as_of_date
+        < target
     ]
     # A long exchange closure must be a clean no-op when both markets already
     # have the latest aligned snapshot. Apply freshness and coverage gates only
@@ -234,6 +273,7 @@ def _resolve_once(
     ):
         raise ValueError("DAILY_RESEARCH_SOURCE_COVERAGE_TOO_LOW")
     return {
+        "schema_version": 1,
         "status": "PASS",
         "should_run": bool(missing),
         "as_of_date": target.isoformat(),
@@ -242,8 +282,16 @@ def _resolve_once(
         "markets": missing,
         "daily_bar_counts": counts,
         "latest_prediction_dates": {
-            market: (value.isoformat() if value is not None else None)
-            for market, value in latest_predictions.items()
+            market: (
+                snapshot.as_of_date.isoformat()
+                if snapshot is not None
+                else None
+            )
+            for market, snapshot in latest_snapshots.items()
+        },
+        "validated_production_snapshots": {
+            market: (snapshot.to_dict() if snapshot is not None else None)
+            for market, snapshot in latest_snapshots.items()
         },
     }
 
@@ -297,6 +345,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     except Exception as error:
         payload = {
+            "schema_version": 1,
             "status": "FAIL",
             "should_run": False,
             "as_of_date": None,

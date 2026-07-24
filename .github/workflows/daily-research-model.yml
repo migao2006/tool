@@ -1,6 +1,37 @@
 name: Daily research model
 
 on:
+  workflow_call:
+    inputs:
+      as_of_date:
+        description: Optional exact aligned daily-bar date (YYYY-MM-DD)
+        required: false
+        default: ""
+        type: string
+      dry_run:
+        description: Resolve and verify current state without writing
+        required: false
+        default: false
+        type: boolean
+      manual_full_update:
+        description: Apply explicit manual publication inputs from the owner orchestrator
+        required: false
+        default: false
+        type: boolean
+      publish_production:
+        description: Publish the staging-verified immutable snapshot to Production
+        required: false
+        default: true
+        type: boolean
+    secrets:
+      R2_ACCESS_KEY_ID:
+        required: true
+      R2_SECRET_ACCESS_KEY:
+        required: true
+      SUPABASE_URL:
+        required: true
+      SUPABASE_SERVICE_ROLE_KEY:
+        required: true
   # Bootstrap immediately when the daily orchestration itself changes on main.
   # The resolver is idempotent and exits cleanly when both markets are current.
   push:
@@ -40,6 +71,11 @@ on:
         required: true
         default: true
         type: boolean
+      dry_run:
+        description: Resolve and verify current state without writing
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   actions: read
@@ -62,6 +98,8 @@ jobs:
       should_run: ${{ steps.resolve.outputs.should_run }}
       as_of_date: ${{ steps.resolve.outputs.as_of_date }}
       markets: ${{ steps.resolve.outputs.markets }}
+      mutation_requested: ${{ steps.policy.outputs.mutation_requested }}
+      production_requested: ${{ steps.policy.outputs.production_requested }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -77,6 +115,29 @@ jobs:
 
       - name: Synchronize locked environment
         run: uv sync --frozen
+
+      - name: Resolve canonical mutation policy
+        id: policy
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+          EVENT_NAME: ${{ github.event_name }}
+          MANUAL_FULL_UPDATE: ${{ inputs.manual_full_update }}
+          PUBLISH_PRODUCTION: ${{ inputs.publish_production }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mutation_requested=true
+          production_requested=true
+          if [[ "$DRY_RUN" == "true" ]]; then
+            mutation_requested=false
+            production_requested=false
+          elif [[ "$EVENT_NAME" == "workflow_dispatch" || "$MANUAL_FULL_UPDATE" == "true" ]]; then
+            production_requested="$PUBLISH_PRODUCTION"
+          fi
+          {
+            echo "mutation_requested=$mutation_requested"
+            echo "production_requested=$production_requested"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Resolve aligned date and markets still missing a snapshot
         id: resolve
@@ -108,7 +169,9 @@ jobs:
 
   publish-current-bars:
     needs: resolve
-    if: needs.resolve.outputs.should_run == 'true'
+    if: >-
+      needs.resolve.outputs.should_run == 'true' &&
+      needs.resolve.outputs.mutation_requested == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -179,7 +242,9 @@ jobs:
     needs:
       - resolve
       - publish-current-bars
-    if: needs.resolve.outputs.should_run == 'true'
+    if: >-
+      needs.resolve.outputs.should_run == 'true' &&
+      needs.resolve.outputs.mutation_requested == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -241,7 +306,9 @@ jobs:
     needs:
       - resolve
       - build-features
-    if: needs.resolve.outputs.should_run == 'true'
+    if: >-
+      needs.resolve.outputs.should_run == 'true' &&
+      needs.resolve.outputs.mutation_requested == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -307,7 +374,9 @@ jobs:
       - resolve
       - build-features
       - export-security-catalog
-    if: needs.resolve.outputs.should_run == 'true'
+    if: >-
+      needs.resolve.outputs.should_run == 'true' &&
+      needs.resolve.outputs.mutation_requested == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -541,7 +610,7 @@ jobs:
       - publish-staging
     if: >-
       needs.resolve.outputs.should_run == 'true' &&
-      (github.event_name != 'workflow_dispatch' || inputs.publish_production == true) &&
+      needs.resolve.outputs.production_requested == 'true' &&
       vars.DAILY_RESEARCH_PRODUCTION_PUBLISH_ENABLED != 'false'
     strategy:
       fail-fast: false

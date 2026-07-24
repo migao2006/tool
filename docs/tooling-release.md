@@ -190,3 +190,18 @@ $env:NODE_OPTIONS = "--use-system-ca"
 不得刪除成功資料、竄改統計或把部分成功宣稱為完整回補。
 
 TAIEX 歷史基準、補充資料、歷史事件證據與上市 feature dataset 是 dormant／feature-gated workflow。合併程式與正式啟用是兩個不同發布階段；未完成 migration 及隔離環境驗證前不得啟用。
+
+## 八、手動完整每日更新閘門
+
+- Production-capable 的一鍵入口只有 GitHub Actions
+  `manual-full-update.yml`；只允許從 `main` 執行。
+- 不得用本機 `act`、Vercel CLI、分支 dispatch 或兩次 API dispatch 取代這個入口。
+- 預設空白日期必須交由既有 aligned-date resolver 決定，不得改成今天日期。
+- Caller 只能使用具名 secrets，且必須保留 Import、Daily 與 Manual 三個不同的 concurrency
+  groups。
+- Production 成功必須有本次 attempt 的 exact market verifier artifacts；no-op 只接受
+  resolver 已證明兩市場均 current 的結果。
+- Recovery 只對 current-main trusted run、來源日期 mismatch 或精確
+  `SUPABASE_CONNECTION_ERROR` 做有界完整重跑；其他失敗保留 Issue 並停止。
+- 詳細輸入、摘要、操作與 rollback 見
+  [`manual-full-update.md`](manual-full-update.md)。

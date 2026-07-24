@@ -1,5 +1,9 @@
-import { escapeHtml } from "../core/html.js";
+import {
+  decisionActionLabel,
+  decisionPresentation,
+} from "../core/decision-policy.js";
 import { formatPercent, formatRank, formatRankScore } from "../core/formatters.js";
+import { escapeHtml } from "../core/html.js";
 import { createStockKey } from "../core/market-scope.js";
 
 function rankChange(prediction) {
@@ -15,11 +19,11 @@ export function createWatchlistCard(prediction) {
   const stockKey = escapeHtml(createStockKey(prediction));
   const reasons = prediction.reason_codes?.map(escapeHtml).join(" · ") || "—";
   const decisionChange = prediction.previous_decision && prediction.previous_decision !== prediction.decision
-    ? `${escapeHtml(prediction.previous_decision)} → ${escapeHtml(prediction.decision)}`
+    ? `${escapeHtml(decisionActionLabel(prediction.previous_decision))} → ${escapeHtml(decisionPresentation(prediction))}`
     : "無變化";
   return `
     <article class="watchlist-card" data-stock-key="${stockKey}" data-market="${market}" data-symbol="${symbol}">
-      <header><div><strong>${symbol}</strong><span>${escapeHtml(prediction.name ?? "—")}</span></div><span class="decision-badge">${escapeHtml(prediction.decision ?? "—")}</span></header>
+      <header><div><strong>${symbol}</strong><span>${escapeHtml(prediction.name ?? "—")}</span></div><span class="decision-badge">${escapeHtml(decisionPresentation(prediction))}</span></header>
       <dl class="watchlist-values">
         <div><dt>Rank Score／全市場排名</dt><dd>${formatRankScore(prediction.rank_score)}／${formatRank(prediction.global_rank)}</dd></div>
         <div><dt>排名／決策變化</dt><dd>${rankChange(prediction)}／${decisionChange}</dd></div>

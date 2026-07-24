@@ -45,8 +45,6 @@ def require(condition: bool, message: str) -> None:
         raise ManifestError(message)
 
 
-
-
 def load_shell_assignments(path: Path) -> dict[str, str]:
     assignments: dict[str, str] = {}
     for line_number, raw_line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
@@ -80,14 +78,41 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
     require(isinstance(snapshot, dict), "published_research_snapshot is required")
     assert isinstance(snapshot, dict)
     require(snapshot.get("status") == "RESEARCH_ONLY", "snapshot status must be RESEARCH_ONLY")
+    require(
+        snapshot.get("evidence_scope") == "LATEST_FULLY_ARTIFACT_AND_PROVENANCE_BACKED_SNAPSHOT",
+        "snapshot evidence scope must not imply it is the latest Production run",
+    )
     prediction_count = snapshot.get("prediction_count")
-    require(isinstance(prediction_count, int) and prediction_count > 0, "prediction_count is invalid")
+    require(
+        isinstance(prediction_count, int) and prediction_count > 0, "prediction_count is invalid"
+    )
     assert isinstance(prediction_count, int)
     decision_total = sum(
         int(snapshot.get(name, -prediction_count))
-        for name in ("candidate_count", "watch_count", "no_trade_count")
+        for name in (
+            "candidate_count",
+            "watch_count",
+            "no_trade_count",
+            "policy_input_missing_count",
+            "policy_validation_failed_count",
+            "policy_hard_fail_count",
+        )
     )
-    require(decision_total == prediction_count, "snapshot decision counts do not add up")
+    require(
+        decision_total == prediction_count,
+        "snapshot action and policy status counts do not add up",
+    )
+    require(
+        snapshot.get("decision_policy_semantics")
+        == "LEGACY_NO_TRADE_RECLASSIFIED_MISSING_REQUIRED_DATA",
+        "legacy snapshot semantics must be explicitly reclassified",
+    )
+    require(
+        snapshot.get("legacy_persisted_no_trade_count") == prediction_count
+        and snapshot.get("no_trade_count") == 0
+        and snapshot.get("policy_input_missing_count") == prediction_count,
+        "legacy NO_TRADE evidence must remain distinct from its corrected status",
+    )
     gate_count = snapshot.get("decision_gate_count")
     gates_per_prediction = snapshot.get("decision_gates_per_prediction")
     require(isinstance(gate_count, int), "decision_gate_count must be an integer")
@@ -126,8 +151,7 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
     )
     if commit is None:
         require(
-            snapshot.get("git_commit_evidence_status")
-            == "NOT_RECORDED_IN_AVAILABLE_EVIDENCE",
+            snapshot.get("git_commit_evidence_status") == "NOT_RECORDED_IN_AVAILABLE_EVIDENCE",
             "an unknown publication commit must be explicitly disclosed",
         )
 
@@ -139,9 +163,7 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
         repository_state.get("migration_file_count") == migration_count,
         "repository migration count is stale",
     )
-    migration_names = {
-        path.name for path in (ROOT / "supabase/migrations").glob("*.sql")
-    }
+    migration_names = {path.name for path in (ROOT / "supabase/migrations").glob("*.sql")}
     for field in (
         "patch_added_migrations",
         "patch_requires_staging_validation",
@@ -211,9 +233,22 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
         "snapshot RPC remote status must preserve the evidence boundary",
     )
     require(
-        snapshot_read.get("deployment_guard")
-        == "RPC_MIGRATION_VERIFIED_ATTESTATION_REQUIRED",
+        snapshot_read.get("deployment_guard") == "RPC_MIGRATION_VERIFIED_ATTESTATION_REQUIRED",
         "snapshot RPC deployment must require migration verification attestation",
+    )
+    require(
+        snapshot_read.get("decision_policy_rollout_order")
+        == [
+            "STATUS_AWARE_FRONTEND_AND_EDGE",
+            "DECISION_POLICY_STATUS_MIGRATION",
+            "STATUS_AWARE_PUBLISHER",
+        ],
+        "Decision Policy rollout order is unsafe or stale",
+    )
+    require(
+        snapshot_read.get("decision_policy_rollback_constraint")
+        == "DO_NOT_ROLL_BACK_EDGE_BEFORE_DATABASE_CONTRACT",
+        "Decision Policy rollback constraint is unsafe or stale",
     )
     require(
         snapshot_read.get("primary_read_path")
@@ -221,8 +256,7 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
         "snapshot primary path must use the calendar-aware v2 RPC",
     )
     require(
-        snapshot_read.get("base_migration")
-        == "20260720190000_prediction_snapshot_read_rpc.sql",
+        snapshot_read.get("base_migration") == "20260720190000_prediction_snapshot_read_rpc.sql",
         "snapshot base migration is invalid",
     )
     require(
@@ -264,8 +298,7 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
         "venue adapter compatibility must be preserved",
     )
     require(
-        p2_refactoring.get("remote_status")
-        == "REPOSITORY_ONLY_NOT_REMOTELY_VERIFIED",
+        p2_refactoring.get("remote_status") == "REPOSITORY_ONLY_NOT_REMOTELY_VERIFIED",
         "P2 refactoring remote status must preserve the evidence boundary",
     )
     for field in (
@@ -309,13 +342,14 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
         "GitHub Actions must be pinned to full SHAs",
     )
     require(
-        continuous_integration.get("branch_protection_status")
-        == "NOT_REVERIFIED_BY_THIS_PATCH",
+        continuous_integration.get("branch_protection_status") == "NOT_REVERIFIED_BY_THIS_PATCH",
         "remote branch-protection status must not be inferred",
     )
     action_pin_policy = continuous_integration.get("action_pin_policy")
     tool_version_file = continuous_integration.get("tool_version_file")
-    require(action_pin_policy == "config/github-actions-pins.json", "action pin policy path is invalid")
+    require(
+        action_pin_policy == "config/github-actions-pins.json", "action pin policy path is invalid"
+    )
     require(tool_version_file == "config/quality-tools.env", "tool version file path is invalid")
     assert isinstance(action_pin_policy, str)
     assert isinstance(tool_version_file, str)
@@ -405,7 +439,8 @@ def render_model_header(manifest: dict[str, Any]) -> str:
             MODEL_HEADER_START,
             (
                 f"> 最後核對：{manifest['last_verified_date']}。OOS 驗證 workflow："
-                f"{workflow_link(workflow['run_id'])}；最新橫截面研究推論 workflow："
+                f"{workflow_link(workflow['run_id'])}；最新具完整 artifact／provenance "
+                "證據的橫截面研究推論 workflow："
                 f"{workflow_link(snapshot['workflow_run_id'])}；最新特徵 workflow："
                 f"{workflow_link(feature['workflow_run_id'])}；發布 commit："
                 f"{publication_commit_text(snapshot)}。動態資料與阻塞現況見 "
@@ -413,7 +448,8 @@ def render_model_header(manifest: dict[str, Any]) -> str:
                 "[`docs/release-state.md`](docs/release-state.md)。"
             ),
             "",
-            "> 本區塊與下方最新快照由 `release-manifest.json` 產生；請勿直接修改。",
+            "> 本區塊與下方具完整 artifact／provenance 證據的快照由 "
+            "`release-manifest.json` 產生；請勿直接修改。",
             MODEL_HEADER_END,
         ]
     )
@@ -433,10 +469,16 @@ def render_model_snapshot(manifest: dict[str, Any]) -> str:
             f"- Evaluation scope：`{snapshot['evaluation_scope']}`",
             f"- 預測列數：{snapshot['prediction_count']:,} 檔上市股票",
             (
-                "- 決策："
+                "- 政策動作："
                 f"`CANDIDATE={snapshot['candidate_count']}`、"
                 f"`WATCH={snapshot['watch_count']}`、"
                 f"`NO_TRADE={snapshot['no_trade_count']:,}`"
+            ),
+            (
+                "- 政策評估狀態："
+                f"`MISSING_REQUIRED_DATA={snapshot['policy_input_missing_count']:,}`、"
+                f"`VALIDATION_FAILED={snapshot['policy_validation_failed_count']}`、"
+                f"`HARD_FAIL={snapshot['policy_hard_fail_count']}`"
             ),
             (
                 "- 公開 API 資料品質："
@@ -463,10 +505,13 @@ def render_model_snapshot(manifest: dict[str, Any]) -> str:
             "",
             (
                 "模型 bundle 由最後一個 walk-forward fold 依固定規則建立，沒有用最新橫截面選模；"
-                "相同 artifact、設定與 seed 的 bundle identity 可重現。這批資料是最新日期的回溯研究推論，"
+                "相同 artifact、設定與 seed 的 bundle identity 可重現。這批資料是目前具完整 "
+                "artifact／provenance 證據的回溯研究推論，"
                 "不是新的 OOS 評估。Production API 的既有驗證紀錄顯示回傳 1,068 檔且每檔恰好 8 層 "
-                "fail-closed 研究 gate；缺少可交易性、市場曝險或部位輸入時不得推測通過。全部列固定為 "
-                "`NO_TRADE`，不得描述為正式候選股、即時可交易建議或獲利保證。"
+                "fail-closed 研究 gate；缺少可交易性、市場曝險或部位輸入時不得推測通過。舊發布欄位曾把 "
+                f"{snapshot['legacy_persisted_no_trade_count']:,} 列記為 `NO_TRADE`；狀態稽核已將其權威語意"
+                "重分類為 `MISSING_REQUIRED_DATA`，政策動作為空值。不得描述為正式候選股、"
+                "即時可交易建議或獲利保證。"
             ),
             MODEL_SNAPSHOT_END,
         ]
@@ -486,12 +531,9 @@ def render_status_header(manifest: dict[str, Any]) -> str:
     auth_recovery = hardening["auth_recovery"]
     ci = hardening["continuous_integration"]
     vercel = hardening["vercel"]
-    patch_added = "、".join(
-        f"`{name}`" for name in repository["patch_added_migrations"]
-    )
+    patch_added = "、".join(f"`{name}`" for name in repository["patch_added_migrations"])
     remote_gap = "、".join(
-        f"`{name}`"
-        for name in repository["migrations_after_recorded_remote_latest"]
+        f"`{name}`" for name in repository["migrations_after_recorded_remote_latest"]
     )
     return "\n".join(
         [
@@ -500,7 +542,8 @@ def render_status_header(manifest: dict[str, Any]) -> str:
             ">",
             (
                 "> 文件基準：最新發布 commit 未記錄於目前可用證據，不得沿用舊快照 commit；"
-                f"OOS 驗證 workflow 使用 `{model['workflow']['run_id']}`，最新特徵與研究推論 workflow 使用 "
+                f"OOS 驗證 workflow 使用 `{model['workflow']['run_id']}`，最新特徵與具完整 "
+                "artifact／provenance 證據的研究推論 workflow 使用 "
                 f"`{model['latest_feature_dataset']['workflow_run_id']}`、`{snapshot['workflow_run_id']}`"
             ),
             ">",
@@ -508,7 +551,7 @@ def render_status_header(manifest: dict[str, Any]) -> str:
             ">",
             (
                 f"> Repository 目前包含 {repository['migration_file_count']} 個 migration 檔案；"
-                f"本修補新增且待隔離驗證／部署：{patch_added}。"
+                f"本修補新增且待 Staging／Production 部署驗證：{patch_added}。"
             ),
             ">",
             (
@@ -557,7 +600,8 @@ def render_status_header(manifest: dict[str, Any]) -> str:
                 "本修補尚未直接讀取正式站 response headers，因此遠端生效狀態不得推測。"
             ),
             ">",
-            "> 本區塊與下方最新快照由 `release-manifest.json` 產生；請勿直接修改。",
+            "> 本區塊與下方具完整 artifact／provenance 證據的快照由 "
+            "`release-manifest.json` 產生；請勿直接修改。",
             STATUS_HEADER_END,
         ]
     )
@@ -571,7 +615,7 @@ def render_status_snapshot(manifest: dict[str, Any]) -> str:
             STATUS_SNAPSHOT_START,
             (
                 f"[GitHub Actions run `{snapshot['workflow_run_id']}`]"
-                f"({snapshot['workflow_url']}) 已使用最新驗證特徵橫截面、最後一個 walk-forward fold "
+                f"({snapshot['workflow_url']}) 已使用該次已驗證特徵橫截面、最後一個 walk-forward fold "
                 "的凍結模型 bundle，完成研究推論並發布至 Production Supabase；快照 RPC 與後續 "
                 "gate attachment 的既有紀錄顯示已完成不可變讀回驗證。發布 commit 未記錄於目前可用證據，"
                 "因此文件不再沿用舊快照 commit。"
@@ -587,10 +631,16 @@ def render_status_snapshot(manifest: dict[str, Any]) -> str:
             f"| Model version | `{model['model_version']}` |",
             f"| Training end date | `{model['training_end_date']}` |",
             (
-                "| 決策 | "
+                "| 政策動作 | "
                 f"`CANDIDATE={snapshot['candidate_count']}`、"
                 f"`WATCH={snapshot['watch_count']}`、"
                 f"`NO_TRADE={snapshot['no_trade_count']:,}` |"
+            ),
+            (
+                "| 政策評估狀態 | "
+                f"`MISSING_REQUIRED_DATA={snapshot['policy_input_missing_count']:,}`、"
+                f"`VALIDATION_FAILED={snapshot['policy_validation_failed_count']}`、"
+                f"`HARD_FAIL={snapshot['policy_hard_fail_count']}` |"
             ),
             f"| 系統狀態 | `{snapshot['status']}` |",
             (
@@ -627,8 +677,10 @@ def render_status_snapshot(manifest: dict[str, Any]) -> str:
                 "這是回溯研究推論，不是新的 OOS 驗證。既有契約驗證紀錄顯示每檔恰好 8 層 gate；"
                 "gate order、actual、threshold、reason code 與 attachment snapshot hash 均通過。"
                 "具備真實輸入的資料品質、流動性容量、校準方向機率、淨分位數及排名資格會顯示實際值與門檻；"
-                "缺少 point-in-time 可交易性、市場模型及部位配置輸入時一律 fail closed。所有列仍固定為 "
-                "`NO_TRADE / RESEARCH_ONLY`，不得描述為正式候選股、即時交易訊號或獲利保證。"
+                "缺少 point-in-time 可交易性、市場模型及部位配置輸入時一律 fail closed。舊資料庫欄位"
+                f"曾記錄 `NO_TRADE={snapshot['legacy_persisted_no_trade_count']:,}`；權威重分類為 "
+                f"`MISSING_REQUIRED_DATA={snapshot['policy_input_missing_count']:,}` 且政策動作為空值。"
+                "不得描述為正式候選股、即時交易訊號或獲利保證。"
             ),
             STATUS_SNAPSHOT_END,
         ]
@@ -659,8 +711,6 @@ def replace_marked_or_section(
     return text[:content_start] + "\n\n" + replacement + "\n" + text[end:]
 
 
-
-
 def render_release_state(manifest: dict[str, Any]) -> str:
     model = manifest["model_card"]
     snapshot = model["published_research_snapshot"]
@@ -674,150 +724,170 @@ def render_release_state(manifest: dict[str, Any]) -> str:
     vercel = hardening["vercel"]
     histories = repository["environment_migration_history"]
     tools = ci["tools"]
-    tool_rows = [
-        f"| `{name}` | `{version}` |"
-        for name, version in sorted(tools.items())
-    ]
+    tool_rows = [f"| `{name}` | `{version}` |" for name, version in sorted(tools.items())]
     migration_rows = [
-        f"- `{name}`"
-        for name in repository["migrations_after_recorded_remote_latest"]
+        f"- `{name}`" for name in repository["migrations_after_recorded_remote_latest"]
     ]
-    patch_rows = [
-        f"- `{name}`"
-        for name in repository["patch_added_migrations"]
-    ]
-    return "\n".join(
-        [
-            "# Release 與部署證據狀態",
-            "",
-            "> 此文件完全由 `release-manifest.json` 產生；請勿直接修改。",
-            f"> 最後核對日期：{manifest['last_verified_date']}（Asia/Taipei）。",
-            f"> 證據基準：`{manifest['verification_basis']}`。",
-            "",
-            "## 模型與研究快照",
-            "",
-            "| 項目 | Manifest 記錄 |",
-            "| --- | --- |",
-            f"| 系統狀態 | `{model['status']}` |",
-            f"| Model version | `{model['model_version']}` |",
-            f"| Prediction run | `{snapshot['prediction_run_id']}` |",
-            f"| Snapshot workflow | `{snapshot['workflow_run_id']}` |",
-            f"| Snapshot commit | {publication_commit_text(snapshot)} |",
-            f"| Evaluation scope | `{snapshot['evaluation_scope']}` |",
-            f"| Prediction count | `{snapshot['prediction_count']}` |",
-            "",
-            "## Migration 證據邊界",
-            "",
-            f"Repository 目前共有 **{repository['migration_file_count']}** 個 migration 檔案。",
-            "本修補新增、且仍須在隔離環境驗證後才能部署：",
-            "",
-            *patch_rows,
-            "",
-            (
-                "Staging 已記錄："
-                f"`{histories['staging']['recorded_applied_count']}` 個，最後為 "
-                f"`{histories['staging']['recorded_latest_migration']}`，證據狀態 "
-                f"`{histories['staging']['evidence_status']}`。"
-            ),
-            (
-                "Production 已記錄："
-                f"`{histories['production']['recorded_applied_count']}` 個，最後為 "
-                f"`{histories['production']['recorded_latest_migration']}`，證據狀態 "
-                f"`{histories['production']['evidence_status']}`。"
-            ),
-            "",
-            "已記錄遠端最新 migration 之後的 Repository 檔案：",
-            "",
-            *migration_rows,
-            "",
-            "上述檔案存在不等於已套用至任何遠端環境。",
-            "",
-            "## P1／P2 執行控制",
-            "",
-            "### Prediction Snapshot",
-            "",
-            f"- 主要路徑：`{snapshot_read['primary_read_path']}`。",
-            (
-                "- 正常 Edge→PostgREST 往返："
-                f"`{snapshot_read['expected_primary_postgrest_requests']}` 次。"
-            ),
-            f"- 預設模式：`{snapshot_read['default_mode']}`。",
-            f"- 緊急回復模式：`{snapshot_read['emergency_rollback_mode']}`。",
-            f"- 靜默 fallback：禁止；契約為 `{snapshot_read['fallback_condition']}`。",
-            f"- 基礎 RPC migration：`{snapshot_read['base_migration']}`。",
-            f"- Calendar v2 migration：`{snapshot_read['migration']}`。",
-            f"- 遠端狀態：`{snapshot_read['remote_status']}`。",
-            f"- Freshness 首選：`{freshness['preferred_method']}`。",
-            f"- 日曆缺口處理：`{freshness['calendar_gap_behavior']}`。",
-            (
-                "- 預設 freshness 參數：台北 "
-                f"`{freshness['default_ready_hour_taipei']}:00`、"
-                f"`{freshness['default_lookback_days']}` 日連續覆蓋（上限 "
-                f"`{freshness['maximum_lookback_days']}` 日；RPC 視窗 "
-                f"`{freshness['rpc_calendar_window_days']}` 個曆日）、"
-                f"`{freshness['fallback_stale_hours']}` 小時 fallback。"
-            ),
-            "",
-            "### P2 共用協調器與複雜度控制",
-            "",
-            f"- 月度 benchmark 共用協調器：`{p2_refactoring['monthly_benchmark_orchestrator']}`。",
-            f"- 場別 feature CLI 共用流程：`{p2_refactoring['venue_feature_cli_orchestrator']}`。",
-            (
-                "- 核心入口行數：historical backfill "
-                f"`{p2_refactoring['historical_backfill_run_lines']}`、daily inference "
-                f"`{p2_refactoring['daily_inference_run_lines']}`、dataset assembly "
-                f"`{p2_refactoring['research_dataset_from_frame_lines']}`。"
-            ),
-            f"- 遠端狀態：`{p2_refactoring['remote_status']}`。",
-            "",
-            "### 帳號復原",
-            "",
-            f"- Provider：`{auth_recovery['provider']}`。",
-            f"- OAuth/session flow：`{auth_recovery['flow_type']}`。",
-            f"- Recovery event：`{auth_recovery['recovery_event']}`。",
-            f"- Redirect policy：`{auth_recovery['redirect_policy']}`。",
-            f"- Account enumeration response：`{auth_recovery['account_enumeration_response']}`。",
-            f"- Redirect allowlist：`{auth_recovery['redirect_allowlist_status']}`。",
-            f"- Production SMTP：`{auth_recovery['production_smtp_status']}`。",
-            "",
-            "### CI 與供應鏈",
-            "",
-            f"- 品質工作 ID：`{ci['quality_job_id']}`。",
-            f"- 彙總 gate ID：`{ci['required_gate_job_id']}`。",
-            f"- Branch protection：`{ci['branch_protection_status']}`。",
-            f"- Action pin policy：`{ci['action_pin_policy']}`。",
-            f"- 工具版本來源：`{ci['tool_version_file']}`。",
-            "",
-            "| 工具 | 固定版本 |",
-            "| --- | --- |",
-            *tool_rows,
-            "",
-            "### Vercel",
-            "",
-            f"- 設定檔：`{vercel['config_file']}`。",
-            f"- CSP enforcement：`{str(vercel['csp_enforced']).lower()}`。",
-            f"- Inline script allowed：`{str(vercel['inline_script_allowed']).lower()}`。",
-            f"- Inline style allowed：`{str(vercel['inline_style_allowed']).lower()}`。",
-            (
-                "- 正式站 response headers 已直接驗證："
-                f"`{str(vercel['remote_response_headers_verified']).lower()}`。"
-            ),
-            "",
-            "## 部署限制",
-            "",
-            "本次交付只修改 Repository。不得把下列事項描述為已完成：",
-            "",
-            "- Staging／Production migration 已套用。",
-            "- Edge Function 已更新。",
-            "- Vercel Production 安全標頭已生效。",
-            "- GitHub branch protection 已要求新的彙總 gate。",
-            "",
-            (
-                "部署時必須依序套用並驗證基礎 RPC 與 calendar v2 migration，再部署預設 "
-                "`rpc` 的 Edge Function；帳號復原上線前另須驗證 Redirect URL allowlist 與正式 SMTP。"
-            ),
-        ]
-    ) + "\n"
+    patch_rows = [f"- `{name}`" for name in repository["patch_added_migrations"]]
+    return (
+        "\n".join(
+            [
+                "# Release 與部署證據狀態",
+                "",
+                "> 此文件完全由 `release-manifest.json` 產生；請勿直接修改。",
+                f"> 最後核對日期：{manifest['last_verified_date']}（Asia/Taipei）。",
+                f"> 證據基準：`{manifest['verification_basis']}`。",
+                "",
+                "## 模型與研究快照",
+                "",
+                "| 項目 | Manifest 記錄 |",
+                "| --- | --- |",
+                f"| 系統狀態 | `{model['status']}` |",
+                f"| Model version | `{model['model_version']}` |",
+                f"| Evidence scope | `{snapshot['evidence_scope']}` |",
+                f"| Prediction run | `{snapshot['prediction_run_id']}` |",
+                f"| Snapshot workflow | `{snapshot['workflow_run_id']}` |",
+                f"| Snapshot commit | {publication_commit_text(snapshot)} |",
+                f"| Evaluation scope | `{snapshot['evaluation_scope']}` |",
+                f"| Prediction count | `{snapshot['prediction_count']}` |",
+                (
+                    "| Policy action counts | "
+                    f"`CANDIDATE={snapshot['candidate_count']}`, "
+                    f"`WATCH={snapshot['watch_count']}`, "
+                    f"`NO_TRADE={snapshot['no_trade_count']}` |"
+                ),
+                (
+                    "| Policy status counts | "
+                    f"`MISSING_REQUIRED_DATA={snapshot['policy_input_missing_count']}`, "
+                    f"`VALIDATION_FAILED={snapshot['policy_validation_failed_count']}`, "
+                    f"`HARD_FAIL={snapshot['policy_hard_fail_count']}` |"
+                ),
+                "",
+                "## Migration 證據邊界",
+                "",
+                f"Repository 目前共有 **{repository['migration_file_count']}** 個 migration 檔案。",
+                "本修補新增、且仍須在隔離環境驗證後才能部署：",
+                "",
+                *patch_rows,
+                "",
+                (
+                    "Staging 已記錄："
+                    f"`{histories['staging']['recorded_applied_count']}` 個，最後為 "
+                    f"`{histories['staging']['recorded_latest_migration']}`，證據狀態 "
+                    f"`{histories['staging']['evidence_status']}`。"
+                ),
+                (
+                    "Production 已記錄："
+                    f"`{histories['production']['recorded_applied_count']}` 個，最後為 "
+                    f"`{histories['production']['recorded_latest_migration']}`，證據狀態 "
+                    f"`{histories['production']['evidence_status']}`。"
+                ),
+                "",
+                "已記錄遠端最新 migration 之後的 Repository 檔案：",
+                "",
+                *migration_rows,
+                "",
+                "上述檔案存在不等於已套用至任何遠端環境。",
+                "",
+                "## P1／P2 執行控制",
+                "",
+                "### Prediction Snapshot",
+                "",
+                f"- 主要路徑：`{snapshot_read['primary_read_path']}`。",
+                (
+                    "- 正常 Edge→PostgREST 往返："
+                    f"`{snapshot_read['expected_primary_postgrest_requests']}` 次。"
+                ),
+                f"- 預設模式：`{snapshot_read['default_mode']}`。",
+                f"- 緊急回復模式：`{snapshot_read['emergency_rollback_mode']}`。",
+                f"- 靜默 fallback：禁止；契約為 `{snapshot_read['fallback_condition']}`。",
+                f"- 基礎 RPC migration：`{snapshot_read['base_migration']}`。",
+                f"- Calendar v2 migration：`{snapshot_read['migration']}`。",
+                f"- 遠端狀態：`{snapshot_read['remote_status']}`。",
+                (
+                    "- Decision Policy 部署順序：`"
+                    + "` → `".join(snapshot_read["decision_policy_rollout_order"])
+                    + "`。"
+                ),
+                (
+                    "- Decision Policy 回復限制：`"
+                    f"{snapshot_read['decision_policy_rollback_constraint']}`。"
+                ),
+                f"- Freshness 首選：`{freshness['preferred_method']}`。",
+                f"- 日曆缺口處理：`{freshness['calendar_gap_behavior']}`。",
+                (
+                    "- 預設 freshness 參數：台北 "
+                    f"`{freshness['default_ready_hour_taipei']}:00`、"
+                    f"`{freshness['default_lookback_days']}` 日連續覆蓋（上限 "
+                    f"`{freshness['maximum_lookback_days']}` 日；RPC 視窗 "
+                    f"`{freshness['rpc_calendar_window_days']}` 個曆日）、"
+                    f"`{freshness['fallback_stale_hours']}` 小時 fallback。"
+                ),
+                "",
+                "### P2 共用協調器與複雜度控制",
+                "",
+                f"- 月度 benchmark 共用協調器：`{p2_refactoring['monthly_benchmark_orchestrator']}`。",
+                f"- 場別 feature CLI 共用流程：`{p2_refactoring['venue_feature_cli_orchestrator']}`。",
+                (
+                    "- 核心入口行數：historical backfill "
+                    f"`{p2_refactoring['historical_backfill_run_lines']}`、daily inference "
+                    f"`{p2_refactoring['daily_inference_run_lines']}`、dataset assembly "
+                    f"`{p2_refactoring['research_dataset_from_frame_lines']}`。"
+                ),
+                f"- 遠端狀態：`{p2_refactoring['remote_status']}`。",
+                "",
+                "### 帳號復原",
+                "",
+                f"- Provider：`{auth_recovery['provider']}`。",
+                f"- OAuth/session flow：`{auth_recovery['flow_type']}`。",
+                f"- Recovery event：`{auth_recovery['recovery_event']}`。",
+                f"- Redirect policy：`{auth_recovery['redirect_policy']}`。",
+                f"- Account enumeration response：`{auth_recovery['account_enumeration_response']}`。",
+                f"- Redirect allowlist：`{auth_recovery['redirect_allowlist_status']}`。",
+                f"- Production SMTP：`{auth_recovery['production_smtp_status']}`。",
+                "",
+                "### CI 與供應鏈",
+                "",
+                f"- 品質工作 ID：`{ci['quality_job_id']}`。",
+                f"- 彙總 gate ID：`{ci['required_gate_job_id']}`。",
+                f"- Branch protection：`{ci['branch_protection_status']}`。",
+                f"- Action pin policy：`{ci['action_pin_policy']}`。",
+                f"- 工具版本來源：`{ci['tool_version_file']}`。",
+                "",
+                "| 工具 | 固定版本 |",
+                "| --- | --- |",
+                *tool_rows,
+                "",
+                "### Vercel",
+                "",
+                f"- 設定檔：`{vercel['config_file']}`。",
+                f"- CSP enforcement：`{str(vercel['csp_enforced']).lower()}`。",
+                f"- Inline script allowed：`{str(vercel['inline_script_allowed']).lower()}`。",
+                f"- Inline style allowed：`{str(vercel['inline_style_allowed']).lower()}`。",
+                (
+                    "- 正式站 response headers 已直接驗證："
+                    f"`{str(vercel['remote_response_headers_verified']).lower()}`。"
+                ),
+                "",
+                "## 部署限制",
+                "",
+                "本次交付只修改 Repository。不得把下列事項描述為已完成：",
+                "",
+                "- Staging／Production migration 已套用。",
+                "- Edge Function 已更新。",
+                "- Vercel Production 安全標頭已生效。",
+                "- GitHub branch protection 已要求新的彙總 gate。",
+                "",
+                (
+                    "Decision Policy 上線時必須先部署可同時理解 legacy 與新狀態契約的 Frontend／Edge，"
+                    "再套用 status migration，最後部署 status-aware publisher；migration 套用後不得先回退 "
+                    "Edge。基礎 RPC 與 calendar v2 migration 仍須依序套用並驗證；帳號復原上線前另須驗證 "
+                    "Redirect URL allowlist 與正式 SMTP。"
+                ),
+            ]
+        )
+        + "\n"
+    )
 
 
 def expected_outputs(manifest: dict[str, Any]) -> dict[Path, str]:
@@ -838,6 +908,10 @@ def expected_outputs(manifest: dict[str, Any]) -> dict[Path, str]:
         "## 最新橫截面研究推論\n",
         "\n## 標籤與交易路徑",
     )
+    model_markdown = model_markdown.replace(
+        "## 最新橫截面研究推論",
+        "## 最新具完整 artifact／provenance 證據的橫截面研究推論",
+    )
 
     status_markdown = CURRENT_STATUS_PATH.read_text(encoding="utf-8")
     status_markdown = replace_marked_or_section(
@@ -856,13 +930,15 @@ def expected_outputs(manifest: dict[str, Any]) -> dict[Path, str]:
         "### 最新上市橫截面研究推論\n",
         "\n## 三、Supplemental 回補現況",
     )
+    status_markdown = status_markdown.replace(
+        "### 最新上市橫截面研究推論",
+        "### 最新具完整 artifact／provenance 證據的上市橫截面研究推論",
+    )
 
     manifest_bytes = MANIFEST_PATH.read_bytes()
     digest = hashlib.sha256(manifest_bytes).hexdigest()
     return {
-        MODEL_CARD_JSON_PATH: json.dumps(
-            manifest["model_card"], ensure_ascii=False, indent=2
-        )
+        MODEL_CARD_JSON_PATH: json.dumps(manifest["model_card"], ensure_ascii=False, indent=2)
         + "\n",
         MODEL_CARD_MARKDOWN_PATH: model_markdown.rstrip() + "\n",
         CURRENT_STATUS_PATH: status_markdown.rstrip() + "\n",
@@ -883,9 +959,7 @@ def synchronize(check: bool) -> int:
         if not check:
             path.write_text(expected, encoding="utf-8")
     if stale and check:
-        raise ManifestError(
-            "release manifest outputs are stale: " + ", ".join(stale)
-        )
+        raise ManifestError("release manifest outputs are stale: " + ", ".join(stale))
     return len(stale)
 
 

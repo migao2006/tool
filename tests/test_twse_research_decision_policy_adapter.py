@@ -9,7 +9,11 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from src.config.loader import load_mvp_config
-from src.decision.decision_policy import DECISION_GATE_ORDER, Decision
+from src.decision.decision_policy import (
+    DECISION_GATE_ORDER,
+    Decision,
+    DecisionPolicyStatus,
+)
 from src.pipeline.twse_research_decision_policy_adapter import (
     RESEARCH_ONLY_POLICY_REASON,
     ResearchDecisionPolicyInputs,
@@ -75,40 +79,35 @@ def _complete_inputs() -> ResearchDecisionPolicyInputs:
     )
 
 
-def test_adapter_runs_all_eight_gates_but_never_emits_candidate() -> None:
+def test_research_boundary_does_not_relabel_candidate_as_no_trade() -> None:
     result = TwseResearchDecisionPolicyAdapter(load_mvp_config()).evaluate(
         _prediction(),
         _complete_inputs(),
     )
 
-    assert result.decision == Decision.NO_TRADE
+    assert result.decision is None
+    assert result.decision_policy_status == DecisionPolicyStatus.VALIDATION_FAILED
     assert [gate.gate for gate in result.gates] == list(DECISION_GATE_ORDER)
     assert all(gate.passed for gate in result.gates)
     assert {gate.source_date for gate in result.gates} == {"2026-07-17"}
     assert RESEARCH_ONLY_POLICY_REASON in result.reason_codes
-    assert result.to_dict()["decision"] == "NO_TRADE"
+    assert result.to_dict()["decision"] is None
+    assert result.to_dict()["decision_policy_status"] == "VALIDATION_FAILED"
     assert all("source_date" in gate for gate in result.to_dict()["gates"])
 
 
 def test_missing_formal_inputs_fail_closed_without_inventing_source_dates() -> None:
-    result = TwseResearchDecisionPolicyAdapter(load_mvp_config()).evaluate(
-        _prediction()
-    )
+    result = TwseResearchDecisionPolicyAdapter(load_mvp_config()).evaluate(_prediction())
     by_name = {gate.gate: gate for gate in result.gates}
 
-    assert result.decision == Decision.NO_TRADE
+    assert result.decision is None
+    assert result.decision_policy_status == DecisionPolicyStatus.MISSING_REQUIRED_DATA
     assert by_name["data_quality_hard_gate"].reason_code == (
         "FORMAL_DATA_QUALITY_HARD_FAIL_INPUT_MISSING"
     )
-    assert by_name["tradability_gate"].reason_code == (
-        "FORMAL_TRADABILITY_INPUT_MISSING"
-    )
-    assert by_name["liquidity_capacity_gate"].reason_code == (
-        "FORMAL_LIQUIDITY_INPUT_MISSING"
-    )
-    assert by_name["market_exposure_cap"].reason_code == (
-        "FORMAL_MARKET_EXPOSURE_INPUT_MISSING"
-    )
+    assert by_name["tradability_gate"].reason_code == ("FORMAL_TRADABILITY_INPUT_MISSING")
+    assert by_name["liquidity_capacity_gate"].reason_code == ("FORMAL_LIQUIDITY_INPUT_MISSING")
+    assert by_name["market_exposure_cap"].reason_code == ("FORMAL_MARKET_EXPOSURE_INPUT_MISSING")
     assert by_name["position_capacity_limits"].reason_code == (
         "FORMAL_POSITION_LIMIT_INPUT_MISSING"
     )
@@ -132,6 +131,8 @@ def test_missing_formal_inputs_fail_closed_without_inventing_source_dates() -> N
     assert "LIQUIDITY_OR_CAPACITY_FAIL" not in result.reason_codes
     assert "MARKET_EXPOSURE_ZERO" not in result.reason_codes
     assert "POSITION_LIMIT_FAIL" not in result.reason_codes
+    assert result.to_dict()["decision"] is None
+    assert result.to_dict()["decision_policy_status"] == "MISSING_REQUIRED_DATA"
 
 
 def test_warn_quality_is_not_misreported_as_a_known_hard_fail() -> None:
@@ -139,14 +140,14 @@ def test_warn_quality_is_not_misreported_as_a_known_hard_fail() -> None:
         replace(_prediction(), data_quality_status="WARN"),
         _complete_inputs(),
     )
-    gate = next(
-        value for value in result.gates if value.gate == "data_quality_hard_gate"
-    )
+    gate = next(value for value in result.gates if value.gate == "data_quality_hard_gate")
 
     assert not gate.passed
     assert gate.actual == "WARN"
     assert gate.reason_code == "DATA_QUALITY_NOT_FORMALLY_VERIFIED"
     assert "DATA_QUALITY_HARD_FAIL" not in result.reason_codes
+    assert result.decision is None
+    assert result.decision_policy_status == DecisionPolicyStatus.VALIDATION_FAILED
 
 
 def test_gate_with_future_source_date_is_failed_closed() -> None:
@@ -163,6 +164,19 @@ def test_gate_with_future_source_date_is_failed_closed() -> None:
     assert not gate.passed
     assert gate.source_date == "2026-07-18"
     assert gate.reason_code == "DECISION_GATE_SOURCE_DATE_AFTER_DECISION"
+    assert result.decision is None
+    assert result.decision_policy_status == DecisionPolicyStatus.VALIDATION_FAILED
+
+
+def test_complete_policy_rejection_remains_an_evaluated_no_trade() -> None:
+    result = TwseResearchDecisionPolicyAdapter(load_mvp_config()).evaluate(
+        replace(_prediction(), net_q10=-0.08, interval_width=0.15),
+        _complete_inputs(),
+    )
+
+    assert result.decision == Decision.NO_TRADE
+    assert result.decision_policy_status == DecisionPolicyStatus.EVALUATED
+    assert "NET_QUANTILE_THRESHOLD_FAIL" in result.reason_codes
 
 
 def test_non_five_day_prediction_is_rejected() -> None:

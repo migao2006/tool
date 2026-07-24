@@ -6,71 +6,91 @@ and must not replace `tasks/active/TASK.md` or completed reports.
 ## Current Work Package
 
 - Status: COMPLETE.
-- Outcome: Manual full update Production artifact handoff repaired.
+- Outcome: audit and correct end-to-end Decision Policy status semantics.
 - Active record: `tasks/active/TASK.md` is `NONE`.
 - Completion record:
-  `tasks/completed/2026-07-24-repair-manual-full-update-artifact-handoff.md`.
+  `tasks/completed/2026-07-24-correct-decision-policy-status-semantics.md`.
 - Authorization: `FULL_AUTONOMY_UNTIL_MAIN_UPDATE`; protected branches remain
   unchanged.
 
 ## Current Branch
 
-- Branch: `codex/repair-manual-update-artifacts`.
-- Base: `main` at `47eceb1d7de5f42e0bd70668a3d025fcc4bf24c4`.
-- Implementation commits: `6e7c85b`, `2e7d4af`.
-- Pull Request: #103.
+- Branch: `codex/decision-policy-status-semantics`.
+- Exact base: `origin/main` at
+  `e089c4cb25f26414574082e3e9128b60ab530bdd`.
+- Isolated clone; the separate Manual full update repair checkout and branch have
+  not been modified.
+- Implementation commits: `a14828e`, `c087760`, `46b8428`.
+- Ready Pull Request:
+  [#104](https://github.com/migao2006/tool/pull/104).
 
 ## Completed Work
 
-- Main run `30061633611` requested `dry_run=true` and
-  `publish_production=false`; Production jobs correctly did not upload artifacts.
-- Final summary nevertheless unconditionally attempted both Production downloads,
-  producing the two reported `Artifact not found` errors.
-- `workflow_call` artifacts use caller run ID/attempt; Import and resolution
-  artifacts in the same run prove cross-workflow access and naming are correct.
-- Daily reusable outputs now expose resolver/publication intent. Manual summary
-  downloads only required market artifacts while preserving missing-required-
-  artifact failure and strict evidence validation.
-
-## Key Decisions
-
-- Expose resolver and publication intent through backward-compatible reusable
-  workflow outputs instead of changing artifact names or weakening validation.
-- Skip only artifacts that the called workflow contract says cannot exist.
-
-## Validation Already Passed
-
-- Focused affected workflow, recovery, and summary tests: 95 passed.
-- Quality/security: passed; Ruff, basedpyright, actionlint, Deno, secret and
-  dependency checks all passed.
-- Fast: passed.
-- Full: passed with 1,115 Python and 66 Playwright tests.
-- Independent read-only review: zero findings.
-- `git diff --check`: passed.
+- Latest TWSE horizon-5 run is `prediction_run_id=12`,
+  `as_of_date=2026-07-20`, with 1,068 stock rows.
+- Persisted and public counts are `CANDIDATE=0`, `WATCH=0`,
+  `NO_TRADE=1,068`, hard fail 0.
+- All 1,068 rows lack formal tradability, market-exposure, and position-limit
+  inputs; the run has no `market_predictions` row.
+- All 1,068 persisted stock quality values are `FAIL`, while the public mapper
+  reinterprets them as research `WARN` through a reason-code compatibility rule.
+- Representative rank-1 symbol `6515` has valid rank/probability/quantile output,
+  eight auditable gates, missing mandatory formal policy inputs, and no market
+  regime or exposure cap.
+- The pre-fix research adapter, serializer, Supabase payload builder, and run
+  publisher hard-coded `NO_TRADE` and every research row into
+  `no_trade_count`.
+- Missing formal inputs remain visible only in gate/reason detail, so persistence,
+  counts, API decisions, filters, and badges collapse “policy unavailable” into a
+  valid no-action decision.
+- The pre-fix publisher also collapses research `WARN` into persisted `FAIL`; the Edge
+  mapper reverses that collapse heuristically.
+- Core policy, publisher, schema/RPC, Edge API, aggregation, frontend, direct
+  daily-publish checks, release metadata, and documentation are corrected.
+- Formal `PASS` requires a non-empty policy universe; a non-empty fully evaluated
+  universe may still correctly have zero candidates.
 
 ## Remaining Work
 
-- No remaining feature-branch work.
-- Updating protected `main` and the subsequent live Manual workflow verification
-  require the separate final authorization boundary.
+- No feature-branch work remains. Updating protected `main` is the next operation
+  and requires final explicit authorization.
+- Staging/Production migration and deployment remain intentionally unperformed;
+  rollout order is frontend/Edge → migration → publisher.
 
-## Public Contracts
+## Key Decisions
 
-- Horizon 5, aligned-date resolution, fail-closed Production validation,
-  deterministic artifacts, TWSE/TPEx isolation, `RESEARCH_ONLY`, and `HARD_FAIL`
-  semantics are unchanged.
+- Preserve `CANDIDATE`, `WATCH`, and `NO_TRADE` as decision actions.
+- Add a separate policy-evaluation status so evaluated decisions, missing required
+  inputs, validation failure, and hard fail remain distinct; unsupported horizon
+  continues as a fail-closed transport error.
+- A missing/invalid/hard-fail policy status must not carry a valid decision.
+- `NO_TRADE` will mean only a completed, valid policy evaluation advised no trade.
+
+## Validation Already Passed
+
+- Focused policy/API/frontend/migration tests, 60 Edge/Deno tests, Ruff,
+  basedpyright, Biome, actionlint, dependency/secret scans, migration contracts,
+  SQLFluff parsing/lint, Fast verification, and `git diff --check` pass.
+- Final Full verification passes with 1,149 Python tests and 68 Chromium/WebKit
+  Playwright tests.
+- The new migration passed a disposable PostgreSQL 17 full migration-chain apply,
+  explicit/legacy publisher reads, legacy backfill invariance, privilege, and
+  constraint tests across all 38 migrations; no remote database was modified.
+- Final independent read-only review: PASS, with no remaining High or Medium
+  findings.
 
 ## Known Issues or Blockers
 
 - No implementation or Pull Request blocker.
-- Live verification of the repaired Manual workflow requires the change on
-  `main`, because preflight intentionally rejects feature branches.
 
 ## Commit and Pull Request References
 
-- Failure evidence: https://github.com/migao2006/tool/actions/runs/30061633611
-- Pull Request: https://github.com/migao2006/tool/pull/103
-- Green CI: https://github.com/migao2006/tool/actions/runs/30063441859
+- Pull Request: https://github.com/migao2006/tool/pull/104
+- Green Project tests:
+  https://github.com/migao2006/tool/actions/runs/30073952671
+- Green Edge tests:
+  https://github.com/migao2006/tool/actions/runs/30073952943
+- No protected-branch update or Production data write was performed.
 
 ## Maintenance
 

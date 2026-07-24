@@ -14,7 +14,17 @@ select
     'authenticated',
     'market_data.get_prediction_snapshot_rows(integer,text,timestamp with time zone)',
     'EXECUTE'
-  ) as authenticated_can_execute;
+  ) as authenticated_can_execute,
+  not (
+    select procedure.prosecdef
+    from pg_catalog.pg_proc as procedure
+    join pg_catalog.pg_namespace as namespace
+      on namespace.oid = procedure.pronamespace
+    where namespace.nspname = 'market_data'
+      and procedure.proname = 'get_prediction_snapshot_rows'
+      and pg_catalog.pg_get_function_identity_arguments(procedure.oid) =
+        'p_horizon integer, p_market_scope text, p_observed_at timestamp with time zone'
+  ) as security_invoker;
 
 with available_market as (
   select run.market_scope
@@ -57,7 +67,21 @@ select
     (value -> 'run' ->> 'candidate_count')::integer
     + (value -> 'run' ->> 'watch_count')::integer
     + (value -> 'run' ->> 'no_trade_count')::integer
+    + (value -> 'run' ->> 'policy_input_missing_count')::integer
+    + (value -> 'run' ->> 'policy_validation_failed_count')::integer
+    + (value -> 'run' ->> 'policy_hard_fail_count')::integer
   ) as prediction_manifest_count_matches,
+  not exists (
+    select 1
+    from jsonb_array_elements(value -> 'predictions') as prediction(item)
+    where (
+      prediction.item ->> 'decision_policy_status' = 'EVALUATED'
+      and prediction.item ->> 'decision' is null
+    ) or (
+      prediction.item ->> 'decision_policy_status' <> 'EVALUATED'
+      and prediction.item ->> 'decision' is not null
+    )
+  ) as decision_policy_action_status_is_consistent,
   value ->> 'validationLinkStatus' in ('LINKED', 'MISSING', 'AMBIGUOUS')
     as validation_link_status_is_valid,
   (

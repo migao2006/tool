@@ -12,6 +12,7 @@ from src.decision.decision_policy import (
     Decision,
     DecisionPolicy,
     DecisionPolicyConfig,
+    DecisionPolicyStatus,
     DecisionResult,
     GateResult,
 )
@@ -33,6 +34,19 @@ _DEFAULT_RESEARCH_SOURCE_GATES = frozenset(
         "rank_eligibility",
     }
 )
+_STATUS_PRIORITY = {
+    DecisionPolicyStatus.EVALUATED: 0,
+    DecisionPolicyStatus.VALIDATION_FAILED: 1,
+    DecisionPolicyStatus.MISSING_REQUIRED_DATA: 2,
+    DecisionPolicyStatus.HARD_FAIL: 3,
+}
+
+
+def _merge_status(
+    left: DecisionPolicyStatus,
+    right: DecisionPolicyStatus,
+) -> DecisionPolicyStatus:
+    return max((left, right), key=_STATUS_PRIORITY.__getitem__)
 
 
 def _policy_config(config: MvpConfig) -> DecisionPolicyConfig:
@@ -114,27 +128,36 @@ class TwseResearchDecisionPolicyAdapter:
         if prediction.horizon != 5:
             raise ValueError("UNSUPPORTED_HORIZON")
         resolved_inputs = inputs or ResearchDecisionPolicyInputs()
-        policy_result = self._policy.evaluate(
-            self._policy_row(prediction, resolved_inputs)
-        )
-        gates, adapter_reasons = self._adapt_gates(
+        policy_result = self._policy.evaluate(self._policy_row(prediction, resolved_inputs))
+        gates, adapter_reasons, decision_policy_status = self._adapt_gates(
             prediction,
             resolved_inputs,
             policy_result,
         )
+        decision = (
+            policy_result.decision
+            if decision_policy_status == DecisionPolicyStatus.EVALUATED
+            else None
+        )
+        boundary_reasons: tuple[str, ...] = ()
+        if decision == Decision.CANDIDATE:
+            decision = None
+            decision_policy_status = DecisionPolicyStatus.VALIDATION_FAILED
+            boundary_reasons = (RESEARCH_ONLY_POLICY_REASON,)
         reason_codes = tuple(
             dict.fromkeys(
                 (
                     *prediction.reason_codes,
                     *adapter_reasons,
-                    RESEARCH_ONLY_POLICY_REASON,
+                    *boundary_reasons,
                 )
             )
         )
         return ResearchDecisionPolicyResult(
             symbol=policy_result.symbol,
             horizon=policy_result.horizon,
-            decision=Decision.NO_TRADE,
+            decision=decision,
+            decision_policy_status=decision_policy_status,
             rank_score=policy_result.rank_score,
             global_rank=policy_result.global_rank,
             gates=gates,
@@ -156,13 +179,9 @@ class TwseResearchDecisionPolicyAdapter:
             "horizon": prediction.horizon,
             "decision_date": prediction.decision_date,
             "data_quality_status": prediction.data_quality_status,
-            "data_quality_hard_fail": (
-                True
-                if inputs.data_quality_hard_fail is None
-                else inputs.data_quality_hard_fail
-            ),
-            "tradable": inputs.tradable is True,
-            "liquidity_pass": inputs.liquidity_pass is True,
+            "data_quality_hard_fail": inputs.data_quality_hard_fail,
+            "tradable": inputs.tradable,
+            "liquidity_pass": inputs.liquidity_pass,
             "adv20_ntd": prediction.adv20_ntd,
             "estimated_order_notional_ntd": estimated_notional,
             "market_exposure_cap": inputs.market_exposure_cap,
@@ -176,7 +195,7 @@ class TwseResearchDecisionPolicyAdapter:
             "calibration_status": prediction.calibration_status,
             "rank_score": prediction.rank_score,
             "global_rank": prediction.global_rank,
-            "position_limits_pass": inputs.position_limits_pass is True,
+            "position_limits_pass": inputs.position_limits_pass,
             "reason_codes": prediction.reason_codes,
         }
 
@@ -185,9 +204,14 @@ class TwseResearchDecisionPolicyAdapter:
         prediction: TwseOosResearchPrediction,
         inputs: ResearchDecisionPolicyInputs,
         policy_result: DecisionResult,
-    ) -> tuple[tuple[ResearchDecisionGate, ...], tuple[str, ...]]:
+    ) -> tuple[
+        tuple[ResearchDecisionGate, ...],
+        tuple[str, ...],
+        DecisionPolicyStatus,
+    ]:
         gates: list[ResearchDecisionGate] = []
         reasons: list[str] = []
+        decision_policy_status = policy_result.decision_policy_status
         for gate in policy_result.gates:
             raw_source_date = inputs.gate_source_dates.get(gate.gate)
             if (
@@ -202,16 +226,25 @@ class TwseResearchDecisionPolicyAdapter:
             missing_reason = _missing_input_reason(gate.gate, inputs)
             if source_date is None and source_reason is None:
                 source_reason = "DECISION_GATE_SOURCE_DATE_MISSING"
+            if missing_reason is not None or (source_reason == "DECISION_GATE_SOURCE_DATE_MISSING"):
+                decision_policy_status = _merge_status(
+                    decision_policy_status,
+                    DecisionPolicyStatus.MISSING_REQUIRED_DATA,
+                )
+            elif source_reason is not None:
+                decision_policy_status = _merge_status(
+                    decision_policy_status,
+                    DecisionPolicyStatus.VALIDATION_FAILED,
+                )
             passed = gate.passed and missing_reason is None and source_reason is None
             policy_reason = (
                 "DATA_QUALITY_NOT_FORMALLY_VERIFIED"
                 if gate.gate == "data_quality_hard_gate"
                 and prediction.data_quality_status == "WARN"
+                and inputs.data_quality_hard_fail is not True
                 else gate.reason_code
             )
-            reason_code = (
-                "PASS" if passed else missing_reason or source_reason or policy_reason
-            )
+            reason_code = "PASS" if passed else missing_reason or source_reason or policy_reason
             gates.append(
                 _research_gate(
                     gate,
@@ -227,7 +260,11 @@ class TwseResearchDecisionPolicyAdapter:
                 reasons.append(source_reason)
             if not gate.passed and missing_reason is None and source_reason is None:
                 reasons.append(policy_reason)
-        return tuple(gates), tuple(dict.fromkeys(reasons))
+        return (
+            tuple(gates),
+            tuple(dict.fromkeys(reasons)),
+            decision_policy_status,
+        )
 
 
 def _research_gate(

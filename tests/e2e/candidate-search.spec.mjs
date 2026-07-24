@@ -6,11 +6,29 @@ test.beforeEach(async ({ page }) => {
 	await routeHomeDataStatus(page);
 });
 
-async function routeThreeStockSnapshot(page) {
+async function routeThreeStockSnapshot(
+	page,
+	{ systemStatus = "RESEARCH_ONLY" } = {},
+) {
 	await page.route("**/api/prediction-snapshot**", async (route) => {
 		const response = await route.fetch();
 		const payload = await response.json();
+		payload.system_status = systemStatus;
 		const template = payload.predictions[0];
+		const allPassedGates = template.gates.map((gate) => ({
+			...gate,
+			passed: true,
+			reason_code: "PASS",
+		}));
+		const noTradeGates = allPassedGates.map((gate) =>
+			gate.gate === "net_quantile_thresholds"
+				? {
+						...gate,
+						passed: false,
+						reason_code: "NET_QUANTILE_THRESHOLD_FAIL",
+					}
+				: gate,
+		);
 		payload.predictions = [
 			{
 				...template,
@@ -20,6 +38,8 @@ async function routeThreeStockSnapshot(page) {
 				global_rank: 1,
 				industry_rank: 1,
 				rank_score: 99,
+				reason_codes: [],
+				gates: allPassedGates,
 			},
 			{
 				...template,
@@ -29,6 +49,8 @@ async function routeThreeStockSnapshot(page) {
 				global_rank: 2,
 				industry_rank: 2,
 				rank_score: 98,
+				reason_codes: ["OUTSIDE_TOP_K"],
+				gates: allPassedGates,
 			},
 			{
 				...template,
@@ -38,8 +60,18 @@ async function routeThreeStockSnapshot(page) {
 				global_rank: 3,
 				industry_rank: 3,
 				rank_score: 97,
+				reason_codes: ["NET_QUANTILE_THRESHOLD_FAIL"],
+				gates: noTradeGates,
 			},
 		];
+		payload.decision_counts = {
+			CANDIDATE: 1,
+			WATCH: 1,
+			NO_TRADE: 1,
+			MISSING_REQUIRED_DATA: 0,
+			VALIDATION_FAILED: 0,
+			HARD_FAIL: payload.excluded.length,
+		};
 		await route.fulfill({ response, json: payload });
 	});
 }
@@ -51,6 +83,17 @@ async function openCandidates(page) {
 		.getByRole("button", { name: "5 日候選" })
 		.click();
 }
+
+test("正式 PASS 候選頁只顯示 CANDIDATE", async ({ page }) => {
+	await routeThreeStockSnapshot(page, { systemStatus: "PASS" });
+	await openCandidates(page);
+
+	const cards = page.locator("[data-candidate-list] .candidate-card");
+	await expect(cards).toHaveCount(1);
+	await expect(cards.first()).toHaveAttribute("data-symbol", "6515");
+	await expect(page.locator("[data-candidate-list]")).not.toContainText("台積電");
+	await expect(page.locator("[data-candidate-list]")).not.toContainText("聯發科");
+});
 
 test("可用股票代號或名稱搜尋且不改變 Rank Score 順序", async ({ page }) => {
 	await routeThreeStockSnapshot(page);

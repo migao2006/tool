@@ -104,6 +104,7 @@ def test_prediction_client_returns_fail_closed_unsupported_horizons() -> None:
     result = run_node_module(
         """
 import { loadPredictionSnapshot } from "./src/data/prediction-api.js";
+import { resolveSnapshotUiState } from "./src/core/ui-state.js";
 
 const config = {
   predictionApiBaseUrl: "https://frontend-contract.invalid/",
@@ -136,6 +137,7 @@ for (const horizon of [2, 3, 10]) {
       resultHorizon: snapshot.horizon,
       systemStatus: snapshot.systemStatus,
       reasonCodes: snapshot.reasonCodes,
+      uiState: resolveSnapshotUiState(snapshot),
       predictions: snapshot.predictions.length,
       candidates: snapshot.candidates.length,
       excluded: snapshot.excluded.length,
@@ -192,6 +194,7 @@ console.log(JSON.stringify({
             "resultHorizon": expected_horizon,
             "systemStatus": "RESEARCH_ONLY",
             "reasonCodes": ["UNSUPPORTED_HORIZON"],
+            "uiState": "model_not_available",
             "predictions": 0,
             "candidates": 0,
             "excluded": 0,
@@ -302,7 +305,8 @@ def test_decision_gate_renderer_matches_backend_contract_and_formats_objects() -
         assert false_reason not in gates
 
     stock = read("src/pages/stock-detail-page.js")
-    assert "RESEARCH_ONLY_NO_FORMAL_DECISION_POLICY" in stock
+    assert "REQUIRED_DECISION_POLICY_DATA_MISSING" in stock
+    assert "decision_policy_status" in stock
 
 
 def test_stock_route_and_saved_research_settings_are_guarded() -> None:
@@ -360,8 +364,34 @@ def test_prediction_schema_rejects_wrong_horizon_and_invalid_formal_output() -> 
     assert '["market_direction", "direction"], raw' in contract
     assert "使用了決策時間之後的資料" in contract
     assert "決策 gate 缺漏或順序錯誤" in contract
-    assert 'market_regime: nullableString(firstValue(record' in contract
+    assert "market_regime: nullableString(firstValue(record" in contract
     assert "industry_classification_effective_to" in contract
+
+
+def test_formal_frontend_rejects_an_empty_prediction_universe() -> None:
+    result = run_node_module(
+        """
+import { normalizePredictionSnapshot } from "./src/data/prediction-contract.js";
+
+let message = null;
+try {
+  normalizePredictionSnapshot({
+    horizon: 5,
+    market_scope: "TWSE",
+    system_status: "PASS",
+    predictions: [],
+    watchlist: [],
+    excluded: [],
+  }, 5, "TWSE");
+} catch (error) {
+  message = error instanceof TypeError ? error.message : null;
+}
+console.log(JSON.stringify({ message }));
+"""
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {"message": "PASS 快照必須包含至少一筆正式政策列。"}
 
 
 def test_forbidden_unverified_outputs_are_absent_from_stock_page() -> None:
@@ -378,7 +408,8 @@ def test_formal_candidates_exclude_hard_fail_and_etf() -> None:
     assert 'record.asset_type !== "ETF"' in selection
     assert "!record.data_quality_hard_fail" in selection
     assert "renderExcludedSecurities(snapshot.excluded)" in candidates
-    assert '<option>FAIL</option>' not in candidates
+    assert "formalCandidateRecords(snapshot)" in candidates
+    assert "<option>FAIL</option>" not in candidates
 
 
 def test_research_results_are_not_hidden_and_missing_fields_are_not_fabricated() -> None:
@@ -404,6 +435,322 @@ def test_research_results_are_not_hidden_and_missing_fields_are_not_fabricated()
     assert 'firstValue(record, ["data_quality_status", "dataQualityStatus"])' in contract
     assert "displayableStockRecords(snapshot)" in pages
     assert "canDisplaySnapshotRecords(snapshot)" in pages
+
+
+def test_legacy_production_no_trade_rows_are_distinguished_from_missing_policy_data() -> None:
+    result = run_node_module(
+        """
+import { normalizePredictionSnapshot } from "./src/data/prediction-contract.js";
+import { filterCandidateRecords } from "./src/features/candidate-filters.js";
+
+const predictions = Array.from({ length: 1068 }, (_, index) => ({
+  as_of_date: "2026-07-20",
+  decision_at: "2026-07-20T09:00:00+00:00",
+  symbol: String(1000 + index),
+  name: `測試 ${index}`,
+  market: "LISTED",
+  asset_type: "STOCK",
+  horizon: 5,
+  rank_score: 100 - index / 1068 * 100,
+  global_rank: index + 1,
+  global_rank_percentile: 1 - index / 1068,
+  calibrated_p_up: 0.6,
+  calibrated_p_neutral: 0.25,
+  calibrated_p_down: 0.15,
+  net_q50: 0.02,
+  data_quality_status: "WARN",
+  decision: "NO_TRADE",
+  reason_codes: [
+    "RESEARCH_DATA_QUALITY_WARN",
+    "FORMAL_MARKET_EXPOSURE_INPUT_MISSING",
+  ],
+}));
+const snapshot = normalizePredictionSnapshot({
+  api_contract_version: "prediction-snapshot.v1",
+  as_of_date: "2026-07-20",
+  decision_at: "2026-07-20T09:00:00+00:00",
+  horizon: 5,
+  market_scope: "TWSE",
+  system_status: "RESEARCH_ONLY",
+  stale: true,
+  market: null,
+  predictions,
+  excluded: [],
+  watchlist: [],
+  reason_codes: ["MARKET_POLICY_DATA_UNAVAILABLE"],
+}, 5, "TWSE");
+const missing = filterCandidateRecords(snapshot.predictions, {
+  searchQuery: "",
+  industry: "",
+  decision: "MISSING_REQUIRED_DATA",
+  dataQuality: "",
+  liquidityBucket: "",
+  rankScoreMin: null,
+  pUpMin: null,
+  costProfile: "",
+});
+const gateNames = [
+  "data_quality_hard_gate",
+  "tradability_gate",
+  "liquidity_capacity_gate",
+  "market_exposure_cap",
+  "calibrated_direction_probabilities",
+  "net_quantile_thresholds",
+  "rank_eligibility",
+  "position_capacity_limits",
+];
+const allPassGates = gateNames.map((gate) => ({
+  gate,
+  passed: true,
+  actual: { verified: true },
+  threshold: { required: true },
+  reason_code: "PASS",
+  source_date: "2026-07-20",
+}));
+const noTradeGates = allPassGates.map((gate) =>
+  gate.gate === "net_quantile_thresholds"
+    ? {
+        ...gate,
+        passed: false,
+        reason_code: "NET_QUANTILE_THRESHOLD_FAIL",
+      }
+    : gate
+);
+const explicitNoTrade = normalizePredictionSnapshot({
+  horizon: 5,
+  market_scope: "TWSE",
+  system_status: "RESEARCH_ONLY",
+  predictions: [{
+    ...predictions[0],
+    data_quality_status: "PASS",
+    decision_policy_status: "EVALUATED",
+    decision: "NO_TRADE",
+    reason_codes: ["NET_QUANTILE_THRESHOLD_FAIL"],
+    gates: noTradeGates,
+  }],
+  excluded: [],
+  watchlist: [],
+}, 5, "TWSE");
+const inconsistent = normalizePredictionSnapshot({
+  horizon: 5,
+  market_scope: "TWSE",
+  system_status: "RESEARCH_ONLY",
+  predictions: [{
+    ...predictions[0],
+    decision_policy_status: "MISSING_REQUIRED_DATA",
+    decision: "NO_TRADE",
+  }],
+  excluded: [],
+  watchlist: [],
+}, 5, "TWSE");
+const legacyUnproven = normalizePredictionSnapshot({
+  horizon: 5,
+  market_scope: "TWSE",
+  system_status: "RESEARCH_ONLY",
+  predictions: [{
+    ...predictions[0],
+    reason_codes: ["RESEARCH_DATA_QUALITY_WARN"],
+    decision: "NO_TRADE",
+  }],
+  excluded: [],
+  watchlist: [],
+}, 5, "TWSE");
+const relocatedHardFail = normalizePredictionSnapshot({
+  horizon: 5,
+  market_scope: "TWSE",
+  system_status: "RESEARCH_ONLY",
+  predictions: [{
+    ...predictions[0],
+    data_quality_status: "HARD_FAIL",
+    decision_policy_status: "HARD_FAIL",
+    decision: null,
+  }],
+  excluded: [],
+  watchlist: [],
+}, 5, "TWSE");
+let hardMismatchRejected = false;
+try {
+  normalizePredictionSnapshot({
+    horizon: 5,
+    market_scope: "TWSE",
+    system_status: "RESEARCH_ONLY",
+    predictions: [{
+      ...predictions[0],
+      data_quality_status: "PASS",
+      decision_policy_status: "HARD_FAIL",
+      decision: null,
+    }],
+    excluded: [],
+    watchlist: [],
+  }, 5, "TWSE");
+} catch (error) {
+  hardMismatchRejected = error instanceof RangeError;
+}
+let evaluatedWarnRejected = false;
+try {
+  normalizePredictionSnapshot({
+    horizon: 5,
+    market_scope: "TWSE",
+    system_status: "RESEARCH_ONLY",
+    predictions: [{
+      ...predictions[0],
+      decision_policy_status: "EVALUATED",
+      decision: "NO_TRADE",
+      reason_codes: ["NET_QUANTILE_THRESHOLD_FAIL"],
+      gates: noTradeGates,
+    }],
+    excluded: [],
+    watchlist: [],
+  }, 5, "TWSE");
+} catch (error) {
+  evaluatedWarnRejected = error instanceof RangeError;
+}
+let nonHardExcludedRejected = false;
+try {
+  normalizePredictionSnapshot({
+    horizon: 5,
+    market_scope: "TWSE",
+    system_status: "RESEARCH_ONLY",
+    predictions: [],
+    excluded: [{
+      ...predictions[0],
+      decision: null,
+      decision_policy_status: "VALIDATION_FAILED",
+    }],
+    watchlist: [],
+  }, 5, "TWSE");
+} catch (error) {
+  nonHardExcludedRejected = error instanceof RangeError;
+}
+let overlapExcludedRejected = false;
+try {
+  normalizePredictionSnapshot({
+    horizon: 5,
+    market_scope: "TWSE",
+    system_status: "RESEARCH_ONLY",
+    predictions: [predictions[0]],
+    excluded: [{
+      ...predictions[0],
+      data_quality_status: "HARD_FAIL",
+      decision: null,
+      decision_policy_status: "HARD_FAIL",
+    }],
+    watchlist: [],
+  }, 5, "TWSE");
+} catch (error) {
+  overlapExcludedRejected = error instanceof RangeError;
+}
+let allPassNoTradeRejected = false;
+try {
+  normalizePredictionSnapshot({
+    horizon: 5,
+    market_scope: "TWSE",
+    system_status: "RESEARCH_ONLY",
+    predictions: [{
+      ...predictions[0],
+      data_quality_status: "PASS",
+      decision: "NO_TRADE",
+      decision_policy_status: "EVALUATED",
+      reason_codes: [],
+      gates: allPassGates,
+    }],
+    excluded: [],
+    watchlist: [],
+  }, 5, "TWSE");
+} catch (error) {
+  allPassNoTradeRejected = error instanceof TypeError;
+}
+let failedWatchRejected = false;
+try {
+  normalizePredictionSnapshot({
+    horizon: 5,
+    market_scope: "TWSE",
+    system_status: "RESEARCH_ONLY",
+    predictions: [{
+      ...predictions[0],
+      data_quality_status: "PASS",
+      decision: "WATCH",
+      decision_policy_status: "EVALUATED",
+      reason_codes: ["OUTSIDE_TOP_K"],
+      gates: noTradeGates,
+    }],
+    excluded: [],
+    watchlist: [],
+  }, 5, "TWSE");
+} catch (error) {
+  failedWatchRejected = error instanceof TypeError;
+}
+console.log(JSON.stringify({
+  missingCount: snapshot.decisionCounts.MISSING_REQUIRED_DATA,
+  noTradeCount: snapshot.decisionCounts.NO_TRADE,
+  firstDecision: snapshot.predictions[0].decision,
+  firstPolicyStatus: snapshot.predictions[0].decision_policy_status,
+  firstRank: snapshot.predictions[0].global_rank,
+  lastRank: snapshot.predictions.at(-1).global_rank,
+  filteredCount: missing.length,
+  explicitDecision: explicitNoTrade.predictions[0].decision,
+  explicitPolicyStatus:
+    explicitNoTrade.predictions[0].decision_policy_status,
+  inconsistentDecision: inconsistent.predictions[0].decision,
+  inconsistentPolicyStatus:
+    inconsistent.predictions[0].decision_policy_status,
+  legacyUnprovenStatus:
+    legacyUnproven.predictions[0].decision_policy_status,
+  relocatedPredictionCount: relocatedHardFail.predictions.length,
+  relocatedExcludedCount: relocatedHardFail.excluded.length,
+  relocatedHardFailCount: relocatedHardFail.decisionCounts.HARD_FAIL,
+  hardMismatchRejected,
+  evaluatedWarnRejected,
+  nonHardExcludedRejected,
+  overlapExcludedRejected,
+  allPassNoTradeRejected,
+  failedWatchRejected,
+}));
+"""
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {
+        "missingCount": 1068,
+        "noTradeCount": 0,
+        "firstDecision": None,
+        "firstPolicyStatus": "MISSING_REQUIRED_DATA",
+        "firstRank": 1,
+        "lastRank": 1068,
+        "filteredCount": 1068,
+        "explicitDecision": "NO_TRADE",
+        "explicitPolicyStatus": "EVALUATED",
+        "inconsistentDecision": None,
+        "inconsistentPolicyStatus": "VALIDATION_FAILED",
+        "legacyUnprovenStatus": "VALIDATION_FAILED",
+        "relocatedPredictionCount": 0,
+        "relocatedExcludedCount": 1,
+        "relocatedHardFailCount": 1,
+        "hardMismatchRejected": True,
+        "evaluatedWarnRejected": True,
+        "nonHardExcludedRejected": True,
+        "overlapExcludedRejected": True,
+        "allPassNoTradeRejected": True,
+        "failedWatchRejected": True,
+    }
+
+
+def test_frontend_uses_authoritative_traditional_chinese_policy_labels() -> None:
+    labels = read("src/core/decision-policy.js")
+    overview = read("src/pages/overview-page.js")
+    filters = read("src/features/candidate-filters.js")
+    for label in (
+        "正式候選",
+        "觀察",
+        "政策不進場",
+        "政策資料未完整",
+        "政策驗證未通過",
+        "資料硬性失敗",
+    ):
+        assert label in labels
+        assert label in overview or label in filters
+    assert 'NO_TRADE: "不交易"' not in filters
+    assert "MARKET_POLICY_DATA_UNAVAILABLE" in overview
 
 
 def test_api_values_are_escaped_before_dynamic_markup() -> None:

@@ -19,7 +19,11 @@ from src.core.research_prediction_contract import (
     RESEARCH_PREDICTION_CONTRACT_VERSION,
     research_prediction_contract_version,
 )
-from src.decision.decision_policy import DECISION_GATE_ORDER
+from src.decision.decision_policy import (
+    DECISION_GATE_ORDER,
+    Decision,
+    DecisionPolicyStatus,
+)
 
 from .twse_research_decision_contracts import ResearchDecisionGate
 
@@ -37,9 +41,7 @@ def _require_text(value: str, field_name: str) -> None:
 
 
 def _require_sha256(value: str, field_name: str) -> None:
-    if len(value) != 64 or any(
-        character not in "0123456789abcdef" for character in value
-    ):
+    if len(value) != 64 or any(character not in "0123456789abcdef" for character in value):
         raise ValueError(f"{field_name} must be a lowercase SHA-256")
 
 
@@ -78,6 +80,8 @@ class TwseOosResearchPrediction:
     latest_available_at: datetime
     data_quality_status: str
     reason_codes: tuple[str, ...]
+    decision: Decision | None = None
+    decision_policy_status: DecisionPolicyStatus = DecisionPolicyStatus.MISSING_REQUIRED_DATA
     industry: str | None = None
     adv20_ntd: float | None = None
     maximum_order_notional_ntd: float | None = None
@@ -102,9 +106,7 @@ class TwseOosResearchPrediction:
             raise ValueError("fold_number must be non-negative and rank positive")
         if not isfinite(self.rank_score) or not 0 <= self.rank_score <= 100:
             raise ValueError("rank_score must be a 0-100 percentile")
-        if not isfinite(self.global_rank_percentile) or not (
-            0 <= self.global_rank_percentile <= 1
-        ):
+        if not isfinite(self.global_rank_percentile) or not (0 <= self.global_rank_percentile <= 1):
             raise ValueError("global_rank_percentile must be within [0, 1]")
         if not isclose(
             self.rank_score,
@@ -133,30 +135,53 @@ class TwseOosResearchPrediction:
             abs_tol=1e-9,
         ):
             raise ValueError("interval_width must equal net_q90 - net_q10")
-        if not isfinite(self.estimated_round_trip_cost) or (
-            self.estimated_round_trip_cost < 0
-        ):
+        if not isfinite(self.estimated_round_trip_cost) or (self.estimated_round_trip_cost < 0):
             raise ValueError("estimated_round_trip_cost must be non-negative")
-        if self.adv20_ntd is not None and (
-            not isfinite(self.adv20_ntd) or self.adv20_ntd <= 0
-        ):
+        if self.adv20_ntd is not None and (not isfinite(self.adv20_ntd) or self.adv20_ntd <= 0):
             raise ValueError("adv20_ntd must be positive when present")
         if self.maximum_order_notional_ntd is not None and (
-            not isfinite(self.maximum_order_notional_ntd)
-            or self.maximum_order_notional_ntd <= 0
+            not isfinite(self.maximum_order_notional_ntd) or self.maximum_order_notional_ntd <= 0
         ):
             raise ValueError("maximum_order_notional_ntd must be positive when present")
-        if self.data_quality_status not in {"PASS", "WARN"}:
-            raise ValueError("research data quality must be PASS or WARN")
+        if self.data_quality_status not in {"PASS", "WARN", "HARD_FAIL"}:
+            raise ValueError("research data quality must be PASS, WARN, or HARD_FAIL")
+        if (
+            self.decision_policy_status == DecisionPolicyStatus.EVALUATED
+            and self.data_quality_status != "PASS"
+        ):
+            raise ValueError("evaluated research decision policy requires PASS data quality")
+        if (self.decision_policy_status == DecisionPolicyStatus.HARD_FAIL) != (
+            self.data_quality_status == "HARD_FAIL"
+        ):
+            raise ValueError("HARD_FAIL policy status and research data quality must agree")
+        if self.decision_policy_status == DecisionPolicyStatus.EVALUATED and self.decision is None:
+            raise ValueError("evaluated decision policy requires a decision")
+        if (
+            self.decision_policy_status != DecisionPolicyStatus.EVALUATED
+            and self.decision is not None
+        ):
+            raise ValueError("unevaluated decision policy cannot emit a decision")
         _require_text(self.calibration_version, "calibration_version")
         _require_text(self.calibration_status, "calibration_status")
         if not self.reason_codes or any(not value for value in self.reason_codes):
             raise ValueError("research limitations must be preserved as reason_codes")
-        if (
-            self.gates
-            and tuple(gate.gate for gate in self.gates) != DECISION_GATE_ORDER
-        ):
+        if self.gates and tuple(gate.gate for gate in self.gates) != DECISION_GATE_ORDER:
             raise ValueError("research decision gates must follow the complete order")
+        if self.decision_policy_status == DecisionPolicyStatus.EVALUATED:
+            if tuple(gate.gate for gate in self.gates) != DECISION_GATE_ORDER:
+                raise ValueError("evaluated research decision policy requires all gates")
+            if any(
+                gate.actual is None or gate.threshold is None or gate.source_date is None
+                for gate in self.gates
+            ):
+                raise ValueError("evaluated research decision gates require complete evidence")
+            all_gates_passed = all(gate.passed for gate in self.gates)
+            if self.decision in {Decision.CANDIDATE, Decision.WATCH} and not all_gates_passed:
+                raise ValueError(f"{self.decision.value} cannot contain a failed decision gate")
+            if self.decision == Decision.WATCH and "OUTSIDE_TOP_K" not in self.reason_codes:
+                raise ValueError("WATCH requires OUTSIDE_TOP_K evidence")
+            if self.decision == Decision.NO_TRADE and all_gates_passed:
+                raise ValueError("NO_TRADE requires at least one failed decision gate")
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -184,18 +209,17 @@ class TwseOosResearchPrediction:
             "net_q90": self.net_q90,
             "interval_width": self.interval_width,
             "calibration_status": self.calibration_status,
-            "quantile_crossing_before_calibration": (
-                self.quantile_crossing_before_calibration
-            ),
+            "quantile_crossing_before_calibration": (self.quantile_crossing_before_calibration),
             "estimated_round_trip_cost": self.estimated_round_trip_cost,
             "adv20_ntd": self.adv20_ntd,
             "maximum_order_notional_ntd": self.maximum_order_notional_ntd,
             "latest_available_at": self.latest_available_at,
             "data_quality_status": self.data_quality_status,
+            "decision": self.decision.value if self.decision is not None else None,
+            "decision_policy_status": self.decision_policy_status.value,
             "reason_codes": self.reason_codes,
         }
         if self.gates:
-            payload["decision"] = "NO_TRADE"
             payload["gates"] = [gate.to_dict() for gate in self.gates]
         return to_json_safe(payload, "prediction")
 
@@ -229,9 +253,7 @@ class TwseResearchPredictionSnapshot:
         require_aware_datetime(self.decision_at, "decision_at")
         if self.market not in {"TWSE", "TPEX"}:
             raise ValueError("research snapshot market is unsupported")
-        if self.artifact_contract_version != research_prediction_contract_version(
-            self.market
-        ):
+        if self.artifact_contract_version != research_prediction_contract_version(self.market):
             raise ValueError("unsupported research prediction contract version")
         if self.system_status != "RESEARCH_ONLY":
             raise ValueError("research prediction snapshots cannot be promoted")

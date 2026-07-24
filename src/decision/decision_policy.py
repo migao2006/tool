@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from enum import Enum
-from math import isclose
+from math import isclose, isfinite
 from typing import Any, Iterable, Mapping
 
 from ..calibration.status import (
@@ -30,6 +30,15 @@ class Decision(str, Enum):
     CANDIDATE = "CANDIDATE"
     WATCH = "WATCH"
     NO_TRADE = "NO_TRADE"
+
+
+class DecisionPolicyStatus(str, Enum):
+    """Whether a policy action was formed from complete, valid evidence."""
+
+    EVALUATED = "EVALUATED"
+    MISSING_REQUIRED_DATA = "MISSING_REQUIRED_DATA"
+    VALIDATION_FAILED = "VALIDATION_FAILED"
+    HARD_FAIL = "HARD_FAIL"
 
 
 @dataclass(frozen=True)
@@ -59,21 +68,84 @@ class GateResult:
     actual: Any
     threshold: Any
     reason_code: str
+    policy_status: DecisionPolicyStatus = DecisionPolicyStatus.EVALUATED
 
 
 @dataclass(frozen=True)
 class DecisionResult:
     symbol: str
     horizon: int
-    decision: Decision
+    decision: Decision | None
+    decision_policy_status: DecisionPolicyStatus
     rank_score: float | None
     global_rank: int | None
     gates: tuple[GateResult, ...]
     reason_codes: tuple[str, ...]
 
 
-def _gate(name: str, passed: bool, actual: Any, threshold: Any, fail_code: str) -> GateResult:
-    return GateResult(name, passed, actual, threshold, "PASS" if passed else fail_code)
+_MISSING = object()
+_STATUS_PRIORITY = {
+    DecisionPolicyStatus.EVALUATED: 0,
+    DecisionPolicyStatus.VALIDATION_FAILED: 1,
+    DecisionPolicyStatus.MISSING_REQUIRED_DATA: 2,
+    DecisionPolicyStatus.HARD_FAIL: 3,
+}
+
+
+def _gate(
+    name: str,
+    passed: bool,
+    actual: Any,
+    threshold: Any,
+    fail_code: str,
+    *,
+    policy_status: DecisionPolicyStatus = DecisionPolicyStatus.EVALUATED,
+) -> GateResult:
+    return GateResult(
+        name,
+        passed,
+        actual,
+        threshold,
+        "PASS" if passed else fail_code,
+        DecisionPolicyStatus.EVALUATED if passed else policy_status,
+    )
+
+
+def _raw_value(row: Mapping[str, Any], *names: str) -> Any:
+    for name in names:
+        if name in row:
+            return row[name]
+    return _MISSING
+
+
+def _number(value: Any) -> tuple[float | None, DecisionPolicyStatus]:
+    if value is _MISSING or value is None:
+        return None, DecisionPolicyStatus.MISSING_REQUIRED_DATA
+    if isinstance(value, bool):
+        return None, DecisionPolicyStatus.VALIDATION_FAILED
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None, DecisionPolicyStatus.VALIDATION_FAILED
+    if not isfinite(parsed):
+        return None, DecisionPolicyStatus.VALIDATION_FAILED
+    return parsed, DecisionPolicyStatus.EVALUATED
+
+
+def _valid_probability_vector(
+    values: tuple[float | None, float | None, float | None],
+) -> bool:
+    if any(value is None for value in values):
+        return False
+    present = tuple(value for value in values if value is not None)
+    return all(0 <= value <= 1 for value in present) and isclose(sum(present), 1.0, abs_tol=1e-6)
+
+
+def _highest_status(gates: tuple[GateResult, ...]) -> DecisionPolicyStatus:
+    return max(
+        (gate.policy_status for gate in gates),
+        key=_STATUS_PRIORITY.__getitem__,
+    )
 
 
 class DecisionPolicy:
@@ -87,57 +159,223 @@ class DecisionPolicy:
         if horizon != self.config.horizon:
             raise ValueError("row horizon does not match decision policy artifact")
 
-        quality_status = str(row.get("data_quality_status", "FAIL"))
-        quality_pass = quality_status == "PASS" and not bool(row.get("data_quality_hard_fail", False))
-        quality_gate = _gate("data_quality_hard_gate", quality_pass, quality_status, "PASS", "DATA_QUALITY_HARD_FAIL")
-
-        tradable = bool(row.get("tradable", False))
-        tradability_gate = _gate("tradability_gate", tradable, tradable, True, "NOT_TRADABLE")
-
-        adv20_value = row.get("adv20_ntd", row.get("adv20"))
-        order_notional_value = row.get("estimated_order_notional_ntd")
-        adv20 = float(adv20_value or 0.0)
-        order_notional = float(order_notional_value or 0.0)
-        capacity = adv20 * self.config.maximum_adv_participation
-        liquidity_pass = (
-            bool(row.get("liquidity_pass", False))
-            and adv20_value is not None
-            and order_notional_value is not None
-            and adv20 > 0
-            and order_notional > 0
-            and order_notional <= capacity
+        quality_value = _raw_value(row, "data_quality_status")
+        hard_fail_value = _raw_value(row, "data_quality_hard_fail")
+        quality_status = (
+            quality_value.strip().upper() if isinstance(quality_value, str) else quality_value
         )
-        liquidity_gate = _gate(
-            "liquidity_capacity_gate",
-            liquidity_pass,
-            {"adv20_ntd": adv20, "order_notional": order_notional},
-            {"maximum_order_notional": capacity},
-            "LIQUIDITY_OR_CAPACITY_FAIL",
-        )
+        if quality_value is _MISSING or hard_fail_value is _MISSING:
+            quality_gate = _gate(
+                "data_quality_hard_gate",
+                False,
+                "MISSING",
+                "PASS",
+                "DATA_QUALITY_INPUT_MISSING",
+                policy_status=DecisionPolicyStatus.MISSING_REQUIRED_DATA,
+            )
+        elif not isinstance(hard_fail_value, bool) or not isinstance(quality_status, str):
+            quality_gate = _gate(
+                "data_quality_hard_gate",
+                False,
+                quality_status,
+                "PASS",
+                "DATA_QUALITY_INPUT_INVALID",
+                policy_status=DecisionPolicyStatus.VALIDATION_FAILED,
+            )
+        elif hard_fail_value or quality_status in {"FAIL", "HARD_FAIL"}:
+            quality_gate = _gate(
+                "data_quality_hard_gate",
+                False,
+                quality_status,
+                "PASS",
+                "DATA_QUALITY_HARD_FAIL",
+                policy_status=DecisionPolicyStatus.HARD_FAIL,
+            )
+        elif quality_status == "WARN":
+            quality_gate = _gate(
+                "data_quality_hard_gate",
+                False,
+                quality_status,
+                "PASS",
+                "DATA_QUALITY_NOT_FORMALLY_VERIFIED",
+                policy_status=DecisionPolicyStatus.VALIDATION_FAILED,
+            )
+        elif quality_status == "PASS":
+            quality_gate = _gate(
+                "data_quality_hard_gate",
+                True,
+                quality_status,
+                "PASS",
+                "DATA_QUALITY_HARD_FAIL",
+            )
+        else:
+            quality_gate = _gate(
+                "data_quality_hard_gate",
+                False,
+                quality_status,
+                "PASS",
+                "DATA_QUALITY_INPUT_INVALID",
+                policy_status=DecisionPolicyStatus.VALIDATION_FAILED,
+            )
 
-        exposure = float(row.get("market_exposure_cap", 0.0) or 0.0)
-        market_gate = _gate("market_exposure_cap", exposure > 0, exposure, "> 0", "MARKET_EXPOSURE_ZERO")
+        tradable_value = _raw_value(row, "tradable")
+        if tradable_value is _MISSING or tradable_value is None:
+            tradability_gate = _gate(
+                "tradability_gate",
+                False,
+                "MISSING",
+                True,
+                "TRADABILITY_INPUT_MISSING",
+                policy_status=DecisionPolicyStatus.MISSING_REQUIRED_DATA,
+            )
+        elif not isinstance(tradable_value, bool):
+            tradability_gate = _gate(
+                "tradability_gate",
+                False,
+                tradable_value,
+                True,
+                "TRADABILITY_INPUT_INVALID",
+                policy_status=DecisionPolicyStatus.VALIDATION_FAILED,
+            )
+        else:
+            tradability_gate = _gate(
+                "tradability_gate",
+                tradable_value,
+                tradable_value,
+                True,
+                "NOT_TRADABLE",
+            )
 
-        p_up = float(row.get("calibrated_p_up", -1.0))
-        p_neutral = float(row.get("calibrated_p_neutral", -1.0))
-        p_down = float(row.get("calibrated_p_down", -1.0))
-        calibration_version = row.get("calibration_version")
-        direction_calibrated = has_valid_calibration_version(calibration_version)
-        probability_sum_valid = all(value >= 0 for value in (p_up, p_neutral, p_down)) and isclose(
-            p_up + p_neutral + p_down, 1.0, abs_tol=1e-6
+        liquidity_value = _raw_value(row, "liquidity_pass")
+        adv20_value = _raw_value(row, "adv20_ntd", "adv20")
+        order_notional_value = _raw_value(row, "estimated_order_notional_ntd")
+        adv20, adv20_status = _number(adv20_value)
+        order_notional, order_status = _number(order_notional_value)
+        liquidity_missing = (
+            liquidity_value is _MISSING
+            or liquidity_value is None
+            or adv20_status == DecisionPolicyStatus.MISSING_REQUIRED_DATA
+            or order_status == DecisionPolicyStatus.MISSING_REQUIRED_DATA
         )
-        direction_pass = (
-            direction_calibrated
-            and probability_sum_valid
+        liquidity_invalid = (
+            (
+                liquidity_value is not _MISSING
+                and liquidity_value is not None
+                and not isinstance(liquidity_value, bool)
+            )
+            or adv20_status == DecisionPolicyStatus.VALIDATION_FAILED
+            or order_status == DecisionPolicyStatus.VALIDATION_FAILED
+            or (adv20 is not None and adv20 <= 0)
+            or (order_notional is not None and order_notional <= 0)
+        )
+        capacity = adv20 * self.config.maximum_adv_participation if adv20 is not None else None
+        liquidity_actual = (
+            "MISSING"
+            if liquidity_missing
+            else {"adv20_ntd": adv20, "order_notional": order_notional}
+        )
+        if liquidity_missing:
+            liquidity_gate = _gate(
+                "liquidity_capacity_gate",
+                False,
+                liquidity_actual,
+                {"maximum_order_notional": capacity},
+                "LIQUIDITY_INPUT_MISSING",
+                policy_status=DecisionPolicyStatus.MISSING_REQUIRED_DATA,
+            )
+        elif liquidity_invalid:
+            liquidity_gate = _gate(
+                "liquidity_capacity_gate",
+                False,
+                liquidity_actual,
+                {"maximum_order_notional": capacity},
+                "LIQUIDITY_INPUT_INVALID",
+                policy_status=DecisionPolicyStatus.VALIDATION_FAILED,
+            )
+        else:
+            assert isinstance(liquidity_value, bool)
+            assert order_notional is not None and capacity is not None
+            liquidity_gate = _gate(
+                "liquidity_capacity_gate",
+                liquidity_value and order_notional <= capacity,
+                liquidity_actual,
+                {"maximum_order_notional": capacity},
+                "LIQUIDITY_OR_CAPACITY_FAIL",
+            )
+
+        exposure_value = _raw_value(row, "market_exposure_cap")
+        exposure, exposure_status = _number(exposure_value)
+        if exposure_status == DecisionPolicyStatus.MISSING_REQUIRED_DATA:
+            market_gate = _gate(
+                "market_exposure_cap",
+                False,
+                "MISSING",
+                "> 0",
+                "MARKET_EXPOSURE_INPUT_MISSING",
+                policy_status=DecisionPolicyStatus.MISSING_REQUIRED_DATA,
+            )
+        elif (
+            exposure_status == DecisionPolicyStatus.VALIDATION_FAILED
+            or exposure is None
+            or not 0 <= exposure <= 1
+        ):
+            market_gate = _gate(
+                "market_exposure_cap",
+                False,
+                exposure_value,
+                "> 0",
+                "MARKET_EXPOSURE_INPUT_INVALID",
+                policy_status=DecisionPolicyStatus.VALIDATION_FAILED,
+            )
+        else:
+            market_gate = _gate(
+                "market_exposure_cap",
+                exposure > 0,
+                exposure,
+                "> 0",
+                "MARKET_EXPOSURE_ZERO",
+            )
+
+        probability_values = (
+            _raw_value(row, "calibrated_p_up"),
+            _raw_value(row, "calibrated_p_neutral"),
+            _raw_value(row, "calibrated_p_down"),
+        )
+        parsed_probabilities = tuple(_number(value) for value in probability_values)
+        p_up, p_neutral, p_down = (
+            parsed_probabilities[0][0],
+            parsed_probabilities[1][0],
+            parsed_probabilities[2][0],
+        )
+        calibration_version = _raw_value(row, "calibration_version")
+        direction_missing = (
+            any(
+                status == DecisionPolicyStatus.MISSING_REQUIRED_DATA
+                for _, status in parsed_probabilities
+            )
+            or calibration_version is _MISSING
+            or calibration_version is None
+            or not has_valid_calibration_version(calibration_version)
+        )
+        direction_invalid = any(
+            status == DecisionPolicyStatus.VALIDATION_FAILED for _, status in parsed_probabilities
+        ) or (not direction_missing and not _valid_probability_vector((p_up, p_neutral, p_down)))
+        if direction_missing:
+            direction_fail_code = "DIRECTION_CALIBRATION_MISSING"
+            direction_status = DecisionPolicyStatus.MISSING_REQUIRED_DATA
+        elif direction_invalid:
+            direction_fail_code = "INVALID_CALIBRATED_PROBABILITIES"
+            direction_status = DecisionPolicyStatus.VALIDATION_FAILED
+        else:
+            direction_fail_code = "DIRECTION_THRESHOLD_FAIL"
+            direction_status = DecisionPolicyStatus.EVALUATED
+        direction_pass = bool(
+            direction_status == DecisionPolicyStatus.EVALUATED
+            and p_up is not None
+            and p_down is not None
             and p_up >= self.config.minimum_p_up
             and p_up - p_down >= self.config.minimum_probability_spread
         )
-        if not direction_calibrated:
-            direction_fail_code = "DIRECTION_CALIBRATION_MISSING"
-        elif not probability_sum_valid:
-            direction_fail_code = "INVALID_CALIBRATED_PROBABILITIES"
-        else:
-            direction_fail_code = "DIRECTION_THRESHOLD_FAIL"
         direction_gate = _gate(
             "calibrated_direction_probabilities",
             direction_pass,
@@ -154,26 +392,52 @@ class DecisionPolicy:
                 "calibration_version": "required",
             },
             direction_fail_code,
+            policy_status=direction_status,
         )
 
-        q10 = float(row.get("net_q10", float("-inf")))
-        q50 = float(row.get("net_q50", float("-inf")))
-        q90 = float(row.get("net_q90", float("-inf")))
-        calibration_status = row.get("calibration_status")
-        interval_calibrated = has_calibrated_interval_status(calibration_status)
-        quantiles_monotonic = q10 <= q50 <= q90
-        quantile_pass = (
-            interval_calibrated
-            and quantiles_monotonic
+        quantile_values = (
+            _raw_value(row, "net_q10"),
+            _raw_value(row, "net_q50"),
+            _raw_value(row, "net_q90"),
+        )
+        parsed_quantiles = tuple(_number(value) for value in quantile_values)
+        q10, q50, q90 = (
+            parsed_quantiles[0][0],
+            parsed_quantiles[1][0],
+            parsed_quantiles[2][0],
+        )
+        calibration_status = _raw_value(row, "calibration_status")
+        quantile_missing = (
+            any(
+                status == DecisionPolicyStatus.MISSING_REQUIRED_DATA
+                for _, status in parsed_quantiles
+            )
+            or calibration_status is _MISSING
+            or calibration_status is None
+            or not has_calibrated_interval_status(calibration_status)
+        )
+        quantile_invalid = any(
+            status == DecisionPolicyStatus.VALIDATION_FAILED for _, status in parsed_quantiles
+        ) or (
+            not quantile_missing
+            and (q10 is None or q50 is None or q90 is None or not q10 <= q50 <= q90)
+        )
+        if quantile_missing:
+            quantile_fail_code = "QUANTILE_NOT_CALIBRATED"
+            quantile_status = DecisionPolicyStatus.MISSING_REQUIRED_DATA
+        elif quantile_invalid:
+            quantile_fail_code = "NON_MONOTONIC_QUANTILES"
+            quantile_status = DecisionPolicyStatus.VALIDATION_FAILED
+        else:
+            quantile_fail_code = "NET_QUANTILE_THRESHOLD_FAIL"
+            quantile_status = DecisionPolicyStatus.EVALUATED
+        quantile_pass = bool(
+            quantile_status == DecisionPolicyStatus.EVALUATED
+            and q10 is not None
+            and q50 is not None
             and q50 > self.config.minimum_net_q50
             and q10 >= -self.config.maximum_net_q10_loss
         )
-        if not interval_calibrated:
-            quantile_fail_code = "QUANTILE_NOT_CALIBRATED"
-        elif not quantiles_monotonic:
-            quantile_fail_code = "NON_MONOTONIC_QUANTILES"
-        else:
-            quantile_fail_code = "NET_QUANTILE_THRESHOLD_FAIL"
         quantile_gate = _gate(
             "net_quantile_thresholds",
             quantile_pass,
@@ -190,26 +454,85 @@ class DecisionPolicy:
                 "calibration_status": "CALIBRATED:<version>",
             },
             quantile_fail_code,
+            policy_status=quantile_status,
         )
 
-        rank_score_value = row.get("rank_score")
-        global_rank_value = row.get("global_rank")
-        rank_valid = (
-            rank_score_value is not None
-            and global_rank_value is not None
-            and 0 <= float(rank_score_value) <= 100
-            and int(global_rank_value) > 0
+        rank_score_value = _raw_value(row, "rank_score")
+        global_rank_value = _raw_value(row, "global_rank")
+        rank_score, rank_score_status = _number(rank_score_value)
+        global_rank_number, global_rank_status = _number(global_rank_value)
+        rank_missing = (
+            rank_score_status == DecisionPolicyStatus.MISSING_REQUIRED_DATA
+            or global_rank_status == DecisionPolicyStatus.MISSING_REQUIRED_DATA
         )
-        rank_score = float(rank_score_value) if rank_score_value is not None else None
-        global_rank = int(global_rank_value) if global_rank_value is not None else None
-        rank_gate = _gate(
-            "rank_eligibility", rank_valid, {"rank_score": rank_score, "global_rank": global_rank}, "present", "RANK_UNAVAILABLE"
+        rank_invalid = (
+            rank_score_status == DecisionPolicyStatus.VALIDATION_FAILED
+            or global_rank_status == DecisionPolicyStatus.VALIDATION_FAILED
+            or (rank_score is not None and not 0 <= rank_score <= 100)
+            or (
+                global_rank_number is not None
+                and (global_rank_number <= 0 or not global_rank_number.is_integer())
+            )
         )
+        global_rank = (
+            int(global_rank_number)
+            if global_rank_number is not None and global_rank_number.is_integer()
+            else None
+        )
+        if rank_missing:
+            rank_gate = _gate(
+                "rank_eligibility",
+                False,
+                "MISSING",
+                "present",
+                "RANK_UNAVAILABLE",
+                policy_status=DecisionPolicyStatus.MISSING_REQUIRED_DATA,
+            )
+        elif rank_invalid:
+            rank_gate = _gate(
+                "rank_eligibility",
+                False,
+                {"rank_score": rank_score_value, "global_rank": global_rank_value},
+                "valid rank",
+                "RANK_INVALID",
+                policy_status=DecisionPolicyStatus.VALIDATION_FAILED,
+            )
+        else:
+            rank_gate = _gate(
+                "rank_eligibility",
+                True,
+                {"rank_score": rank_score, "global_rank": global_rank},
+                "present",
+                "RANK_UNAVAILABLE",
+            )
 
-        position_limit_pass = bool(row.get("position_limits_pass", False))
-        position_gate = _gate(
-            "position_capacity_limits", position_limit_pass, position_limit_pass, True, "POSITION_LIMIT_FAIL"
-        )
+        position_limit_value = _raw_value(row, "position_limits_pass")
+        if position_limit_value is _MISSING or position_limit_value is None:
+            position_gate = _gate(
+                "position_capacity_limits",
+                False,
+                "MISSING",
+                True,
+                "POSITION_LIMIT_INPUT_MISSING",
+                policy_status=DecisionPolicyStatus.MISSING_REQUIRED_DATA,
+            )
+        elif not isinstance(position_limit_value, bool):
+            position_gate = _gate(
+                "position_capacity_limits",
+                False,
+                position_limit_value,
+                True,
+                "POSITION_LIMIT_INPUT_INVALID",
+                policy_status=DecisionPolicyStatus.VALIDATION_FAILED,
+            )
+        else:
+            position_gate = _gate(
+                "position_capacity_limits",
+                position_limit_value,
+                position_limit_value,
+                True,
+                "POSITION_LIMIT_FAIL",
+            )
 
         gates = (
             quality_gate,
@@ -232,17 +555,18 @@ class DecisionPolicy:
                 (*source_reasons, *(gate.reason_code for gate in gates if not gate.passed))
             )
         )
-        hard_or_trade_failure = any(not gate.passed for gate in gates[:6]) or not position_gate.passed
-        if hard_or_trade_failure:
+        decision_policy_status = _highest_status(gates)
+        if decision_policy_status != DecisionPolicyStatus.EVALUATED:
+            decision = None
+        elif any(not gate.passed for gate in gates[:6]) or not position_gate.passed:
             decision = Decision.NO_TRADE
-        elif not rank_gate.passed:
-            decision = Decision.WATCH
         else:
             decision = Decision.CANDIDATE
         return DecisionResult(
             symbol=str(row["symbol"]),
             horizon=horizon,
             decision=decision,
+            decision_policy_status=decision_policy_status,
             rank_score=rank_score,
             global_rank=global_rank,
             gates=gates,
@@ -260,7 +584,12 @@ class DecisionPolicy:
         retained: set[tuple[Any, str]] = set()
         for decision_date, date_results in by_date.items():
             eligible = sorted(
-                (result for result in date_results if result.decision == Decision.CANDIDATE),
+                (
+                    result
+                    for result in date_results
+                    if result.decision_policy_status == DecisionPolicyStatus.EVALUATED
+                    and result.decision == Decision.CANDIDATE
+                ),
                 key=lambda result: (
                     result.global_rank if result.global_rank is not None else float("inf"),
                     -(result.rank_score if result.rank_score is not None else float("-inf")),

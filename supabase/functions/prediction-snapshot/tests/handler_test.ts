@@ -6,7 +6,11 @@ import type {
   SnapshotRows,
 } from "../types.ts";
 import { assert, assertEquals } from "./assertions.ts";
-import { snapshotRows } from "./fixtures.ts";
+import {
+  DECISION_GATE_NAMES,
+  evaluatedGateRows,
+  snapshotRows,
+} from "./fixtures.ts";
 
 class FakeRepository implements SnapshotRepositoryContract {
   constructor(
@@ -40,7 +44,9 @@ function gatedResearchRows(): SnapshotRows {
   const rows = snapshotRows();
   const snapshotSha256 = "a".repeat(64);
   rows.run.candidate_count = 0;
-  rows.run.no_trade_count = 1;
+  rows.run.no_trade_count = 0;
+  rows.run.policy_input_missing_count = 1;
+  rows.run.policy_hard_fail_count = 0;
   rows.run.hard_fail_count = 0;
   rows.run.source_dates = {
     ...rows.run.source_dates,
@@ -49,18 +55,11 @@ function gatedResearchRows(): SnapshotRows {
     decision_gate_attachment_contract: "research-decision-gate.v1",
   };
   rows.predictions = [rows.predictions[1]];
+  rows.predictions[0].data_quality_status = "WARN";
+  rows.predictions[0].decision = null;
+  rows.predictions[0].decision_policy_status = "MISSING_REQUIRED_DATA";
   rows.audits = [];
-  const gateNames = [
-    "data_quality_hard_gate",
-    "tradability_gate",
-    "liquidity_capacity_gate",
-    "market_exposure_cap",
-    "calibrated_direction_probabilities",
-    "net_quantile_thresholds",
-    "rank_eligibility",
-    "position_capacity_limits",
-  ];
-  rows.gates = gateNames.map((gateName, index) => ({
+  rows.gates = DECISION_GATE_NAMES.map((gateName, index) => ({
     stock_prediction_id: 12,
     gate_order: index + 1,
     gate_name: gateName,
@@ -74,6 +73,23 @@ function gatedResearchRows(): SnapshotRows {
     threshold_value: { configured: true },
     reason_code: index === 2 ? "PASS" : "FORMAL_INPUT_MISSING",
   }));
+  return rows;
+}
+
+function formalRows(quality: "PASS" | "WARN" = "PASS"): SnapshotRows {
+  const rows = snapshotRows();
+  rows.run.system_validation_status = "PASS";
+  rows.run.hard_fail_count = 0;
+  rows.run.policy_hard_fail_count = 0;
+  rows.predictions = rows.predictions.slice(0, 1);
+  rows.predictions[0].data_quality_status = quality;
+  rows.securities = rows.securities.slice(0, 1);
+  rows.audits = [];
+  if (rows.validationRun) {
+    rows.validationRun.validation_status = "PASS";
+    rows.validationRun.locked_holdout = true;
+  }
+  rows.gates = evaluatedGateRows(11);
   return rows;
 }
 
@@ -126,10 +142,15 @@ Deno.test("stored research rows expose only eligible predictions and real exclus
   assertEquals(payload.predictions.length, 1);
   assertEquals(payload.predictions[0].symbol, "2330");
   assertEquals(payload.predictions[0].decision, "CANDIDATE");
+  assertEquals(payload.predictions[0].decision_policy_status, "EVALUATED");
   assertEquals(payload.predictions[0].rank_score, 100);
   assertEquals(payload.predictions[0].liquidity_bucket, null);
   assertEquals(payload.data_quality_hard_fail, false);
   assertEquals(payload.excluded[0].symbol, "9999");
+  assertEquals(payload.excluded[0].decision, null);
+  assertEquals(payload.excluded[0].decision_policy_status, "HARD_FAIL");
+  assertEquals(payload.decision_counts.CANDIDATE, 1);
+  assertEquals(payload.decision_counts.HARD_FAIL, 1);
   assertEquals(payload.watchlist, []);
   assertEquals(payload.validation.fold_metrics[0].metric_value, 0.42);
   assert(
@@ -260,17 +281,17 @@ Deno.test("CORS allowlist and row-count manifest are enforced", async () => {
   );
 });
 
-Deno.test("database PASS is downgraded until the public contract is complete", async () => {
+Deno.test("database PASS is downgraded until formal validation is complete", async () => {
   const rows = snapshotRows();
   rows.run.system_validation_status = "PASS";
   rows.run.hard_fail_count = 0;
-  rows.run.no_trade_count = 0;
+  rows.run.policy_hard_fail_count = 0;
   rows.predictions = rows.predictions.slice(0, 1);
   rows.securities = rows.securities.slice(0, 1);
   rows.audits = [];
   if (rows.validationRun) {
     rows.validationRun.validation_status = "PASS";
-    rows.validationRun.locked_holdout = true;
+    rows.validationRun.locked_holdout = false;
   }
   const response = await handler(rows)(
     new Request(
@@ -282,13 +303,219 @@ Deno.test("database PASS is downgraded until the public contract is complete", a
   assertEquals(payload.system_status, "RESEARCH_ONLY");
   assert(
     payload.reason_codes.includes("FORMAL_SNAPSHOT_CONTRACT_INCOMPLETE"),
-    "missing gate source dates must prevent a formal PASS",
+    "incomplete formal validation must prevent a formal PASS",
   );
+});
+
+Deno.test("formal PASS requires PASS data quality for every policy row", async () => {
+  const rows = formalRows("WARN");
+  rows.run.candidate_count = 0;
+  rows.run.policy_validation_failed_count = 1;
+  rows.predictions[0].decision = null;
+  rows.predictions[0].decision_policy_status = "VALIDATION_FAILED";
+  const response = await handler(rows)(
+    new Request(
+      "https://api.example/functions/v1/prediction-snapshot?horizon=5",
+    ),
+  );
+  const payload = await response.json();
+
+  assertEquals(response.status, 200);
+  assertEquals(payload.system_status, "RESEARCH_ONLY");
+  assert(
+    payload.reason_codes.includes("FORMAL_SNAPSHOT_CONTRACT_INCOMPLETE"),
+    "WARN quality must not be promoted into a formal PASS snapshot",
+  );
+});
+
+Deno.test("a complete PASS contract remains formal", async () => {
+  const response = await handler(formalRows())(
+    new Request(
+      "https://api.example/functions/v1/prediction-snapshot?horizon=5",
+    ),
+  );
+  const payload = await response.json();
+
+  assertEquals(response.status, 200);
+  assertEquals(payload.system_status, "PASS");
+});
+
+Deno.test("an empty formal universe is downgraded from PASS", async () => {
+  const rows = formalRows();
+  rows.run.candidate_count = 0;
+  rows.predictions = [];
+  rows.securities = [];
+  rows.gates = [];
+
+  const response = await handler(rows)(
+    new Request(
+      "https://api.example/functions/v1/prediction-snapshot?horizon=5",
+    ),
+  );
+  const payload = await response.json();
+
+  assertEquals(response.status, 200);
+  assertEquals(payload.system_status, "RESEARCH_ONLY");
+  assert(
+    payload.reason_codes.includes("FORMAL_SNAPSHOT_CONTRACT_INCOMPLETE"),
+    "an empty universe must not be promoted into a formal PASS snapshot",
+  );
+  assertEquals(payload.decision_counts.CANDIDATE, 0);
+});
+
+Deno.test("a missing formal row cannot be hidden by its manifest", async () => {
+  const rows = formalRows();
+  rows.predictions = [];
+  rows.securities = [];
+  rows.gates = [];
+
+  const response = await handler(rows)(
+    new Request(
+      "https://api.example/functions/v1/prediction-snapshot?horizon=5",
+    ),
+  );
+  const payload = await response.json();
+
+  assertEquals(response.status, 409);
+  assertEquals(payload.code, "PREDICTION_SNAPSHOT_INCOMPLETE");
+});
+
+Deno.test("zero candidates remains valid for a non-empty formal universe", async () => {
+  const rows = formalRows();
+  rows.run.candidate_count = 0;
+  rows.run.no_trade_count = 1;
+  rows.predictions[0].decision = "NO_TRADE";
+  rows.predictions[0].reason_codes = ["POLICY_GATE_NOT_PASSED"];
+  rows.gates = evaluatedGateRows(11, "net_quantile_thresholds");
+
+  const response = await handler(rows)(
+    new Request(
+      "https://api.example/functions/v1/prediction-snapshot?horizon=5",
+    ),
+  );
+  const payload = await response.json();
+
+  assertEquals(response.status, 200);
+  assertEquals(payload.system_status, "PASS");
+  assertEquals(payload.decision_counts.CANDIDATE, 0);
+  assertEquals(payload.decision_counts.NO_TRADE, 1);
+});
+
+Deno.test("unknown explicit policy status is rejected with a manifest", async () => {
+  const rows = snapshotRows();
+  (rows.predictions[0] as unknown as Record<string, unknown>)
+    .decision_policy_status = "UNKNOWN_POLICY_STATUS";
+
+  const response = await handler(rows)(
+    new Request(
+      "https://api.example/functions/v1/prediction-snapshot?horizon=5",
+    ),
+  );
+  const payload = await response.json();
+
+  assertEquals(response.status, 409);
+  assertEquals(payload.code, "PREDICTION_POLICY_CONTRACT_INVALID");
+});
+
+Deno.test("legacy research action without missing evidence fails validation", async () => {
+  const rows = snapshotRows();
+  rows.run.hard_fail_count = 0;
+  rows.run.policy_input_missing_count = null;
+  rows.run.policy_validation_failed_count = null;
+  rows.run.policy_hard_fail_count = null;
+  rows.predictions = rows.predictions.slice(0, 1);
+  rows.predictions[0].decision_policy_status = null;
+  rows.securities = rows.securities.slice(0, 1);
+  rows.audits = [];
+
+  const response = await handler(rows)(
+    new Request(
+      "https://api.example/functions/v1/prediction-snapshot?horizon=5",
+    ),
+  );
+  const payload = await response.json();
+
+  assertEquals(response.status, 200);
+  assertEquals(payload.predictions[0].decision, null);
+  assertEquals(
+    payload.predictions[0].decision_policy_status,
+    "VALIDATION_FAILED",
+  );
+  assertEquals(payload.decision_counts.CANDIDATE, 0);
+  assertEquals(payload.decision_counts.VALIDATION_FAILED, 1);
+});
+
+Deno.test("new Edge accepts a complete legacy RPC row shape", async () => {
+  const rows = snapshotRows();
+  rows.run.no_trade_count = 1;
+  rows.predictions[1].decision = "NO_TRADE";
+  const legacyRun = rows.run as unknown as Record<string, unknown>;
+  delete legacyRun.policy_input_missing_count;
+  delete legacyRun.policy_validation_failed_count;
+  delete legacyRun.policy_hard_fail_count;
+  for (const prediction of rows.predictions) {
+    delete (prediction as unknown as Record<string, unknown>)
+      .decision_policy_status;
+  }
+
+  const response = await handler(rows)(
+    new Request(
+      "https://api.example/functions/v1/prediction-snapshot?horizon=5",
+    ),
+  );
+  const payload = await response.json();
+
+  assertEquals(response.status, 200);
+  assertEquals(
+    payload.predictions[0].decision_policy_status,
+    "VALIDATION_FAILED",
+  );
+  assertEquals(payload.excluded[0].decision_policy_status, "HARD_FAIL");
+  assertEquals(payload.decision_counts.VALIDATION_FAILED, 1);
+  assertEquals(payload.decision_counts.HARD_FAIL, 1);
+});
+
+Deno.test("a partially deployed policy manifest still fails closed", async () => {
+  const rows = snapshotRows();
+  delete (rows.run as unknown as Record<string, unknown>)
+    .policy_validation_failed_count;
+
+  const response = await handler(rows)(
+    new Request(
+      "https://api.example/functions/v1/prediction-snapshot?horizon=5",
+    ),
+  );
+  const payload = await response.json();
+
+  assertEquals(response.status, 409);
+  assertEquals(payload.code, "PREDICTION_POLICY_MANIFEST_INVALID");
+});
+
+Deno.test("HARD_FAIL policy and quality mismatch fails closed", async () => {
+  const rows = snapshotRows();
+  rows.run.candidate_count = 0;
+  rows.run.policy_hard_fail_count = 1;
+  rows.run.hard_fail_count = 1;
+  rows.predictions = rows.predictions.slice(0, 1);
+  rows.predictions[0].decision = null;
+  rows.predictions[0].decision_policy_status = "HARD_FAIL";
+  rows.securities = rows.securities.slice(0, 1);
+  rows.audits = [];
+
+  const response = await handler(rows)(
+    new Request(
+      "https://api.example/functions/v1/prediction-snapshot?horizon=5",
+    ),
+  );
+  const payload = await response.json();
+
+  assertEquals(response.status, 409);
+  assertEquals(payload.code, "PREDICTION_HARD_FAIL_STATUS_MISMATCH");
 });
 
 Deno.test("audit-only hard fails remain visible in excluded", async () => {
   const rows = snapshotRows();
-  rows.run.no_trade_count = 0;
+  rows.run.policy_hard_fail_count = 0;
   rows.predictions = rows.predictions.slice(0, 1);
 
   const response = await handler(rows)(
@@ -301,14 +528,19 @@ Deno.test("audit-only hard fails remain visible in excluded", async () => {
   assertEquals(payload.predictions.length, 1);
   assertEquals(payload.excluded.length, 1);
   assertEquals(payload.excluded[0].symbol, "9999");
-  assertEquals(payload.excluded[0].decision, "NO_TRADE");
+  assertEquals(payload.excluded[0].decision, null);
+  assertEquals(payload.excluded[0].decision_policy_status, "HARD_FAIL");
 });
 
 Deno.test("a non-hard quality failure does not exclude the whole stock", async () => {
   const rows = snapshotRows();
   rows.run.hard_fail_count = 0;
+  rows.run.policy_validation_failed_count = 1;
+  rows.run.policy_hard_fail_count = 0;
   rows.audits[0].hard_fail = false;
   rows.audits[0].reason_codes = ["DATA_QUALITY_WARNING"];
+  rows.predictions[1].decision = null;
+  rows.predictions[1].decision_policy_status = "VALIDATION_FAILED";
 
   const response = await handler(rows)(
     new Request(
@@ -321,14 +553,116 @@ Deno.test("a non-hard quality failure does not exclude the whole stock", async (
   assertEquals(payload.excluded, []);
   assertEquals(payload.predictions[1].data_quality_status, "WARN");
   assertEquals(payload.predictions[1].data_quality_hard_fail, false);
+  assertEquals(payload.predictions[1].decision, null);
+  assertEquals(
+    payload.predictions[1].decision_policy_status,
+    "VALIDATION_FAILED",
+  );
+});
+
+Deno.test("WARN quality cannot carry an evaluated policy action", async () => {
+  const rows = snapshotRows();
+  rows.run.hard_fail_count = 0;
+  rows.run.no_trade_count = 1;
+  rows.run.policy_hard_fail_count = 0;
+  rows.audits[0].hard_fail = false;
+  rows.audits[0].reason_codes = ["DATA_QUALITY_WARNING"];
+  rows.predictions[1].decision = "NO_TRADE";
+  rows.predictions[1].decision_policy_status = "EVALUATED";
+  rows.gates.push(
+    ...evaluatedGateRows(12, "net_quantile_thresholds"),
+  );
+
+  const response = await handler(rows)(
+    new Request(
+      "https://api.example/functions/v1/prediction-snapshot?horizon=5",
+    ),
+  );
+  const payload = await response.json();
+
+  assertEquals(response.status, 409);
+  assertEquals(payload.code, "PREDICTION_POLICY_EVIDENCE_INVALID");
+});
+
+Deno.test("policy actions must match their complete gate evidence", async () => {
+  const allPassNoTrade = formalRows();
+  allPassNoTrade.run.candidate_count = 0;
+  allPassNoTrade.run.no_trade_count = 1;
+  allPassNoTrade.predictions[0].decision = "NO_TRADE";
+  let response = await handler(allPassNoTrade)(
+    new Request(
+      "https://api.example/functions/v1/prediction-snapshot?horizon=5",
+    ),
+  );
+  assertEquals(response.status, 409);
+  assertEquals(
+    (await response.json()).code,
+    "PREDICTION_POLICY_EVIDENCE_INVALID",
+  );
+
+  const failedGateWatch = formalRows();
+  failedGateWatch.run.candidate_count = 0;
+  failedGateWatch.run.watch_count = 1;
+  failedGateWatch.predictions[0].decision = "WATCH";
+  failedGateWatch.predictions[0].reason_codes = ["OUTSIDE_TOP_K"];
+  failedGateWatch.gates = evaluatedGateRows(
+    11,
+    "net_quantile_thresholds",
+  );
+  response = await handler(failedGateWatch)(
+    new Request(
+      "https://api.example/functions/v1/prediction-snapshot?horizon=5",
+    ),
+  );
+  assertEquals(response.status, 409);
+  assertEquals(
+    (await response.json()).code,
+    "PREDICTION_POLICY_EVIDENCE_INVALID",
+  );
+});
+
+Deno.test("valid WATCH and NO_TRADE gate evidence remains accepted", async () => {
+  const watch = formalRows();
+  watch.run.candidate_count = 0;
+  watch.run.watch_count = 1;
+  watch.predictions[0].decision = "WATCH";
+  watch.predictions[0].reason_codes = ["OUTSIDE_TOP_K"];
+  let response = await handler(watch)(
+    new Request(
+      "https://api.example/functions/v1/prediction-snapshot?horizon=5",
+    ),
+  );
+  assertEquals(response.status, 200);
+  assertEquals((await response.json()).decision_counts.WATCH, 1);
+
+  const noTrade = formalRows();
+  noTrade.run.candidate_count = 0;
+  noTrade.run.no_trade_count = 1;
+  noTrade.predictions[0].decision = "NO_TRADE";
+  noTrade.predictions[0].reason_codes = ["POLICY_GATE_NOT_PASSED"];
+  noTrade.gates = evaluatedGateRows(11, "net_quantile_thresholds");
+  response = await handler(noTrade)(
+    new Request(
+      "https://api.example/functions/v1/prediction-snapshot?horizon=5",
+    ),
+  );
+  assertEquals(response.status, 200);
+  assertEquals((await response.json()).decision_counts.NO_TRADE, 1);
 });
 
 Deno.test("publisher compatibility markers restore a research warning", async () => {
   const rows = snapshotRows();
   rows.run.hard_fail_count = 0;
+  rows.run.no_trade_count = 1;
+  rows.run.policy_input_missing_count = null;
+  rows.run.policy_validation_failed_count = null;
+  rows.run.policy_hard_fail_count = null;
   rows.audits = [];
+  rows.predictions[1].decision = "NO_TRADE";
+  rows.predictions[1].decision_policy_status = null;
   rows.predictions[1].reason_codes = [
     "RESEARCH_DATA_QUALITY_WARN",
+    "FORMAL_MARKET_EXPOSURE_INPUT_MISSING",
   ];
 
   const response = await handler(rows)(
@@ -342,7 +676,13 @@ Deno.test("publisher compatibility markers restore a research warning", async ()
   assertEquals(payload.excluded, []);
   assertEquals(payload.predictions[1].data_quality_status, "WARN");
   assertEquals(payload.predictions[1].data_quality_hard_fail, false);
-  assertEquals(payload.predictions[1].decision, "NO_TRADE");
+  assertEquals(payload.predictions[1].decision, null);
+  assertEquals(
+    payload.predictions[1].decision_policy_status,
+    "MISSING_REQUIRED_DATA",
+  );
+  assertEquals(payload.decision_counts.NO_TRADE, 0);
+  assertEquals(payload.decision_counts.MISSING_REQUIRED_DATA, 1);
 });
 
 Deno.test("research gate envelopes expose source dates and hide obsolete markers", async () => {

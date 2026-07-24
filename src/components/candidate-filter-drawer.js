@@ -30,7 +30,7 @@ export function createCandidateFilterDrawer() {
           </div>
           <div class="candidate-filter-grid">
             ${choiceField({ id: "candidate-industry", label: "最新產業分類", name: "industry", options: '<option value="">尚無產業分類</option>' })}
-            ${choiceField({ id: "candidate-decision", label: "決策", name: "decision", options: '<option value="">尚無決策分類</option>' })}
+            ${choiceField({ id: "candidate-decision", label: "決策／政策狀態", name: "decision", options: '<option value="">尚無決策或政策狀態</option>' })}
             ${choiceField({ id: "candidate-data-quality", label: "資料品質", name: "data_quality", options: '<option value="">尚無資料品質分類</option>' })}
             ${choiceField({ id: "candidate-liquidity", label: "流動性分組", name: "liquidity_bucket", options: '<option value="">全部流動性</option>' })}
             <label class="candidate-filter-field"><span>Rank Score 下限</span><input name="rank_score_min" type="number" min="0" max="100" inputmode="decimal" placeholder="不限" /></label>

@@ -2,15 +2,15 @@
 
 
 <!-- release-manifest:status-header:start -->
-> 更新日期：2026-07-21（Asia/Taipei）
+> 更新日期：2026-07-24（Asia/Taipei）
 >
-> 文件基準：最新發布 commit 未記錄於目前可用證據，不得沿用舊快照 commit；OOS 驗證 workflow 使用 `29690820942`，最新特徵與研究推論 workflow 使用 `29693937930`、`29701335309`
+> 文件基準：最新發布 commit 未記錄於目前可用證據，不得沿用舊快照 commit；OOS 驗證 workflow 使用 `29690820942`，最新特徵與具完整 artifact／provenance 證據的研究推論 workflow 使用 `29693937930`、`29701335309`
 >
 > 系統狀態：`RESEARCH_ONLY`
 >
-> Repository 目前包含 37 個 migration 檔案；本修補新增且待隔離驗證／部署：`20260720170000_prediction_snapshot_rate_limit.sql`、`20260720190000_prediction_snapshot_read_rpc.sql`、`20260721090000_prediction_snapshot_calendar_freshness.sql`。
+> Repository 目前包含 38 個 migration 檔案；本修補新增且待 Staging／Production 部署驗證：`20260720170000_prediction_snapshot_rate_limit.sql`、`20260720190000_prediction_snapshot_read_rpc.sql`、`20260721090000_prediction_snapshot_calendar_freshness.sql`、`20260724044115_decision_policy_status_semantics.sql`。
 >
-> Staging／Production 的既有文件最後完整紀錄均為 31／31 筆；其後 Repository 共有 6 檔：`20260720051630_tpex_price_index_ohlc_queue.sql`、`20260720061143_scope_prediction_runs_by_market.sql`、`20260720064801_exclude_legacy_prediction_publisher_from_lint.sql`、`20260720170000_prediction_snapshot_rate_limit.sql`、`20260720190000_prediction_snapshot_read_rpc.sql`、`20260721090000_prediction_snapshot_calendar_freshness.sql`。本修補未連線重新驗證這些 migration 的遠端套用狀態，不得由檔案存在與否推測已部署或未部署。
+> Staging／Production 的既有文件最後完整紀錄均為 31／31 筆；其後 Repository 共有 7 檔：`20260720051630_tpex_price_index_ohlc_queue.sql`、`20260720061143_scope_prediction_runs_by_market.sql`、`20260720064801_exclude_legacy_prediction_publisher_from_lint.sql`、`20260720170000_prediction_snapshot_rate_limit.sql`、`20260720190000_prediction_snapshot_read_rpc.sql`、`20260721090000_prediction_snapshot_calendar_freshness.sql`、`20260724044115_decision_policy_status_semantics.sql`。本修補未連線重新驗證這些 migration 的遠端套用狀態，不得由檔案存在與否推測已部署或未部署。
 >
 > Prediction Snapshot 主要讀取路徑已改為單一 RPC `market_data.get_prediction_snapshot_rows_v2(integer,text,timestamptz)`，正常路徑預期每次快照只產生 1 次 PostgREST 請求。預設模式為 `rpc`；RPC 未部署時 fail closed，只有明確設定 `legacy` 才走緊急舊路徑。
 > Freshness 優先使用 `TRADING_CALENDAR`，要求 45 日連續可信日曆覆蓋（上限 62 日；RPC 取回 63 個曆日以涵蓋就緒時間前的邊界）；缺日或不可用時明確改採 `WALL_CLOCK_FALLBACK`，不得猜測休市日。
@@ -21,7 +21,7 @@
 >
 > Vercel 使用 `vercel.json` 強制 CSP 與安全標頭；本修補尚未直接讀取正式站 response headers，因此遠端生效狀態不得推測。
 >
-> 本區塊與下方最新快照由 `release-manifest.json` 產生；請勿直接修改。
+> 本區塊與下方具完整 artifact／provenance 證據的快照由 `release-manifest.json` 產生；請勿直接修改。
 <!-- release-manifest:status-header:end -->
 
 ## 一、環境與 Migration
@@ -51,9 +51,11 @@
 - 既有文件紀錄顯示 Supabase Local 曾用 Docker 完整重建前 32 個 migrations，最後包含
   `20260720051630_tpex_price_index_ohlc_queue.sql`；相關 TPEX benchmark validation、rollback 與
   schema lint 曾通過。
-- 本修補環境未重新啟動 Supabase Local，也未連線查詢 Staging／Production migration history。
-  Repository 第 33～35 個 migration 的遠端套用狀態不得由本文件推測；其中本修補新增的
-  `20260720170000_prediction_snapshot_rate_limit.sql` 尚待隔離執行、權限驗證及 rollback 演練。
+- 本修補未啟動共用 Supabase Local，也未寫入 Staging／Production；遠端 migration
+  history 未重新驗證，Repository 第 32～38 個 migration 的套用狀態不得由檔案存在推測。
+- `20260724044115_decision_policy_status_semantics.sql` 已在一次性 PostgreSQL 17
+  container 完成全 migration chain、legacy backfill、publisher/RPC、約束、權限與
+  rollback 驗證；container 與測試資料已移除。這不等於 Staging 或 Production 已部署。
 
 ## 二、已封存及已產生的真實資料
 
@@ -207,7 +209,10 @@ v2 新增並驗證 `decision_close_price`，供每日推論依真實收盤價重
 
 Rank model 在上述 NDCG 與 Rank IC 指標均未優於 20 日動能基準，未通過正式排名驗收。方向模型的 fold 平均 log loss 為 1.037198、macro-F1 為 0.333102、ECE 為 0.030459；分位數模型的 P10 breach 為 12.1255%、P90 exceedance 為 9.9223%、P10～P90 coverage 為 77.9522%，校準前後 crossing rate 均為 0。
 
-Production Supabase 已保存 672 筆研究預測；全部依保守政策發布為 `NO_TRADE`，沒有 hard fail。這些列可供 UI 顯示歷史 OOS 研究結果，但不得解讀為當日正式推薦。
+Production Supabase 已保存 672 筆歷史研究預測；legacy publisher 曾把它們記為
+`NO_TRADE`。新契約依 `RESEARCH_ONLY` 與缺少 formal policy evidence 將它們 fail
+closed 重分類為 `MISSING_REQUIRED_DATA`、`decision=null`，不是有效的政策不進場
+結果。這些列可供 UI 顯示歷史 OOS 研究結果，但不得解讀為當日正式推薦。
 
 Artifact／provenance：
 
@@ -221,11 +226,11 @@ Artifact／provenance：
 - Benchmark：`TWSE_TAIEX_PRICE_INDEX`，版本 `rwd.en.TAIEX.MI_5MINS_HIST.v1@snapshot:4c58a09fd1bbccc21416948eff8d31f77c31ba8568e2392493d0050f674c52c9`。
 - Cost profile：`tw_stock_swing_v1:base_cost`。
 
-### 最新上市橫截面研究推論
+### 最新具完整 artifact／provenance 證據的上市橫截面研究推論
 
 
 <!-- release-manifest:status-snapshot:start -->
-[GitHub Actions run `29701335309`](https://github.com/migao2006/tool/actions/runs/29701335309) 已使用最新驗證特徵橫截面、最後一個 walk-forward fold 的凍結模型 bundle，完成研究推論並發布至 Production Supabase；快照 RPC 與後續 gate attachment 的既有紀錄顯示已完成不可變讀回驗證。發布 commit 未記錄於目前可用證據，因此文件不再沿用舊快照 commit。
+[GitHub Actions run `29701335309`](https://github.com/migao2006/tool/actions/runs/29701335309) 已使用該次已驗證特徵橫截面、最後一個 walk-forward fold 的凍結模型 bundle，完成研究推論並發布至 Production Supabase；快照 RPC 與後續 gate attachment 的既有紀錄顯示已完成不可變讀回驗證。發布 commit 未記錄於目前可用證據，因此文件不再沿用舊快照 commit。
 
 | 項目 | 已驗證結果 |
 | --- | ---: |
@@ -236,7 +241,8 @@ Artifact／provenance：
 | Supabase `prediction_run_id` | 4 |
 | Model version | `twse-price-research-h5-v1` |
 | Training end date | `2024-06-18` |
-| 決策 | `CANDIDATE=0`、`WATCH=0`、`NO_TRADE=1,068` |
+| 政策動作 | `CANDIDATE=0`、`WATCH=0`、`NO_TRADE=0` |
+| 政策評估狀態 | `MISSING_REQUIRED_DATA=1,068`、`VALIDATION_FAILED=0`、`HARD_FAIL=0` |
 | 系統狀態 | `RESEARCH_ONLY` |
 | 公開 API 資料品質 | 1,068 筆 `WARN`，0 筆 hard fail |
 | Industry coverage | 0／1,068 |
@@ -250,8 +256,28 @@ Artifact／provenance：
 - Snapshot artifact SHA-256：`605c19a53b4321e307848e4affa081c4a760601a3a0186a26192036c61395eee`。
 - GitHub artifact：`8446597593`，digest `b06a8280e9780f19378f682ed4ad55ff9017fb684cbe1dd9abc953d7d9948199`。
 
-這是回溯研究推論，不是新的 OOS 驗證。既有契約驗證紀錄顯示每檔恰好 8 層 gate；gate order、actual、threshold、reason code 與 attachment snapshot hash 均通過。具備真實輸入的資料品質、流動性容量、校準方向機率、淨分位數及排名資格會顯示實際值與門檻；缺少 point-in-time 可交易性、市場模型及部位配置輸入時一律 fail closed。所有列仍固定為 `NO_TRADE / RESEARCH_ONLY`，不得描述為正式候選股、即時交易訊號或獲利保證。
+這是回溯研究推論，不是新的 OOS 驗證。既有契約驗證紀錄顯示每檔恰好 8 層 gate；gate order、actual、threshold、reason code 與 attachment snapshot hash 均通過。具備真實輸入的資料品質、流動性容量、校準方向機率、淨分位數及排名資格會顯示實際值與門檻；缺少 point-in-time 可交易性、市場模型及部位配置輸入時一律 fail closed。舊資料庫欄位曾記錄 `NO_TRADE=1,068`；權威重分類為 `MISSING_REQUIRED_DATA=1,068` 且政策動作為空值。不得描述為正式候選股、即時交易訊號或獲利保證。
 <!-- release-manifest:status-snapshot:end -->
+
+### 2026-07-24 Production 唯讀狀態稽核
+
+目前 Production 最新上市 `horizon=5` 為 `prediction_run_id=12`、
+`as_of_date=2026-07-20`，共有 1,068 筆排名列。資料庫與公開 API 的 legacy 欄位均為
+`CANDIDATE=0`、`WATCH=0`、`NO_TRADE=1,068`、hard fail 0，但沒有相同 run 的
+`market_predictions` 列。
+
+代表列 rank 1、symbol `6515` 的 Rank Score、三分類校準機率與淨 P50 均存在；八層
+gate 中，formal tradability、market exposure 與 position limits 全部缺少，資料品質
+只有 research `WARN`，不是完整政策評估。1,068 列全都缺少上述三類 mandatory
+evidence；因此新契約的權威計數為 `NO_TRADE=0`、
+`MISSING_REQUIRED_DATA=1,068`。資料庫 migration 與新版 Edge Function 尚未部署前，
+正式 UI 仍可能顯示 legacy 值，不得把它描述為實際政策已決定不進場。
+
+新契約另外要求 `EVALUATED` 必須具有 `PASS` 資料品質與完整、具來源日期的八層
+gate。`CANDIDATE` 代表全部 gate 通過且入選，`WATCH` 代表全部 gate 通過但因
+`OUTSIDE_TOP_K` 未入選，`NO_TRADE` 代表至少一項適用政策 gate 未通過；included
+與 excluded 鍵不得重疊，excluded 只承載 `HARD_FAIL`。正式 `PASS` universe 不得
+為空，但非空 universe 經完整有效評估後可如實得到 0 個正式候選。
 
 ## 三、Supplemental 回補現況
 
@@ -295,7 +321,8 @@ point-in-time 或正式模型可用度。
 
 - 持續以 append-only 方式累積及稽核 R2 原始歷史資料。
 - 產生具有 provenance、schema、hash 與 read-back 的研究 artifact。
-- 在 UI 預設顯示 2026-07-17 的 1,068 筆最新橫截面研究排序、方向機率及條件報酬分位數。
+- 在 UI 顯示目前 API 提供的最新上市橫截面研究排序、方向機率及條件報酬分位數；
+  2026-07-24 唯讀觀測為 `as_of_date=2026-07-20`、1,068 筆。
 - 保留 2025-05-02 的 672 筆歷史 OOS 驗證快照，與最新回溯研究推論分開追溯。
 - 在 Staging 驗證 migration、RPC contract 與 rollback。
 - 在 `RESEARCH_ONLY` 狀態下檢查資料缺漏及準備正式標籤輸入。

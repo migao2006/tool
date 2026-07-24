@@ -1,9 +1,9 @@
-import { createEmptyState } from "../components/empty-state.js";
 import { createCandidateCard } from "../components/candidate-card.js?v=classification-2";
-import { createResearchSettingsDrawer } from "../components/research-settings-drawer.js?v=debug-1";
-import { createStatusBanner } from "../components/status-banner.js";
+import { createEmptyState } from "../components/empty-state.js";
 import { createHomeDataStatusPanel } from "../components/home-data-status.js?v=mobile-ui-1";
 import { createMarketScopeSwitch } from "../components/market-scope-switch.js";
+import { createResearchSettingsDrawer } from "../components/research-settings-drawer.js?v=debug-1";
+import { createStatusBanner } from "../components/status-banner.js";
 import { createValidationReportDrawer, renderValidationReport } from "../components/validation-report-drawer.js";
 import { formatDateTime, formatPercent } from "../core/formatters.js?v=mobile-ui-1";
 import { setText } from "../core/html.js";
@@ -40,13 +40,16 @@ export function createOverviewPage({ horizon }) {
           <div><dt>預測市場波動 <small>forecast_market_volatility</small></dt><dd data-overview-field="forecast_market_volatility">—</dd></div>
           <div><dt>市場曝險上限 <small>market_exposure_cap</small></dt><dd data-overview-field="market_exposure_cap">—</dd></div>
         </dl>
+        <p class="quantile-note" data-market-policy-reason hidden>MARKET_POLICY_DATA_UNAVAILABLE</p>
       </section>
 
       <section class="decision-counts" aria-label="今日決策數量">
         <article><span>正式候選 <small>CANDIDATE</small></span><strong data-overview-count="CANDIDATE">—</strong></article>
         <article><span>觀察 <small>WATCH</small></span><strong data-overview-count="WATCH">—</strong></article>
-        <article><span>不交易 <small>NO_TRADE</small></span><strong data-overview-count="NO_TRADE">—</strong></article>
-        <article><span>資料排除 <small>Hard fail</small></span><strong data-overview-count="HARD_FAIL">—</strong></article>
+        <article><span>政策不進場 <small>NO_TRADE</small></span><strong data-overview-count="NO_TRADE">—</strong></article>
+        <article><span>政策資料未完整 <small>MISSING_REQUIRED_DATA</small></span><strong data-overview-count="MISSING_REQUIRED_DATA">—</strong></article>
+        <article><span>政策驗證未通過 <small>VALIDATION_FAILED</small></span><strong data-overview-count="VALIDATION_FAILED">—</strong></article>
+        <article><span>資料硬性失敗 <small>HARD_FAIL</small></span><strong data-overview-count="HARD_FAIL">—</strong></article>
       </section>
 
       <section class="panel" aria-labelledby="top-candidate-title">
@@ -67,14 +70,14 @@ export function createOverviewPage({ horizon }) {
 }
 
 function decisionCounts(snapshot) {
-  const displayable = canDisplaySnapshotRecords(snapshot);
-  const records = (snapshot?.predictions ?? []).filter((record) => !record.data_quality_hard_fail);
-  const hasDecisions = displayable && records.some((record) => Boolean(record.decision));
   return Object.freeze({
-    CANDIDATE: hasDecisions ? records.filter((record) => record.decision === "CANDIDATE").length : null,
-    WATCH: hasDecisions ? records.filter((record) => record.decision === "WATCH").length : null,
-    NO_TRADE: hasDecisions ? records.filter((record) => record.decision === "NO_TRADE").length : null,
-    HARD_FAIL: snapshot?.excluded?.length ?? 0,
+    CANDIDATE: snapshot?.decisionCounts?.CANDIDATE ?? 0,
+    WATCH: snapshot?.decisionCounts?.WATCH ?? 0,
+    NO_TRADE: snapshot?.decisionCounts?.NO_TRADE ?? 0,
+    MISSING_REQUIRED_DATA:
+      snapshot?.decisionCounts?.MISSING_REQUIRED_DATA ?? 0,
+    VALIDATION_FAILED: snapshot?.decisionCounts?.VALIDATION_FAILED ?? 0,
+    HARD_FAIL: snapshot?.decisionCounts?.HARD_FAIL ?? 0,
   });
 }
 
@@ -103,7 +106,16 @@ export function renderOverviewPage(snapshot, uiState) {
   ];
   const hasCompleteMarketOutput = marketValues.every(Number.isFinite) && Boolean(snapshot.market.regime);
   const hasAnyMarketOutput = marketValues.some(Number.isFinite) || Boolean(snapshot.market.regime);
-  setText(root, "[data-market-state]", hasCompleteMarketOutput ? "已更新" : hasAnyMarketOutput ? "部分更新" : "尚無資料");
+  setText(root, "[data-market-state]", hasCompleteMarketOutput ? "已更新" : hasAnyMarketOutput ? "部分更新" : "政策資料未提供");
+  const marketPolicyReason = root.querySelector("[data-market-policy-reason]");
+  if (marketPolicyReason) {
+    marketPolicyReason.hidden = hasAnyMarketOutput;
+    marketPolicyReason.textContent = snapshot.reasonCodes?.includes(
+        "MARKET_POLICY_DATA_UNAVAILABLE",
+      )
+      ? "MARKET_POLICY_DATA_UNAVAILABLE"
+      : "市場層級政策輸入尚未發布。";
+  }
   const counts = decisionCounts(snapshot);
   Object.entries(counts).forEach(([key, value]) => {
     setText(root, `[data-overview-count="${key}"]`, value);

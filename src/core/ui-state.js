@@ -65,7 +65,11 @@ export function applyUiState(state) {
 
 export function resolveSnapshotUiState(snapshot) {
   if (!snapshot) return UI_STATE.LOADING;
-  if (snapshot.reasonCodes?.includes("MODEL_NOT_RELEASED")) return UI_STATE.MODEL_NOT_AVAILABLE;
+  if (
+    snapshot.reasonCodes?.some((code) =>
+      ["UNSUPPORTED_HORIZON", "MODEL_NOT_RELEASED"].includes(code)
+    )
+  ) return UI_STATE.MODEL_NOT_AVAILABLE;
   // Historical OOS research outputs are stale by construction because their
   // realized label window must finish before publication. Keep them usable as
   // research while formal PASS snapshots remain fail-closed when stale.

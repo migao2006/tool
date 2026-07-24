@@ -92,14 +92,48 @@ def validate() -> int:
         },
         errors,
     )
-    if rpc_migration.is_file() and "security definer" in rpc_migration.read_text(encoding="utf-8").lower():
+    if (
+        rpc_migration.is_file()
+        and "security definer" in rpc_migration.read_text(encoding="utf-8").lower()
+    ):
         errors.append("prediction snapshot read RPC must not use SECURITY DEFINER")
+
+    policy_migration = MIGRATION_DIR / "20260724044115_decision_policy_status_semantics.sql"
+    require_text(
+        policy_migration,
+        {
+            "replacement snapshot read RPC": (
+                "create function market_data.get_prediction_snapshot_rows("
+            ),
+            "explicit invoker security": "security invoker",
+            "service-role helper grant": (
+                "grant execute on function market_data.get_prediction_snapshot_rows_policy_v1("
+            ),
+        },
+        errors,
+    )
+    if policy_migration.is_file():
+        policy_sql = policy_migration.read_text(encoding="utf-8").lower()
+        marker = "create function market_data.get_prediction_snapshot_rows("
+        start = policy_sql.find(marker)
+        end = policy_sql.find("end\n$function$;", start)
+        if start < 0 or end < 0:
+            errors.append("decision-policy migration snapshot read RPC definition is incomplete")
+        else:
+            active_read_rpc = policy_sql[start:end]
+            if "security invoker" not in active_read_rpc:
+                errors.append("active decision-policy snapshot read RPC must use SECURITY INVOKER")
+            if "security definer" in active_read_rpc:
+                errors.append(
+                    "active decision-policy snapshot read RPC must not use SECURITY DEFINER"
+                )
 
     require_text(
         ROOT / "supabase" / "snippets" / "validate_prediction_snapshot_read_rpc.sql",
         {
             "service-role privilege validation": "service_role_can_execute",
             "anonymous privilege validation": "anon_can_execute",
+            "invoker validation": "security_invoker",
             "history uniqueness validation": "current_history_has_one_row_per_security",
             "point-in-time validation": "current_history_is_point_in_time_valid",
             "run point-in-time validation": "run_is_point_in_time_valid",
@@ -138,7 +172,10 @@ def validate() -> int:
         },
         errors,
     )
-    if calendar_migration.is_file() and "security definer" in calendar_migration.read_text(encoding="utf-8").lower():
+    if (
+        calendar_migration.is_file()
+        and "security definer" in calendar_migration.read_text(encoding="utf-8").lower()
+    ):
         errors.append("calendar freshness RPC must not use SECURITY DEFINER")
 
     require_text(

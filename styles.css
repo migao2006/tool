@@ -654,7 +654,7 @@ h2 {
   position: fixed;
   left: 50%;
   bottom: max(8px, env(safe-area-inset-bottom));
-  z-index: 120;
+  z-index: 250;
   width: min(520px, calc(100% - 20px));
   min-height: 72px;
   display: flex !important;

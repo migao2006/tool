@@ -1,5 +1,36 @@
 import type { SnapshotRows } from "../types.ts";
 
+export const DECISION_GATE_NAMES = [
+  "data_quality_hard_gate",
+  "tradability_gate",
+  "liquidity_capacity_gate",
+  "market_exposure_cap",
+  "calibrated_direction_probabilities",
+  "net_quantile_thresholds",
+  "rank_eligibility",
+  "position_capacity_limits",
+];
+
+export function evaluatedGateRows(
+  stockPredictionId: number,
+  failedGate: string | null = null,
+) {
+  return DECISION_GATE_NAMES.map((gateName, index) => ({
+    stock_prediction_id: stockPredictionId,
+    gate_order: index + 1,
+    gate_name: gateName,
+    passed: gateName !== failedGate,
+    actual_value: {
+      contract_version: "research-decision-gate.v1",
+      value: { verified: true },
+      source_date: "2026-07-17",
+      attachment_snapshot_sha256: "a".repeat(64),
+    },
+    threshold_value: { required: true },
+    reason_code: gateName === failedGate ? "POLICY_GATE_NOT_PASSED" : "PASS",
+  }));
+}
+
 export function snapshotRows(): SnapshotRows {
   return {
     run: {
@@ -17,13 +48,16 @@ export function snapshotRows(): SnapshotRows {
       latest_available_at: "2026-07-17T05:30:00+00:00",
       candidate_count: 1,
       watch_count: 0,
-      no_trade_count: 1,
+      no_trade_count: 0,
+      policy_input_missing_count: 0,
+      policy_validation_failed_count: 0,
+      policy_hard_fail_count: 1,
       hard_fail_count: 1,
       created_at: "2026-07-18T02:00:00+00:00",
     },
     predictions: [
-      prediction(11, 101, "CANDIDATE", "PASS", 1),
-      prediction(12, 102, "NO_TRADE", "FAIL", 2),
+      prediction(11, 101, "CANDIDATE", "EVALUATED", "PASS", 1),
+      prediction(12, 102, null, "HARD_FAIL", "FAIL", 2),
     ],
     securities: [
       {
@@ -62,7 +96,7 @@ export function snapshotRows(): SnapshotRows {
         latest_available_at: "2026-07-17T05:00:00+00:00",
       },
     ],
-    gates: [],
+    gates: evaluatedGateRows(11),
     markets: [{
       market: "TWSE",
       calibrated_p_up: "0.60",
@@ -104,7 +138,13 @@ export function snapshotRows(): SnapshotRows {
 function prediction(
   stockPredictionId: number,
   securityId: number,
-  decision: "CANDIDATE" | "NO_TRADE",
+  decision: "CANDIDATE" | "NO_TRADE" | null,
+  decisionPolicyStatus:
+    | "EVALUATED"
+    | "MISSING_REQUIRED_DATA"
+    | "VALIDATION_FAILED"
+    | "HARD_FAIL"
+    | null,
   quality: "PASS" | "FAIL",
   rank: number,
 ) {
@@ -140,6 +180,7 @@ function prediction(
     estimated_round_trip_cost: "0.01",
     data_quality_status: quality,
     decision,
+    decision_policy_status: decisionPolicyStatus,
     reason_codes: [],
   };
 }

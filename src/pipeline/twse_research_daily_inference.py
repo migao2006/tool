@@ -14,10 +14,11 @@ from collections.abc import Sequence
 from typing import Any, cast
 
 from src.config.types import MvpConfig
-from src.models.stock.rank_model import rank_cross_section
 from src.core.research_prediction_contract import (
     research_prediction_contract_version,
 )
+from src.decision.decision_policy import DecisionPolicyStatus
+from src.models.stock.rank_model import rank_cross_section
 from src.trading.cost_contracts import TransactionCostConfig
 from src.trading.transaction_cost import TransactionCostModel
 
@@ -212,9 +213,7 @@ class TwseDailyResearchInference:
         manifest: Any,
         config: MvpConfig,
     ) -> _CostAssessments:
-        cost_model = TransactionCostModel(
-            TransactionCostConfig.from_settings(config.cost)
-        )
+        cost_model = TransactionCostModel(TransactionCostConfig.from_settings(config.cost))
         rates: list[float] = []
         reasons: list[tuple[str, ...]] = []
         capacity_passes: list[bool] = []
@@ -294,9 +293,7 @@ class TwseDailyResearchInference:
                 ResearchDecisionPolicyInputs(
                     data_quality_hard_fail=bool(source["hard_fail"]),
                     liquidity_pass=costs.capacity_passes[position],
-                    estimated_order_notional_ntd=(
-                        config.cost.estimated_order_notional_ntd
-                    ),
+                    estimated_order_notional_ntd=(config.cost.estimated_order_notional_ntd),
                     gate_source_dates={
                         "data_quality_hard_gate": cross_section.as_of_date,
                         "liquidity_capacity_gate": cross_section.as_of_date,
@@ -306,6 +303,13 @@ class TwseDailyResearchInference:
             predictions.append(
                 replace(
                     prediction,
+                    decision=policy.decision,
+                    decision_policy_status=policy.decision_policy_status,
+                    data_quality_status=(
+                        "HARD_FAIL"
+                        if policy.decision_policy_status == DecisionPolicyStatus.HARD_FAIL
+                        else prediction.data_quality_status
+                    ),
                     gates=policy.gates,
                     reason_codes=tuple(
                         dict.fromkeys((*prediction.reason_codes, *policy.reason_codes))
@@ -334,6 +338,7 @@ class TwseDailyResearchInference:
         reasons = _reason_codes(
             source["reason_codes"],
             source["research_limitation_reason_codes"],
+            source.get("hard_fail_reason_codes", ()),
             capacity_reasons,
             (context.evaluation_scope, "LOCKED_HOLDOUT_NOT_EXECUTED"),
         )
@@ -362,9 +367,7 @@ class TwseDailyResearchInference:
             calibration_status=f"CALIBRATED:{bundle.interval_calibrator.version}",
             quantile_crossing_before_calibration=quantile.raw_crossed,
             estimated_round_trip_cost=cost,
-            latest_available_at=_aware(
-                source["latest_available_at"], "latest_available_at"
-            ),
+            latest_available_at=_aware(source["latest_available_at"], "latest_available_at"),
             data_quality_status="PASS" if pit_pass else "WARN",
             reason_codes=reasons,
             adv20_ntd=float(source["adv20_ntd"]),
@@ -404,9 +407,7 @@ class TwseDailyResearchInference:
                 "locked_holdout_executed": False,
                 "research_decision_policy_executed": True,
                 "formal_decision_policy_executed": False,
-                "source_model_test_end_date": (
-                    manifest.evaluated_test_end_date.isoformat()
-                ),
+                "source_model_test_end_date": (manifest.evaluated_test_end_date.isoformat()),
             },
             reason_codes=(
                 self.primary_reason_code,

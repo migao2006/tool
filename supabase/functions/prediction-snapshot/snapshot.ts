@@ -11,7 +11,9 @@ import {
   resolvePublicDataQuality,
 } from "./mappers.ts";
 import type {
+  Decision,
   DecisionGateRow,
+  DecisionPolicyStatus,
   JsonRecord,
   MarketScope,
   SecurityHistoryRow,
@@ -30,6 +32,13 @@ const GATE_ORDER = [
   "position_capacity_limits",
 ];
 const RESEARCH_GATE_ENVELOPE_VERSION = "research-decision-gate.v1";
+const DECISIONS: Decision[] = ["CANDIDATE", "WATCH", "NO_TRADE"];
+const POLICY_STATUSES: DecisionPolicyStatus[] = [
+  "EVALUATED",
+  "MISSING_REQUIRED_DATA",
+  "VALIDATION_FAILED",
+  "HARD_FAIL",
+];
 
 function validGateSourceDate(value: unknown, asOfDate: string): boolean {
   if (
@@ -38,6 +47,34 @@ function validGateSourceDate(value: unknown, asOfDate: string): boolean {
   ) return false;
   return new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value &&
     value <= asOfDate;
+}
+
+function hasCompletePolicyGateEvidence(
+  prediction: JsonRecord,
+  asOfDate: string,
+): boolean {
+  const gates = prediction.gates as JsonRecord[];
+  return gates.length === GATE_ORDER.length &&
+    gates.every((gate, index) =>
+      gate.gate === GATE_ORDER[index] &&
+      typeof gate.passed === "boolean" &&
+      typeof gate.reason_code === "string" && gate.reason_code.length > 0 &&
+      gate.actual !== null && gate.actual !== undefined &&
+      gate.threshold !== null && gate.threshold !== undefined &&
+      validGateSourceDate(gate.source_date, asOfDate)
+    );
+}
+
+function actionMatchesPolicyGates(prediction: JsonRecord): boolean {
+  const gates = prediction.gates as JsonRecord[];
+  const allGatesPassed = gates.every((gate) => gate.passed === true);
+  if (prediction.decision === "CANDIDATE") return allGatesPassed;
+  if (prediction.decision === "WATCH") {
+    return allGatesPassed &&
+      Array.isArray(prediction.reason_codes) &&
+      prediction.reason_codes.includes("OUTSIDE_TOP_K");
+  }
+  return prediction.decision === "NO_TRADE" && !allGatesPassed;
 }
 
 function emptySnapshot(marketScope: MarketScope): JsonRecord {
@@ -58,6 +95,14 @@ function emptySnapshot(marketScope: MarketScope): JsonRecord {
     data_quality_hard_fail: false,
     reason_codes: ["NO_PREDICTION_SNAPSHOT"],
     market: null,
+    decision_counts: {
+      CANDIDATE: 0,
+      WATCH: 0,
+      NO_TRADE: 0,
+      MISSING_REQUIRED_DATA: 0,
+      VALIDATION_FAILED: 0,
+      HARD_FAIL: 0,
+    },
     predictions: [],
     watchlist: [],
     excluded: [],
@@ -145,22 +190,127 @@ function formalContractReady(
     rows.validationRun.validation_status !== "PASS" ||
     !rows.validationRun.locked_holdout ||
     rows.run.hard_fail_count > 0 ||
-    !rows.markets.some((market) => market.market === marketScope)
+    !rows.markets.some((market) => market.market === marketScope) ||
+    mapped.length === 0
   ) return false;
   return mapped.every((prediction) => {
-    const gates = prediction.gates as JsonRecord[];
-    const complete = gates.length === GATE_ORDER.length &&
-      gates.every((gate, index) =>
-        gate.gate === GATE_ORDER[index] &&
-        typeof gate.passed === "boolean" &&
-        typeof gate.reason_code === "string" && gate.reason_code.length > 0 &&
-        gate.actual !== null && gate.actual !== undefined &&
-        gate.threshold !== null && gate.threshold !== undefined &&
-        validGateSourceDate(gate.source_date, rows.run.as_of_date)
-      );
-    return complete && (prediction.decision !== "CANDIDATE" ||
-      gates.every((gate) => gate.passed === true));
+    return hasCompletePolicyGateEvidence(
+      prediction,
+      rows.run.as_of_date,
+    ) &&
+      prediction.data_quality_status === "PASS" &&
+      prediction.decision_policy_status === "EVALUATED" &&
+      DECISIONS.includes(prediction.decision as Decision) &&
+      actionMatchesPolicyGates(prediction);
   });
+}
+
+function validateManifest(rows: SnapshotRows): void {
+  const run = rows.run;
+  const policyManifest = [
+    run.policy_input_missing_count ?? null,
+    run.policy_validation_failed_count ?? null,
+    run.policy_hard_fail_count ?? null,
+  ];
+  const hasPolicyManifest = policyManifest.some((value) => value !== null);
+  const validPolicyManifest = policyManifest.every((value) =>
+    typeof value === "number" && Number.isInteger(value) && value >= 0
+  );
+  if (hasPolicyManifest && !validPolicyManifest) {
+    throw new ApiError(
+      409,
+      "PREDICTION_POLICY_MANIFEST_INVALID",
+      "Prediction policy status manifest is incomplete",
+    );
+  }
+  const expected = run.candidate_count + run.watch_count + run.no_trade_count +
+    (hasPolicyManifest
+      ? (run.policy_input_missing_count ?? 0) +
+        (run.policy_validation_failed_count ?? 0) +
+        (run.policy_hard_fail_count ?? 0)
+      : 0);
+  if (rows.predictions.length !== expected) {
+    throw new ApiError(
+      409,
+      "PREDICTION_SNAPSHOT_INCOMPLETE",
+      "Prediction row count does not match the run manifest",
+    );
+  }
+  const rawDecisionCounts: Record<Decision, number> = {
+    CANDIDATE: 0,
+    WATCH: 0,
+    NO_TRADE: 0,
+  };
+  const rawPolicyCounts: Record<DecisionPolicyStatus, number> = {
+    EVALUATED: 0,
+    MISSING_REQUIRED_DATA: 0,
+    VALIDATION_FAILED: 0,
+    HARD_FAIL: 0,
+  };
+  for (const prediction of rows.predictions) {
+    const policyStatus = prediction.decision_policy_status ?? null;
+    if (
+      prediction.decision !== null &&
+      !DECISIONS.includes(prediction.decision)
+    ) {
+      throw new ApiError(
+        409,
+        "PREDICTION_DECISION_CONTRACT_INVALID",
+        "Prediction contains an unsupported decision action",
+      );
+    }
+    if (
+      policyStatus !== null &&
+      !POLICY_STATUSES.includes(policyStatus)
+    ) {
+      if (hasPolicyManifest) {
+        throw new ApiError(
+          409,
+          "PREDICTION_POLICY_CONTRACT_INVALID",
+          "Prediction contains an unsupported policy status",
+        );
+      }
+      continue;
+    }
+    if (prediction.decision !== null) {
+      rawDecisionCounts[prediction.decision] += 1;
+    }
+    if (policyStatus !== null) {
+      rawPolicyCounts[policyStatus] += 1;
+    }
+  }
+  if (
+    rawDecisionCounts.CANDIDATE !== run.candidate_count ||
+    rawDecisionCounts.WATCH !== run.watch_count ||
+    rawDecisionCounts.NO_TRADE !== run.no_trade_count
+  ) {
+    throw new ApiError(
+      409,
+      "PREDICTION_DECISION_COUNT_MISMATCH",
+      "Prediction decision counts do not match the run manifest",
+    );
+  }
+  if (!hasPolicyManifest) {
+    return;
+  }
+  if (
+    rawPolicyCounts.EVALUATED !==
+      run.candidate_count + run.watch_count + run.no_trade_count ||
+    rawPolicyCounts.MISSING_REQUIRED_DATA !== run.policy_input_missing_count ||
+    rawPolicyCounts.VALIDATION_FAILED !== run.policy_validation_failed_count ||
+    rawPolicyCounts.HARD_FAIL !== run.policy_hard_fail_count ||
+    rows.predictions.some((prediction) =>
+      (prediction.decision_policy_status ?? null) === "EVALUATED"
+        ? prediction.decision === null
+        : prediction.decision !== null
+    )
+  ) {
+    throw new ApiError(
+      409,
+      "PREDICTION_POLICY_COUNT_MISMATCH",
+      "Prediction policy status counts do not match the run manifest",
+    );
+  }
 }
 
 function assertMarketIsolation(
@@ -190,33 +340,7 @@ export function buildSnapshot(
 ): JsonRecord {
   if (!rows) return emptySnapshot(marketScope);
   assertMarketIsolation(rows, marketScope);
-  const expected = rows.run.candidate_count + rows.run.watch_count +
-    rows.run.no_trade_count;
-  if (rows.predictions.length !== expected) {
-    throw new ApiError(
-      409,
-      "PREDICTION_SNAPSHOT_INCOMPLETE",
-      "Prediction row count does not match the run manifest",
-    );
-  }
-  const decisionCounts = rows.predictions.reduce(
-    (counts, prediction) => {
-      counts[prediction.decision] += 1;
-      return counts;
-    },
-    { CANDIDATE: 0, WATCH: 0, NO_TRADE: 0 },
-  );
-  if (
-    decisionCounts.CANDIDATE !== rows.run.candidate_count ||
-    decisionCounts.WATCH !== rows.run.watch_count ||
-    decisionCounts.NO_TRADE !== rows.run.no_trade_count
-  ) {
-    throw new ApiError(
-      409,
-      "PREDICTION_DECISION_COUNT_MISMATCH",
-      "Prediction decision counts do not match the run manifest",
-    );
-  }
+  validateManifest(rows);
 
   const securities = new Map(
     rows.securities.map((row) => [row.security_id, row]),
@@ -265,6 +389,37 @@ export function buildSnapshot(
       gates.get(prediction.stock_prediction_id) ?? [],
     );
   });
+  if (
+    mapped.some((prediction) =>
+      (prediction.decision_policy_status === "HARD_FAIL") !==
+        (prediction.data_quality_status === "HARD_FAIL")
+    )
+  ) {
+    throw new ApiError(
+      409,
+      "PREDICTION_HARD_FAIL_STATUS_MISMATCH",
+      "HARD_FAIL policy status and data quality must agree",
+    );
+  }
+  if (
+    mapped.some((prediction) =>
+      prediction.decision_policy_status === "EVALUATED" &&
+      (
+        prediction.data_quality_status !== "PASS" ||
+        !hasCompletePolicyGateEvidence(
+          prediction,
+          rows.run.as_of_date,
+        ) ||
+        !actionMatchesPolicyGates(prediction)
+      )
+    )
+  ) {
+    throw new ApiError(
+      409,
+      "PREDICTION_POLICY_EVIDENCE_INVALID",
+      "Evaluated Decision Policy action lacks complete consistent evidence",
+    );
+  }
   const included = mapped.filter((prediction) =>
     prediction.data_quality_hard_fail !== true
   );
@@ -277,9 +432,10 @@ export function buildSnapshot(
     market: prediction.market,
     asset_type: prediction.asset_type,
     horizon: prediction.horizon,
-    data_quality_status: "FAIL",
+    data_quality_status: "HARD_FAIL",
     data_quality_hard_fail: true,
-    decision: "NO_TRADE",
+    decision: null,
+    decision_policy_status: "HARD_FAIL",
     reason_codes: prediction.reason_codes,
     latest_available_at: prediction.latest_available_at,
   }));
@@ -308,9 +464,10 @@ export function buildSnapshot(
       market: marketName(security.market),
       asset_type: "STOCK",
       horizon: rows.run.horizon,
-      data_quality_status: "FAIL",
+      data_quality_status: "HARD_FAIL",
       data_quality_hard_fail: true,
-      decision: "NO_TRADE",
+      decision: null,
+      decision_policy_status: "HARD_FAIL",
       reason_codes: audit.reason_codes.length
         ? audit.reason_codes
         : ["DATA_QUALITY_HARD_FAIL"],
@@ -339,6 +496,8 @@ export function buildSnapshot(
   if (rows.validationLinkStatus !== "LINKED") {
     reasonCodes.add("VALIDATION_SNAPSHOT_NOT_LINKED");
   }
+  const market = mapMarket(rows.run, rows.markets, marketScope);
+  if (market === null) reasonCodes.add("MARKET_POLICY_DATA_UNAVAILABLE");
   if (!included.length) reasonCodes.add("NO_ELIGIBLE_PREDICTIONS");
   const freshness = evaluateSnapshotFreshness(
     rows.run,
@@ -347,6 +506,27 @@ export function buildSnapshot(
     freshnessPolicy,
   );
   for (const reasonCode of freshness.reasonCodes) reasonCodes.add(reasonCode);
+  const publishedDecisionCounts = {
+    CANDIDATE: 0,
+    WATCH: 0,
+    NO_TRADE: 0,
+    MISSING_REQUIRED_DATA: 0,
+    VALIDATION_FAILED: 0,
+    HARD_FAIL: 0,
+  };
+  for (const prediction of [...included, ...excluded]) {
+    const status = prediction.decision_policy_status;
+    const decision = prediction.decision;
+    if (status === "EVALUATED" && typeof decision === "string") {
+      publishedDecisionCounts[decision as Decision] += 1;
+    } else if (
+      typeof status === "string" &&
+      POLICY_STATUSES.includes(status as DecisionPolicyStatus)
+    ) {
+      publishedDecisionCounts[status as keyof typeof publishedDecisionCounts] +=
+        1;
+    }
+  }
 
   return {
     api_contract_version: API_CONTRACT_VERSION,
@@ -359,7 +539,8 @@ export function buildSnapshot(
     freshness: freshness.metadata,
     data_quality_hard_fail: false,
     reason_codes: [...reasonCodes],
-    market: mapMarket(rows.run, rows.markets, marketScope),
+    market,
+    decision_counts: publishedDecisionCounts,
     predictions: included,
     watchlist: [],
     excluded,

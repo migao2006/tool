@@ -62,18 +62,23 @@ class FakeWriter:
             return []
         run_id = 1 if market == "TWSE" else 2
         self.run_markets[run_id] = market
-        return [{
-            "prediction_run_id": run_id,
-            "as_of_date": value,
-            "horizon": 5,
-            "market_scope": market,
-            "system_validation_status": "RESEARCH_ONLY",
-            "candidate_count": 0,
-            "watch_count": 0,
-            "no_trade_count": 500,
-            "hard_fail_count": 0,
-            **self.run_overrides.get(market, {}),
-        }]
+        return [
+            {
+                "prediction_run_id": run_id,
+                "as_of_date": value,
+                "horizon": 5,
+                "market_scope": market,
+                "system_validation_status": "RESEARCH_ONLY",
+                "candidate_count": 0,
+                "watch_count": 0,
+                "no_trade_count": 0,
+                "policy_input_missing_count": 500,
+                "policy_validation_failed_count": 0,
+                "policy_hard_fail_count": 0,
+                "hard_fail_count": 0,
+                **self.run_overrides.get(market, {}),
+            }
+        ]
 
     def select_all_rows(
         self,
@@ -88,13 +93,17 @@ class FakeWriter:
         assert table == "stock_predictions"
         run_id = int(str((filters or {})["prediction_run_id"]).removeprefix("eq."))
         market = self.run_markets[run_id]
-        return [{
+        return [
+            {
                 "stock_prediction_id": run_id * 1_000 + index,
                 "market": market,
-                "decision": "NO_TRADE",
-                "data_quality_status": "PASS",
+                "decision": None,
+                "decision_policy_status": "MISSING_REQUIRED_DATA",
+                "data_quality_status": "WARN",
                 **self.prediction_overrides.get(market, {}),
-            } for index in range(500)]
+            }
+            for index in range(500)
+        ]
 
     def count_rows(
         self,
@@ -233,8 +242,19 @@ def test_resolver_republishes_a_latest_dated_but_incomplete_market(
 @pytest.mark.parametrize(
     ("run_override", "prediction_override", "gate_shortfall"),
     [
-        ({"no_trade_count": 499}, {}, 0),
+        ({"policy_input_missing_count": 499}, {}, 0),
         ({}, {"decision": "WATCH"}, 0),
+        ({}, {"decision_policy_status": "EVALUATED"}, 0),
+        (
+            {},
+            {
+                "decision": "NO_TRADE",
+                "decision_policy_status": "EVALUATED",
+                "data_quality_status": "WARN",
+            },
+            0,
+        ),
+        ({}, {"data_quality_status": "HARD_FAIL"}, 0),
         ({}, {}, 1),
     ],
 )
@@ -252,10 +272,7 @@ def test_latest_prediction_requires_every_production_completion_gate(
         server_key="sb_secret_test-value",
     )
 
-    assert (
-        resolver._latest_prediction_date(cast(SupabaseWriter, writer), "TWSE")
-        is None
-    )
+    assert resolver._latest_prediction_date(cast(SupabaseWriter, writer), "TWSE") is None
 
 
 def test_resolution_retries_only_transient_connection_errors() -> None:

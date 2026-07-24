@@ -13,11 +13,21 @@
 ## 狀態語意
 
 - 系統：`PASS`、`RESEARCH_ONLY`、`FAIL`。
-- 個股決策：`CANDIDATE`、`WATCH`、`NO_TRADE`。
+- 個股政策動作：`CANDIDATE`、`WATCH`、`NO_TRADE`。
+- 個股政策評估狀態：`EVALUATED`、`MISSING_REQUIRED_DATA`、
+  `VALIDATION_FAILED`、`HARD_FAIL`。
 - 候選資格：`ELIGIBLE`、`EXCLUDED`。
 - 資料品質：`PASS`、`WARN`、`HARD_FAIL`。
 
-`HARD_FAIL` 必須進入 excluded 集合；系統為 `FAIL` 時不得產生 `CANDIDATE`。`WATCH` 不是正式推薦，`NO_TRADE` 也不代表資料錯誤。
+只有 `EVALUATED` 可以帶政策動作；其他政策狀態的 `decision` 必須為
+`null`。`NO_TRADE` 只表示完整且有效的政策評估決定不進場，不表示該證券沒有市場
+交易，也不得用來代替缺少必要資料。`EVALUATED` 必須具備 `PASS` 資料品質與完整、
+具來源日期的八層 gate 證據；`CANDIDATE` 必須全部 gate 通過且入選，`WATCH` 必須
+全部 gate 通過但因 `OUTSIDE_TOP_K` 未入選，`NO_TRADE` 則必須至少有一項適用政策
+gate 未通過。`HARD_FAIL` 必須進入 excluded 集合；included 與 excluded 的市場／
+證券鍵不得重疊。正式 `PASS` 快照必須有非空的政策列 universe；非空 universe
+經完整有效政策評估後，`CANDIDATE=0` 仍是合法結果。系統為 `FAIL` 時不得產生
+`CANDIDATE`，`WATCH` 不是正式推薦。
 
 ## 顯示契約
 

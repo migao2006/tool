@@ -1,6 +1,7 @@
 import { createEmptyState } from "../components/empty-state.js";
 import { createStatusBanner } from "../components/status-banner.js";
 import { createWatchlistCard } from "../components/watchlist-card.js";
+import { decisionCategory } from "../core/decision-policy.js";
 import { canDisplaySnapshotRecords, isOrdinaryStock } from "../features/prediction-selection.js";
 
 export function createWatchlistPage({ horizon }) {
@@ -13,11 +14,13 @@ export function createWatchlistPage({ horizon }) {
       <div id="auth-entry" class="auth-entry" aria-live="polite"></div>
       <div data-auth-protected>
         ${createStatusBanner({ title: "尚無可追蹤的正式輸出", description: "自選股會沿用每日推論結果，不在前端重新計算 Rank Score。" })}
-        <div class="segmented four-up watch-filters" data-filter="watch-decision" aria-label="決策篩選">
+        <div class="segmented watch-filters" data-filter="watch-decision" aria-label="決策與政策狀態篩選">
           <button type="button" class="is-active" data-value="all" aria-pressed="true">全部</button>
-          <button type="button" data-value="CANDIDATE" aria-pressed="false">CANDIDATE</button>
-          <button type="button" data-value="WATCH" aria-pressed="false">WATCH</button>
-          <button type="button" data-value="NO_TRADE" aria-pressed="false">NO_TRADE</button>
+          <button type="button" data-value="CANDIDATE" aria-pressed="false">正式候選</button>
+          <button type="button" data-value="WATCH" aria-pressed="false">觀察</button>
+          <button type="button" data-value="NO_TRADE" aria-pressed="false">政策不進場</button>
+          <button type="button" data-value="MISSING_REQUIRED_DATA" aria-pressed="false">政策資料未完整</button>
+          <button type="button" data-value="VALIDATION_FAILED" aria-pressed="false">政策驗證未通過</button>
         </div>
         <section class="panel watch-panel" aria-labelledby="watch-list-heading">
           <div class="panel-heading"><div><span class="eyebrow">horizon=${horizon}</span><h2 id="watch-list-heading">追蹤清單</h2></div><span class="count-badge">—</span></div>
@@ -39,7 +42,7 @@ export function renderWatchlistPage(snapshot, decisionFilter = "") {
 
   const canShow = canDisplaySnapshotRecords(snapshot);
   const records = canShow
-    ? (snapshot.watchlist ?? []).filter(isOrdinaryStock).filter((record) => !decisionFilter || record.decision === decisionFilter)
+    ? (snapshot.watchlist ?? []).filter(isOrdinaryStock).filter((record) => !decisionFilter || decisionCategory(record) === decisionFilter)
     : [];
   if (count) count.textContent = canShow ? `${records.length} 檔` : "—";
   list.innerHTML = records.length

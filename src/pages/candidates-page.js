@@ -1,14 +1,15 @@
-import { createEmptyState } from "../components/empty-state.js";
 import { createCandidateCard } from "../components/candidate-card.js?v=classification-2";
-import { createExcludedSecuritiesDrawer, renderExcludedSecurities } from "../components/excluded-securities-drawer.js";
-import { createStatusBanner } from "../components/status-banner.js";
-import { createMarketScopeSwitch } from "../components/market-scope-switch.js";
 import { createCandidateFilterDrawer } from "../components/candidate-filter-drawer.js?v=classification-2";
+import { createEmptyState } from "../components/empty-state.js";
+import { createExcludedSecuritiesDrawer, renderExcludedSecurities } from "../components/excluded-securities-drawer.js";
+import { createMarketScopeSwitch } from "../components/market-scope-switch.js";
+import { createStatusBanner } from "../components/status-banner.js";
 import { marketScopeLabel } from "../core/market-scope.js";
 import { filterCandidateRecords } from "../features/candidate-filters.js?v=classification-2";
 import {
   canDisplaySnapshotRecords,
   displayableStockRecords,
+  formalCandidateRecords,
   isHistoricalResearchSnapshot,
 } from "../features/prediction-selection.js";
 
@@ -99,7 +100,10 @@ export function renderCandidatesPage(snapshot, uiState, filters = {}) {
   if (!list) return;
   const canShow = canDisplaySnapshotRecords(snapshot);
   const researchOnly = snapshot.systemStatus === "RESEARCH_ONLY";
-  const records = canShow ? filterCandidateRecords(displayableStockRecords(snapshot), filters) : [];
+  const sourceRecords = snapshot.systemStatus === "PASS"
+    ? formalCandidateRecords(snapshot)
+    : displayableStockRecords(snapshot);
+  const records = canShow ? filterCandidateRecords(sourceRecords, filters) : [];
   const heading = root.querySelector("[data-candidate-list-title]");
   if (heading) {
     heading.textContent = isHistoricalResearchSnapshot(snapshot)

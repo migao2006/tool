@@ -247,7 +247,7 @@ export class SnapshotRepository implements SnapshotRepositoryContract {
   ): Promise<SnapshotRows | null> {
     const runs = await this.#select<PredictionRunRow>("prediction_runs", {
       select:
-        "prediction_run_id,as_of_date,decision_at,horizon,market_scope,model_bundle_version,feature_schema_hash,cost_profile_version,training_end_date,system_validation_status,source_dates,latest_available_at,candidate_count,watch_count,no_trade_count,hard_fail_count,created_at",
+        "prediction_run_id,as_of_date,decision_at,horizon,market_scope,model_bundle_version,feature_schema_hash,cost_profile_version,training_end_date,system_validation_status,source_dates,latest_available_at,candidate_count,watch_count,no_trade_count,policy_input_missing_count,policy_validation_failed_count,policy_hard_fail_count,hard_fail_count,created_at",
       horizon: `eq.${horizon}`,
       market_scope: `eq.${marketScope}`,
       decision_at: `lte.${observedAt.toISOString()}`,
@@ -263,7 +263,7 @@ export class SnapshotRepository implements SnapshotRepositoryContract {
     const [predictions, audits, markets, validationRuns] = await Promise.all([
       this.#all<StockPredictionRow>("stock_predictions", {
         select:
-          "stock_prediction_id,prediction_run_id,security_id,market,industry,rank_score,global_rank,global_rank_percentile,industry_rank,industry_rank_percentile,calibrated_p_up,calibrated_p_neutral,calibrated_p_down,calibration_version,gross_q10,gross_q50,gross_q90,net_q10,net_q50,net_q90,interval_width,calibration_status,forecast_volatility,downside_risk,adv20_ntd,maximum_order_notional_ntd,market_regime,market_exposure_cap,estimated_round_trip_cost,data_quality_status,decision,reason_codes",
+          "stock_prediction_id,prediction_run_id,security_id,market,industry,rank_score,global_rank,global_rank_percentile,industry_rank,industry_rank_percentile,calibrated_p_up,calibrated_p_neutral,calibrated_p_down,calibration_version,gross_q10,gross_q50,gross_q90,net_q10,net_q50,net_q90,interval_width,calibration_status,forecast_volatility,downside_risk,adv20_ntd,maximum_order_notional_ntd,market_regime,market_exposure_cap,estimated_round_trip_cost,data_quality_status,decision,decision_policy_status,reason_codes",
         prediction_run_id: `eq.${runId}`,
         order: "global_rank.asc",
       }, signal),

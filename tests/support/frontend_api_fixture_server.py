@@ -7,7 +7,12 @@ from datetime import date, datetime, timedelta, timezone
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
+import sys
 from urllib.parse import parse_qs, urlparse
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from src.api import (
     DecisionGateOutput,
@@ -16,9 +21,9 @@ from src.api import (
     PredictionSnapshotOutput,
     StockPredictionOutput,
 )
+from tests.support.policy_evidence import required_policy_evidence
 
 
-ROOT = Path(__file__).resolve().parents[2]
 AS_OF_DATE = date(2026, 7, 17)
 DECISION_AT = datetime(2026, 7, 17, 16, 0, tzinfo=timezone(timedelta(hours=8)))
 TRAINING_END_DATE = date(2026, 6, 30)
@@ -39,12 +44,29 @@ def build_snapshot() -> dict[str, object]:
         DecisionGateOutput(
             gate=name,
             passed=True,
-            actual={"test_value": index + 1},
+            actual=(
+                evidence["value"]
+                if evidence is not None
+                else {"test_value": index + 1}
+            ),
             threshold={"required": True},
             reason_code="PASS",
             source_date=AS_OF_DATE,
+            evidence=evidence,
         )
         for index, name in enumerate(GATE_NAMES)
+        for evidence in (
+            required_policy_evidence(
+                name,
+                as_of_date=AS_OF_DATE,
+                decision_at=DECISION_AT,
+                symbol="TEST1",
+                market_regime="UPTREND_NORMAL_VOL",
+                market_exposure_cap=0.6,
+                maximum_single_name_weight=0.1,
+                maximum_industry_weight=0.25,
+            ),
+        )
     )
     prediction = StockPredictionOutput(
         as_of_date=AS_OF_DATE,

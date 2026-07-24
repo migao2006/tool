@@ -499,13 +499,78 @@ const gateNames = [
   "rank_eligibility",
   "position_capacity_limits",
 ];
+function requiredEvidence(gate) {
+  const common = {
+    contract_version: "decision-policy-required-evidence.v1",
+    status: "AVAILABLE",
+    market: "TWSE",
+    effective_date: "2026-07-20",
+    available_at: "2026-07-20T08:30:00+00:00",
+    validation_result: "PASS",
+    reason_code: "PASS",
+  };
+  if (gate === "tradability_gate") return {
+    ...common,
+    category: "TRADABILITY",
+    value: true,
+    source: "TWSE_MOPS_SNAPSHOT",
+    symbol: "1000",
+    publication_id: "security-state-1000",
+    details: {
+      trading_status: "ACTIVE",
+      attention_flag: false,
+      disposal_flag: false,
+      altered_trading_method_flag: false,
+      full_cash_delivery_flag: false,
+      periodic_auction_flag: false,
+      suspended_flag: false,
+    },
+  };
+  if (gate === "market_exposure_cap") return {
+    ...common,
+    category: "MARKET_EXPOSURE",
+    value: 0.6,
+    source: "MARKET_PREDICTION:twse-market-h5-v1",
+    symbol: null,
+    publication_id: "prediction_run:6",
+    details: {
+      calibrated_p_up: 0.6,
+      calibrated_p_neutral: 0.25,
+      calibrated_p_down: 0.15,
+      market_regime: "UPTREND_NORMAL_VOL",
+      forecast_market_volatility: 0.18,
+      model_version: "twse-market-h5-v1",
+      training_end_date: "2026-07-19",
+    },
+  };
+  if (gate === "position_capacity_limits") return {
+    ...common,
+    category: "POSITION_LIMITS",
+    value: true,
+    source: "PORTFOLIO_POLICY_ENGINE",
+    symbol: "1000",
+    publication_id: "portfolio-state-1000",
+    details: {
+      portfolio_policy_version: "portfolio-h5-v1",
+      portfolio_state_id: "portfolio-20260720-0830",
+      maximum_single_name_weight: 0.1,
+      maximum_industry_weight: 0.25,
+      maximum_adv_participation: 0.01,
+      proposed_weight: 0.04,
+      resulting_industry_weight: 0.18,
+      proposed_adv_participation: 0.005,
+    },
+  };
+  return null;
+}
 const allPassGates = gateNames.map((gate) => ({
   gate,
   passed: true,
-  actual: { verified: true },
+  actual: requiredEvidence(gate)?.value ?? { verified: true },
   threshold: { required: true },
   reason_code: "PASS",
   source_date: "2026-07-20",
+  evidence: requiredEvidence(gate),
 }));
 const noTradeGates = allPassGates.map((gate) =>
   gate.gate === "net_quantile_thresholds"
@@ -516,12 +581,24 @@ const noTradeGates = allPassGates.map((gate) =>
       }
     : gate
 );
+const formalSnapshotDates = {
+  as_of_date: "2026-07-20",
+  decision_at: "2026-07-20T09:00:00+00:00",
+};
+const formalRiskFields = {
+  market_regime: "UPTREND_NORMAL_VOL",
+  market_exposure_cap: 0.6,
+  max_single_position: 0.1,
+  max_industry_position: 0.25,
+};
 const explicitNoTrade = normalizePredictionSnapshot({
+  ...formalSnapshotDates,
   horizon: 5,
   market_scope: "TWSE",
   system_status: "RESEARCH_ONLY",
   predictions: [{
     ...predictions[0],
+    ...formalRiskFields,
     data_quality_status: "PASS",
     decision_policy_status: "EVALUATED",
     decision: "NO_TRADE",
@@ -570,8 +647,9 @@ const relocatedHardFail = normalizePredictionSnapshot({
 }, 5, "TWSE");
 let hardMismatchRejected = false;
 try {
-  normalizePredictionSnapshot({
-    horizon: 5,
+    normalizePredictionSnapshot({
+      ...formalSnapshotDates,
+      horizon: 5,
     market_scope: "TWSE",
     system_status: "RESEARCH_ONLY",
     predictions: [{
@@ -588,12 +666,14 @@ try {
 }
 let evaluatedWarnRejected = false;
 try {
-  normalizePredictionSnapshot({
-    horizon: 5,
+    normalizePredictionSnapshot({
+      ...formalSnapshotDates,
+      horizon: 5,
     market_scope: "TWSE",
     system_status: "RESEARCH_ONLY",
     predictions: [{
       ...predictions[0],
+      ...formalRiskFields,
       decision_policy_status: "EVALUATED",
       decision: "NO_TRADE",
       reason_codes: ["NET_QUANTILE_THRESHOLD_FAIL"],
@@ -607,8 +687,9 @@ try {
 }
 let nonHardExcludedRejected = false;
 try {
-  normalizePredictionSnapshot({
-    horizon: 5,
+    normalizePredictionSnapshot({
+      ...formalSnapshotDates,
+      horizon: 5,
     market_scope: "TWSE",
     system_status: "RESEARCH_ONLY",
     predictions: [],
@@ -648,6 +729,7 @@ try {
     system_status: "RESEARCH_ONLY",
     predictions: [{
       ...predictions[0],
+      ...formalRiskFields,
       data_quality_status: "PASS",
       decision: "NO_TRADE",
       decision_policy_status: "EVALUATED",
@@ -668,6 +750,7 @@ try {
     system_status: "RESEARCH_ONLY",
     predictions: [{
       ...predictions[0],
+      ...formalRiskFields,
       data_quality_status: "PASS",
       decision: "WATCH",
       decision_policy_status: "EVALUATED",
@@ -679,6 +762,122 @@ try {
   }, 5, "TWSE");
 } catch (error) {
   failedWatchRejected = error instanceof TypeError;
+}
+const invalidTradabilityDetails = allPassGates.map((gate) =>
+  gate.gate === "tradability_gate"
+    ? {
+        ...gate,
+        evidence: {
+          ...gate.evidence,
+          details: {
+            ...gate.evidence.details,
+            full_cash_delivery_flag: true,
+          },
+        },
+      }
+    : gate
+);
+let invalidEvidenceDetailsRejected = false;
+try {
+  normalizePredictionSnapshot({
+    ...formalSnapshotDates,
+    horizon: 5,
+    market_scope: "TWSE",
+    system_status: "RESEARCH_ONLY",
+    predictions: [{
+      ...predictions[0],
+      ...formalRiskFields,
+      data_quality_status: "PASS",
+      decision: "CANDIDATE",
+      decision_policy_status: "EVALUATED",
+      reason_codes: [],
+      gates: invalidTradabilityDetails,
+    }],
+    excluded: [],
+    watchlist: [],
+  }, 5, "TWSE");
+} catch (error) {
+  invalidEvidenceDetailsRejected = error instanceof TypeError;
+}
+const mismatchedSourceDateGates = allPassGates.map((gate) =>
+  gate.gate === "tradability_gate"
+    ? { ...gate, source_date: "2026-07-19" }
+    : gate
+);
+let mismatchedSourceDateRejected = false;
+try {
+  normalizePredictionSnapshot({
+    ...formalSnapshotDates,
+    horizon: 5,
+    market_scope: "TWSE",
+    system_status: "RESEARCH_ONLY",
+    predictions: [{
+      ...predictions[0],
+      ...formalRiskFields,
+      data_quality_status: "PASS",
+      decision: "CANDIDATE",
+      decision_policy_status: "EVALUATED",
+      reason_codes: [],
+      gates: mismatchedSourceDateGates,
+    }],
+    excluded: [],
+    watchlist: [],
+  }, 5, "TWSE");
+} catch (error) {
+  mismatchedSourceDateRejected = error instanceof TypeError;
+}
+let mismatchedPositionLimitRejected = false;
+try {
+  normalizePredictionSnapshot({
+    ...formalSnapshotDates,
+    horizon: 5,
+    market_scope: "TWSE",
+    system_status: "RESEARCH_ONLY",
+    predictions: [{
+      ...predictions[0],
+      ...formalRiskFields,
+      data_quality_status: "PASS",
+      decision: "CANDIDATE",
+      decision_policy_status: "EVALUATED",
+      reason_codes: [],
+      max_single_position: 0.2,
+      max_industry_position: 0.25,
+      gates: allPassGates,
+    }],
+    excluded: [],
+    watchlist: [],
+  }, 5, "TWSE");
+} catch (error) {
+  mismatchedPositionLimitRejected = error instanceof TypeError;
+}
+const invalidAvailableOnMissingGates = allPassGates.map((gate) =>
+  gate.gate === "position_capacity_limits"
+    ? {
+        ...gate,
+        evidence: { ...gate.evidence, symbol: "WRONG" },
+      }
+    : gate
+);
+let invalidAvailableOnMissingRejected = false;
+try {
+  normalizePredictionSnapshot({
+    ...formalSnapshotDates,
+    horizon: 5,
+    market_scope: "TWSE",
+    system_status: "RESEARCH_ONLY",
+    predictions: [{
+      ...predictions[0],
+      ...formalRiskFields,
+      data_quality_status: "PASS",
+      decision: null,
+      decision_policy_status: "MISSING_REQUIRED_DATA",
+      gates: invalidAvailableOnMissingGates,
+    }],
+    excluded: [],
+    watchlist: [],
+  }, 5, "TWSE");
+} catch (error) {
+  invalidAvailableOnMissingRejected = error instanceof TypeError;
 }
 console.log(JSON.stringify({
   missingCount: snapshot.decisionCounts.MISSING_REQUIRED_DATA,
@@ -705,6 +904,10 @@ console.log(JSON.stringify({
   overlapExcludedRejected,
   allPassNoTradeRejected,
   failedWatchRejected,
+  invalidEvidenceDetailsRejected,
+  mismatchedSourceDateRejected,
+  mismatchedPositionLimitRejected,
+  invalidAvailableOnMissingRejected,
 }));
 """
     )
@@ -732,6 +935,10 @@ console.log(JSON.stringify({
         "overlapExcludedRejected": True,
         "allPassNoTradeRejected": True,
         "failedWatchRejected": True,
+        "invalidEvidenceDetailsRejected": True,
+        "mismatchedSourceDateRejected": True,
+        "mismatchedPositionLimitRejected": True,
+        "invalidAvailableOnMissingRejected": True,
     }
 
 

@@ -1,4 +1,4 @@
-import type { SnapshotRows } from "../types.ts";
+import type { JsonRecord, SnapshotRows } from "../types.ts";
 
 export const DECISION_GATE_NAMES = [
   "data_quality_hard_gate",
@@ -11,24 +11,103 @@ export const DECISION_GATE_NAMES = [
   "position_capacity_limits",
 ];
 
+function requiredEvidence(
+  gateName: string,
+  failed: boolean,
+): JsonRecord | null {
+  const common = {
+    contract_version: "decision-policy-required-evidence.v1",
+    status: "AVAILABLE",
+    market: "TWSE",
+    effective_date: "2026-07-17",
+    available_at: "2026-07-17T05:30:00+00:00",
+    validation_result: "PASS",
+    reason_code: "PASS",
+  };
+  if (gateName === "tradability_gate") {
+    return {
+      ...common,
+      category: "TRADABILITY",
+      value: !failed,
+      source: "TWSE_MOPS_SNAPSHOT",
+      symbol: "2330",
+      publication_id: "security-state-2330",
+      details: {
+        trading_status: "ACTIVE",
+        attention_flag: false,
+        disposal_flag: failed,
+        altered_trading_method_flag: false,
+        full_cash_delivery_flag: false,
+        periodic_auction_flag: false,
+        suspended_flag: false,
+      },
+    };
+  }
+  if (gateName === "market_exposure_cap") {
+    return {
+      ...common,
+      category: "MARKET_EXPOSURE",
+      value: failed ? 0 : 0.6,
+      source: "MARKET_PREDICTION:market-research-v1",
+      symbol: null,
+      publication_id: "prediction_run:6",
+      details: {
+        calibrated_p_up: 0.6,
+        calibrated_p_neutral: 0.25,
+        calibrated_p_down: 0.15,
+        market_regime: "UPTREND_NORMAL_VOL",
+        forecast_market_volatility: 0.18,
+        model_version: "market-research-v1",
+        training_end_date: "2026-06-30",
+      },
+    };
+  }
+  if (gateName === "position_capacity_limits") {
+    return {
+      ...common,
+      category: "POSITION_LIMITS",
+      value: !failed,
+      source: "PORTFOLIO_POLICY_ENGINE",
+      symbol: "2330",
+      publication_id: "portfolio-state-2330",
+      details: {
+        portfolio_policy_version: "portfolio-h5-v1",
+        portfolio_state_id: "portfolio-20260717-0530",
+        maximum_single_name_weight: 0.1,
+        maximum_industry_weight: 0.25,
+        maximum_adv_participation: 0.01,
+        proposed_weight: failed ? 0.2 : 0.04,
+        resulting_industry_weight: 0.18,
+        proposed_adv_participation: 0.005,
+      },
+    };
+  }
+  return null;
+}
+
 export function evaluatedGateRows(
   stockPredictionId: number,
   failedGate: string | null = null,
 ) {
-  return DECISION_GATE_NAMES.map((gateName, index) => ({
-    stock_prediction_id: stockPredictionId,
-    gate_order: index + 1,
-    gate_name: gateName,
-    passed: gateName !== failedGate,
-    actual_value: {
-      contract_version: "research-decision-gate.v1",
-      value: { verified: true },
-      source_date: "2026-07-17",
-      attachment_snapshot_sha256: "a".repeat(64),
-    },
-    threshold_value: { required: true },
-    reason_code: gateName === failedGate ? "POLICY_GATE_NOT_PASSED" : "PASS",
-  }));
+  return DECISION_GATE_NAMES.map((gateName, index) => {
+    const failed = gateName === failedGate;
+    const evidence = requiredEvidence(gateName, failed);
+    return {
+      stock_prediction_id: stockPredictionId,
+      gate_order: index + 1,
+      gate_name: gateName,
+      passed: !failed,
+      actual_value: {
+        contract_version: "research-decision-gate.v2",
+        value: evidence === null ? { verified: true } : evidence.value,
+        source_date: "2026-07-17",
+        evidence,
+        attachment_snapshot_sha256: "a".repeat(64),
+      },
+      threshold_value: { required: true },
+      reason_code: failed ? "POLICY_GATE_NOT_PASSED" : "PASS",
+    };
+  });
 }
 
 export function snapshotRows(): SnapshotRows {

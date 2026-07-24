@@ -338,6 +338,12 @@ Deno.test("a complete PASS contract remains formal", async () => {
 
   assertEquals(response.status, 200);
   assertEquals(payload.system_status, "PASS");
+  assertEquals(payload.predictions[0].max_single_position, 0.1);
+  assertEquals(payload.predictions[0].max_industry_position, 0.25);
+  assertEquals(
+    payload.predictions[0].gates[1].evidence.publication_id,
+    "security-state-2330",
+  );
 });
 
 Deno.test("an empty formal universe is downgraded from PASS", async () => {
@@ -619,6 +625,162 @@ Deno.test("policy actions must match their complete gate evidence", async () => 
     (await response.json()).code,
     "PREDICTION_POLICY_EVIDENCE_INVALID",
   );
+});
+
+Deno.test("required evidence details must prove the published gate value", async () => {
+  const rows = formalRows();
+  const tradability = rows.gates.find((gate) =>
+    gate.gate_name === "tradability_gate"
+  );
+  assert(tradability !== undefined);
+  const actual = tradability.actual_value;
+  assert(
+    actual !== null && typeof actual === "object" && !Array.isArray(actual),
+  );
+  const evidence = actual.evidence;
+  assert(
+    evidence !== null && typeof evidence === "object" &&
+      !Array.isArray(evidence),
+  );
+  const details = evidence.details;
+  assert(
+    details !== null && typeof details === "object" &&
+      !Array.isArray(details),
+  );
+  details.full_cash_delivery_flag = true;
+
+  const response = await handler(rows)(
+    new Request(
+      "https://api.example/functions/v1/prediction-snapshot?horizon=5",
+    ),
+  );
+  assertEquals(response.status, 409);
+  assertEquals(
+    (await response.json()).code,
+    "PREDICTION_POLICY_EVIDENCE_INVALID",
+  );
+});
+
+Deno.test("required evidence source dates and timezone are exact", async () => {
+  for (
+    const mutate of [
+      (actual: Record<string, unknown>, evidence: Record<string, unknown>) => {
+        actual.source_date = "2026-07-16";
+        evidence.effective_date = "2026-07-17";
+      },
+      (_actual: Record<string, unknown>, evidence: Record<string, unknown>) => {
+        evidence.available_at = "2026-07-17T05:30:00";
+      },
+    ]
+  ) {
+    const rows = formalRows();
+    const tradability = rows.gates.find((gate) =>
+      gate.gate_name === "tradability_gate"
+    );
+    assert(tradability !== undefined);
+    const actual = tradability.actual_value;
+    assert(
+      actual !== null && typeof actual === "object" && !Array.isArray(actual),
+    );
+    const evidence = actual.evidence;
+    assert(
+      evidence !== null && typeof evidence === "object" &&
+        !Array.isArray(evidence),
+    );
+    mutate(actual, evidence);
+
+    const response = await handler(rows)(
+      new Request(
+        "https://api.example/functions/v1/prediction-snapshot?horizon=5",
+      ),
+    );
+    assertEquals(response.status, 409);
+    assertEquals(
+      (await response.json()).code,
+      "PREDICTION_POLICY_EVIDENCE_INVALID",
+    );
+  }
+});
+
+Deno.test("invalid AVAILABLE evidence on a missing row is never exposed", async () => {
+  const rows = gatedResearchRows();
+  const position = rows.gates.find((gate) =>
+    gate.gate_name === "position_capacity_limits"
+  );
+  assert(position !== undefined);
+  const evaluatedPosition = evaluatedGateRows(11).find((gate) =>
+    gate.gate_name === "position_capacity_limits"
+  );
+  assert(evaluatedPosition !== undefined);
+  const evaluatedActual = evaluatedPosition.actual_value;
+  assert(
+    evaluatedActual !== null && typeof evaluatedActual === "object" &&
+      !Array.isArray(evaluatedActual),
+  );
+  const evidence = structuredClone(evaluatedActual.evidence);
+  assert(
+    evidence !== null && typeof evidence === "object" &&
+      !Array.isArray(evidence),
+  );
+  evidence.symbol = "WRONG";
+  position.actual_value = {
+    contract_version: "research-decision-gate.v1",
+    value: true,
+    source_date: "2026-07-17",
+    attachment_snapshot_sha256: "a".repeat(64),
+    evidence,
+  };
+
+  const response = await handler(rows)(
+    new Request(
+      "https://api.example/functions/v1/prediction-snapshot?horizon=5",
+    ),
+  );
+  assertEquals(response.status, 409);
+  assertEquals(
+    (await response.json()).code,
+    "PREDICTION_POLICY_EVIDENCE_INVALID",
+  );
+});
+
+Deno.test("missing position evidence cannot populate public position limits", async () => {
+  const rows = gatedResearchRows();
+  const position = rows.gates.find((gate) =>
+    gate.gate_name === "position_capacity_limits"
+  );
+  assert(position !== undefined);
+  const actual = position.actual_value;
+  assert(
+    actual !== null && typeof actual === "object" && !Array.isArray(actual),
+  );
+  actual.evidence = {
+    contract_version: "decision-policy-required-evidence.v1",
+    category: "POSITION_LIMITS",
+    status: "MISSING",
+    value: null,
+    source: "PORTFOLIO_POLICY_ENGINE",
+    market: "TWSE",
+    symbol: "9999",
+    effective_date: "2026-07-17",
+    available_at: "2026-07-17T05:30:00+00:00",
+    publication_id: "late-portfolio-state",
+    validation_result: "MISSING",
+    reason_code: "POSITION_LIMIT_AVAILABLE_AFTER_DECISION",
+    details: {
+      maximum_single_name_weight: 0.1,
+      maximum_industry_weight: 0.25,
+    },
+  };
+
+  const response = await handler(rows)(
+    new Request(
+      "https://api.example/functions/v1/prediction-snapshot?horizon=5",
+    ),
+  );
+  const payload = await response.json();
+  assertEquals(response.status, 200);
+  assertEquals(payload.predictions[0].max_single_position, null);
+  assertEquals(payload.predictions[0].max_industry_position, null);
 });
 
 Deno.test("valid WATCH and NO_TRADE gate evidence remains accepted", async () => {
